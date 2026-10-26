@@ -23,13 +23,13 @@
 
 ## 快速开始
 
-### 1. 获取构建包
+### 1. 通过 DSH 安装
 
-打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，选择成功的构建，下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压下载文件，取得 `.tgz` 与 `.sha256`；artifact 有保留期限，过期时可从源码构建。
+```console
+dsh plugin --profile web add dsh-opendesign-corouter
+```
 
-本项目目前**未发布 npm 包或 GitHub Release**，不要把仓库地址或 Actions 的 ZIP 直接当作预构建插件包。
-
-### 2. 通过 DSH 安装
+也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
 dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.1.tgz
@@ -37,7 +37,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.1.tgz
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。
 
-### 3. 配置连接
+### 2. 配置连接
 
 1. 打开 **设置 → OpenDesign CoRouter → 连接与登录**。
 2. 为推理配置 CoRouter 工作空间 **API Key**，或沿用启动环境中的 `COROUTER_API_KEY`。
@@ -119,4 +119,4 @@ npm run test:ui
 
 通过 [Issues](https://github.com/KouzakiUmi/dsh-opendesign-corouter/issues) 反馈时，请附插件版本、DSH **Core** 版本和已脱敏的错误说明。不要贴 API Key、Cookie、凭据文件或含秘密的 URL。
 
-本项目当前为 `UNLICENSED`，尚未授予对外使用 / 修改 / 再分发许可；公开源码不等于 MIT 授权。移植和改编的上游 MIT 部分保留原有声明。本项目不是 OpenDesign 或 DeepSeek 的官方产品。
+本项目采用 [MIT 许可](LICENSE)，上游版权声明见 [第三方声明](THIRD_PARTY_NOTICES.md)。版本标签通过 GitHub OIDC trusted publishing 发布到 npm，流程见 [发布说明](docs/publishing.md)。本项目与 OpenDesign、DeepSeek 无官方隶属关系。

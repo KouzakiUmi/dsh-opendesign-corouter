@@ -13,7 +13,7 @@ const filename = `${manifest.name}-${manifest.version}.tgz`;
 assert.equal(publication.filename, filename);
 assert.equal(basename(filename), filename);
 const files = new Set(publication.files.map(file => file.path));
-const publicRoot = new Set(['package.json', 'cordis.patch.yml', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md']);
+const publicRoot = new Set(['package.json', 'cordis.patch.yml', 'README.md', 'LICENSE', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md']);
 for (const file of files) {
   assert.ok(typeof file === 'string' && !file.includes('..') && !file.includes('\\'), 'Unsafe package path');
   assert.ok(publicRoot.has(file) || /^lib\/[A-Za-z0-9_./-]+\.(?:js|map|ts)$/u.test(file), `Unexpected publication file: ${file}`);

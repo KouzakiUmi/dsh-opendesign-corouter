@@ -30,11 +30,11 @@ Provider 是目录分组，不是强制服务端扣款池的开关。是否回�
 
 ## 新仓库为什么不能直接用 Git URL 安装？
 
-源码不提交构建后的 `lib`，也没有安装时自动构建脚本。请用成功 CI 的 `.tgz` artifact，或克隆源码后按 [开发说明](development.md) 构建。Actions ZIP 需要先解压，不能当成插件 tarball。
+源码不提交构建后的 `lib`，也没有安装时自动构建脚本。常规安装使用 npm 包 `dsh-opendesign-corouter`；也可用成功 CI 的 `.tgz` artifact，或按 [开发说明](development.md) 构建本地目录。Actions ZIP 需要先解压。
 
 ## CI artifact 过期了？
 
-artifact 不是永久 Release。可在有权限时手动运行 CI，或从源码重建；尚未发布的 Release / npm 包没有可用下载地址。
+CI artifact 保留 14 天。常规安装使用 npm 包；测试构建过期后，可在有权限时手动运行 CI，或从源码重建。
 
 ## 反馈问题应附什么？
 

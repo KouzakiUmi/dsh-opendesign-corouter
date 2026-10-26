@@ -25,7 +25,7 @@ npm run test:ui
 3. 打包 `.tgz`，验证包身份、公开导出与文件清单，生成 SHA-256。
 4. 上传 `dsh-opendesign-corouter-build`（安装包与校验文件）及 `ui-previews`（模拟截图与报告），保留 14 天。
 
-工作流仅申请 `contents: read`，官方 Actions 固定到提交；不注入上游账号秘密，不执行 npm 发布、Release 创建、插件安装或宿主重启。CI 浏览器 / 系统依赖安装只发生在临时 runner。
+构建工作流申请 `contents: read`，官方 Actions 固定到提交。版本标签通过单独的 [发布工作流](../.github/workflows/publish.yml) 复用这些检查，仅发布 job 增加 `id-token: write`，将同一次构建的 tarball 发布到 npm。浏览器与系统依赖在临时 runner 中安装。详见 [发布说明](publishing.md)。
 
 ## 本地打包
 
