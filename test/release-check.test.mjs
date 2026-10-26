@@ -21,6 +21,12 @@ test('unpublished versions require a valid existing package document', () => {
   for (const value of [{ name: 'other', versions: {} }, { name: pkg.name }, { name: pkg.name, versions: [] }]) assert.throws(() => publicationState(value, pkg, 'sha512-test'));
 });
 
+test('a registry staging placeholder allows the first real release only', () => {
+  const doc = { name: pkg.name, versions: { '0.0.0-stage': {} }, 'dist-tags': { latest: '0.0.0-stage' } };
+  assert.equal(publicationState(doc, pkg, 'sha512-test'), 'missing');
+  assert.throws(() => publicationState({ ...doc, versions: { ...doc.versions, '1.0.0': {} } }, pkg, 'sha512-test'));
+});
+
 test('new releases cannot roll back a newer latest version', () => {
   const doc = latest => ({ name: pkg.name, versions: {}, 'dist-tags': { latest } });
   assert.equal(publicationState(doc('0.1.0'), pkg, 'sha512-test'), 'missing');

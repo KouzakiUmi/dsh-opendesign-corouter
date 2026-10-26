@@ -20,7 +20,8 @@ export function publicationState(document, pkg, integrity) {
   assert.ok(document.versions && typeof document.versions === 'object' && !Array.isArray(document.versions), 'Invalid registry response');
   if (!Object.hasOwn(document.versions, pkg.version)) {
     const latest = document['dist-tags']?.latest;
-    if (latest) {
+    const placeholderOnly = latest === '0.0.0-stage' && Object.keys(document.versions).every(version => version === latest);
+    if (latest && !placeholderOnly) {
       assert.match(latest, /^\d+\.\d+\.\d+$/, 'Review the latest release channel before publishing');
       const current = pkg.version.split('.').map(BigInt), previous = latest.split('.').map(BigInt);
       const index = current.findIndex((value, i) => value !== previous[i]);

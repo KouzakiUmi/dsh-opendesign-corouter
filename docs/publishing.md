@@ -26,9 +26,9 @@
 
 ## 首次发布与 Windows Hello
 
-npm 要求包记录先存在，才能建立 trusted publisher。首次发布由维护者通过网页登录与 Windows Hello / 安全密钥验证，使用已通过 CI 的同一安装包。之后再绑定上述信任配置。
+npm 要求包记录先存在，才能建立 trusted publisher。平台阶段发布流程可以先创建 `0.0.0-stage` 占位记录；当它是包的唯一版本时，工作流允许首次正式发布。维护者通过 Windows Hello / 安全密钥绑定上述信任后，可由 CI 发布首个正式版本并附带 provenance。
 
-首次人工发布与后续 OIDC 发布的认证来源不同。Windows Hello 验证由维护者本人完成；后续 CI 使用短期 OIDC 授权。首次人工发布的版本通常没有 CI provenance，后续由工作流实际发布的新版本才验证 provenance 记录。
+已有待审批阶段包的版本应先由维护者审批，同一版本不能重复提交。Windows Hello 用于维护者操作的身份验证，CI 使用短期 OIDC 授权。人工发布与 CI 发布是不同路径，只有实际生成 provenance 的版本才有相应记录。
 
 配置前后可用维护者会话运行 `npm trust list dsh-opendesign-corouter --json` 核对绑定。OIDC 权限应通过实际发布操作验证，`npm whoami` 不能证明 trusted publisher 有效。
 
