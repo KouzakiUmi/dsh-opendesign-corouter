@@ -967,6 +967,8 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
   const activationJob = React.useRef<string | null>(null);
   /** The single activation request allowed to own the busy label right now. */
   const activationToken = React.useRef(0);
+  // Only a login started here may auto-open; polling must never reopen a failed window.
+  const autoOpenPending = React.useRef(false);
   React.useEffect(() => () => { actionVersion.current += 1; }, []);
   const login = status?.login;
   React.useEffect(() => {
@@ -985,6 +987,7 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
     if (status === undefined || busy || keyBusy) return;
     const version = ++actionVersion.current;
     setBusy(true);
+    autoOpenPending.current = true;
     setNotice({ kind: 'status', text: '正在申请设备授权…' });
     try {
       const next = await caller<LoginState>('startLogin', { expectedRevision: status.revision });
@@ -993,6 +996,7 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
       setActivationNotice(null);
       await (next.state === 'success' ? refreshAfterLogin() : loadStatus());
     } catch {
+      autoOpenPending.current = false;
       if (mounted.current && version === actionVersion.current) setNotice({ kind: 'error', text: '无法启动登录，请稍后重试。' });
     } finally {
       if (mounted.current && version === actionVersion.current) setBusy(false);
@@ -1060,6 +1064,15 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
       if (mounted.current && activationToken.current === token) setOpening(false);
     }
   };
+  React.useEffect(() => {
+    if (!autoOpenPending.current || busy || keyBusy) return;
+    if (state === 'waiting') {
+      autoOpenPending.current = false;
+      void openActivation();
+    } else if (state === 'error' || state === 'cancelled' || state === 'success') {
+      autoOpenPending.current = false;
+    }
+  }, [state, login?.jobId, busy, keyBusy]);
   const desktopChecked = formSnapshot.value?.useDesktopCredential ?? status?.config.useDesktopCredential ?? true;
   return h(React.Fragment, null,
     h('section', { className: 'odc-card' },

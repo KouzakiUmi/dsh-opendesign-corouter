@@ -59,6 +59,16 @@ test('activation window launches once, reuses the page and stays bounded', async
   assert.equal(fake.closes, 1);
 });
 
+test('the window accepts the live public deviceId/userCode link unchanged', async () => {
+  const fake = fakeBrowser();
+  const launcher = new ActivationLauncher({ launch: async () => fake.browser });
+  const url = 'https://open-design.ai/cloud/cli/activate?deviceId=device-1&userCode=ABCD-1234';
+  try {
+    assert.deepEqual(await launcher.open(url), { code: 'opened', opened: true });
+    assert.equal(fake.gotos[0]?.url, url);
+  } finally { await launcher.dispose(); }
+});
+
 test('concurrent requests share one launch instead of opening two windows', async () => {
   const fake = fakeBrowser();
   let launches = 0;

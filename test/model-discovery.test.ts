@@ -108,6 +108,21 @@ test('known ids inherit catalog grouping and capabilities; new ids are paid rows
   assert.equal(fresh.reasoningEfforts, undefined);
 });
 
+test('five verified API additions retain their catalog labels without inventing capabilities', async () => {
+  const ids = ['gemini-4-argon', 'kimi-k3.1-pro', 'minimax-m3.1-flash', 'muse-spark-1.3', 'muse-wonder'];
+  const { fetcher } = stub(() => Response.json({ data: ids.map(id => ({ id })) }));
+  const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
+  assert.deepEqual(rows.map(row => row.id), ids);
+  for (const row of rows) {
+    assert.deepEqual(row, findModel(row.id));
+    assert.equal(row.group, row.id === 'minimax-m3.1-flash' ? 'plan' : 'paid');
+    assert.equal(row.contextWindow, undefined);
+    assert.equal(row.maxOutputTokens, undefined);
+    assert.equal(row.inputModalities, undefined);
+    assert.equal(row.reasoningEfforts, undefined);
+  }
+});
+
 test('drops unusable and duplicate rows instead of inventing models', async () => {
   const { fetcher } = stub(() => Response.json({
     data: [

@@ -127,7 +127,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
       },
       startLogin: async () => {
         login = { jobId: 'fixture-job', state: 'waiting', message: '请在授权窗口确认设备授权',
-          activationUrl: 'https://open-design.ai/cloud/cli/activate?code=AB12-CD34', userCode: 'AB12-CD34',
+          activationUrl: 'https://open-design.ai/cloud/cli/activate?deviceId=fixture-device&userCode=AB12-CD34', userCode: 'AB12-CD34',
           expiresAt: new Date(Date.now() + 300_000).toISOString() };
         return { ok: true, value: login };
       },
@@ -370,14 +370,14 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await startDevice.click();
   const approvalLink = page.getByRole('link', { name: '复制链接手动打开', exact: true });
   await approvalLink.waitFor();
-  assert.equal(await approvalLink.getAttribute('href'), 'https://open-design.ai/cloud/cli/activate?code=AB12-CD34');
+  assert.equal(await approvalLink.getAttribute('href'), 'https://open-design.ai/cloud/cli/activate?deviceId=fixture-device&userCode=AB12-CD34');
   assert.equal(await approvalLink.getAttribute('target'), '_blank');
   assert.match(await approvalLink.getAttribute('rel'), /noopener/u);
   assert.equal(await page.getByLabel('设备授权码', { exact: true }).innerText(), 'AB12-CD34');
   assert.equal(await startDevice.isDisabled(), true);
   // The Host launches the temporary window; the panel reports what actually happened.
   const openWindow = page.getByRole('button', { name: '在新窗口打开授权页', exact: true });
-  await openWindow.click();
+  // Starting login must open once after the authorization code arrives, without a second click.
   await page.waitForFunction(() => window.__openActivationCalls === 1);
   await page.getByText('已在新窗口打开官方授权页；请在该窗口确认设备码。', { exact: true }).waitFor();
   assert.doesNotMatch(await page.locator('.odc-settings').innerText(), /deviceSecret|controlKey|runtimeKey/);

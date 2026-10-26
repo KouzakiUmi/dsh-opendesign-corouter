@@ -57,6 +57,8 @@ POST https://amr-api.open-design.ai/api/v1/cli/device-authorizations/<deviceId>/
 [登录实现](../src/login.ts)把官方激活页作为普通链接交给用户，并可由[临时授权窗口](../src/browser-open.ts)用 `playwright-core` 启动一个短暂的 Chrome 显示该页面（启动策略改编自 dsh-subusage 0.16.3）；窗口属于插件自己创建的临时上下文，不接触用户已有的浏览器配置、Cookie 或页面内容。授权服务发出完整双令牌后，经 DSH credentials 的插件专属 grant 原子保存，不写桌面文件。额度的 403 / 未知数据不影响登录成功判定。
 
 - 状态为 idle / launching / waiting / verifying / success / cancelled / error。只有 waiting 暴露公开授权码、白名单链接与本地有效期；deviceSecret 与双令牌不进入 RPC。
+- 真实授权申请响应的激活网址使用官方 `/cloud/cli/activate` 页及 `deviceId`、`userCode` 查询参数。链接校验允许这一公开参数对，并在 Host 核对其值与同次响应一致；继续兼容单独的 `code` / `user_code` 参数，拒绝重复、额外参数和私密轮询凭据。Host、RPC、UI 与窗口启动共用同一白名单。
+- 真实轮询在等待确认时返回 `status: pending`，并将 `controlKey`、`runtimeKey` 和 `user` 设为 `null`。这种空令牌快照继续等待，不触发窗口清理；半套令牌、失败状态及未知状态仍拒绝。
 - 每次 HTTP 请求最多 20 秒、响应最多 64 KiB，禁止自动重定向。轮询不早于服务端间隔；等待上限取服务端到期与本地五分钟中较早者。
 - 登录起点捕获 revision，提交前检查记录 / 配置冲突与 AbortSignal。取消、超时和卸载中止轮询并关闭插件打开的临时窗口，不关闭用户自己的浏览器。
 - 持久化成功是提交边界；写入后不谎称取消能撤回。设备码有效期不套用为令牌失效期，不推断永久有效或 refresh-token 能力。
@@ -74,4 +76,4 @@ GET /api/v1/billing/summary  （仅工作区明确为 personal）
 
 从 preflight 的 `codingPlan` 解析窗口、从 `balanceUsd` 读取报告的总额；个人汇总提供有证据的分池和订阅周期。身份为团队或类型未知时不调用个人汇总，不从桌面 CLI 拼入其他账户的额度。401 表示失效，403 或字段缺失显示部分未知。设备 runtimeKey 仅在没有显式 Key 且目标为官方推理 origin 时用于模型目录和推理。
 
-测试使用合成凭据、注入请求和离线 UI。设备授权服务对本插件 cliVersion 的接受情况、实际激活页返回格式、令牌权限及真实推理仍需账号验收；本次未发起真实授权或读取用户凭据。
+自动化测试使用合成凭据、注入请求和离线 UI。真实设备授权测试已完成申请、临时 Chrome 打开、等待用户确认及完整双令牌签发，约 26 秒后成功结束并关闭测试窗口；测试令牌仅在内存核验，未保存到宿主或文件。已安装宿主中的设置页到凭据持久化、令牌权限及真实推理仍需单独验收。

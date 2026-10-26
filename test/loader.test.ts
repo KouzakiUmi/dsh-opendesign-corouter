@@ -70,8 +70,8 @@ test('official Loader mounts the built package, typert-loader auto-registers its
     await loader.root.update([entry()]);
     await eventually(loader, () => ctx.get(REMOTE_SERVICE) !== undefined);
     assert.deepEqual(providerIds(ctx), [PAID_PROVIDER, PLAN_PROVIDER]);
-    assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 12);
-    assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 21);
+    assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 13);
+    assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 25);
     // Discovery alone registers nothing: that is typert-loader's job.
     assert.equal(ctx.typert.getPackage(REMOTE_PACKAGE, 'host'), undefined);
 
@@ -80,7 +80,7 @@ test('official Loader mounts the built package, typert-loader auto-registers its
     try {
       await loader.root.update([entry({ apiProtocol: 'responses', modelSettings: { 'deepseek-v4.1-flash': { enabled: false }, 'gpt-6-luna': { contextWindow: 8192, maxTokens: 1024 } } })]);
       await loader.await();
-      assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 11);
+      assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 12);
       await assert.rejects(ctx.llm.resolveModelInfo(PLAN_PROVIDER, 'deepseek-v4.1-flash'), { code: 'MODEL_DISABLED' });
       const configured = await ctx.llm.resolveModelInfo(PLAN_PROVIDER, 'gpt-6-luna');
       assert.equal(configured.defaultMaxTokens, 1024);
@@ -88,7 +88,7 @@ test('official Loader mounts the built package, typert-loader auto-registers its
       assert.ok(updates > 0, 'configuration change must refresh host model selectors');
       await loader.root.update([entry()]);
       await loader.await();
-      assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 12);
+      assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 13);
     } finally { stopUpdates(); }
 
     // 2. Activate typert-loader once the entry exists; its activation pass covers it.

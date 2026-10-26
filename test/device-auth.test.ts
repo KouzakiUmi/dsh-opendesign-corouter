@@ -36,6 +36,26 @@ test('activation links are canonical, official and contain only a matching user 
   ]) assert.equal(validateActivationUrl(url, 'ABCD-1234'), null, url);
 });
 
+test('live deviceId/userCode links are accepted only as a bounded matching pair', () => {
+  const url = `${activation}?deviceId=device-1&userCode=ABCD-1234`;
+  assert.equal(validateActivationUrl(url, 'ABCD-1234', 'device-1'), url);
+  assert.equal(validateActivationUrl(url), url, 'the opener shares the same allowlist');
+  assert.equal(validateActivationUrl(`${activation}?userCode=ABCD-1234&deviceId=device-1`, 'ABCD-1234', 'device-1'), `${activation}?userCode=ABCD-1234&deviceId=device-1`);
+  assert.equal(parseDeviceAuthorization({ ...device(), activationUrl: url }).activationUrl, url);
+  for (const query of [
+    'deviceId=device-1', 'userCode=ABCD-1234',
+    'deviceId=device-1&deviceId=device-1', 'userCode=ABCD-1234&userCode=ABCD-1234',
+    'deviceId=&userCode=ABCD-1234', 'deviceId=..%2Felsewhere&userCode=ABCD-1234',
+    `deviceId=${'x'.repeat(201)}&userCode=ABCD-1234`,
+    'deviceId=device-1&userCode=WRONG', 'deviceId=device-1&userCode=ABCD%001234',
+    'deviceId=device-1&code=ABCD-1234',
+    'deviceId=device-1&userCode=ABCD-1234&deviceSecret=private-device-secret',
+    'deviceId=device-1&userCode=ABCD-1234&userCode=ABCD-1234',
+  ]) assert.equal(validateActivationUrl(`${activation}?${query}`, 'ABCD-1234', 'device-1'), null);
+  assert.throws(() => parseDeviceAuthorization({ ...device(), deviceId: 'other-device', activationUrl: url }), isCode('opendesign/login-response'));
+  assert.throws(() => parseDeviceAuthorization({ ...device(), deviceSecret: 'device-1', activationUrl: url }), isCode('opendesign/login-response'));
+});
+
 test('authorization shape, bounds and public fields are validated without exposing server data', () => {
   const parsed = parseDeviceAuthorization(device());
   assert.equal(parsed.pollMs, 2000);
@@ -65,6 +85,23 @@ test('only complete same-snapshot tokens authorize; pending is explicit and unkn
   assert.throws(() => parseDevicePoll({ ...tokens, status: 'expired' }), isCode('opendesign/login-expired'));
   for (const error of ['access_denied', 'invalid_device_secret', { code: 'expired', message: 'private-device-secret' }]) assert.throws(() => parseDevicePoll({ ...tokens, error }), isCode('opendesign/login-response'));
   for (const value of [{}, { status: 'unknown' }, { status: 'success' }, null]) assert.throws(() => parseDevicePoll(value), isCode('opendesign/login-response'));
+});
+
+test('live pending null keys keep waiting but partial or failed snapshots never do', () => {
+  const pending = { status: 'pending', controlKey: null, runtimeKey: null, user: null };
+  assert.deepEqual(parseDevicePoll(pending), { state: 'pending' });
+  assert.deepEqual(parseDevicePoll({ ...pending, status: 'authorization_pending', user: { controlKey: null, runtimeKey: null } }), { state: 'pending' });
+  for (const value of [
+    { ...pending, controlKey: 'fixture-control' },
+    { ...pending, runtimeKey: 'fixture-runtime' },
+    { ...pending, user: { controlKey: 'fixture-control' } },
+    { ...pending, controlKey: '' },
+    { ...pending, error: 'access_denied' },
+    { ...pending, status: 'success' },
+    { ...pending, status: 'unknown' },
+    { ...pending, status: 'denied' },
+    { ...pending, status: 'expired' },
+  ]) assert.throws(() => parseDevicePoll(value), DeviceAuthError);
 });
 
 test('HTTP requests use POST, JSON, redirect:error and omit browser credentials', async () => {

@@ -163,6 +163,8 @@ test('device approval exposes only validated public fields while waiting', () =>
     activationUrl: 'https://open-design.ai/cloud/cli/activate?code=AB12-CD34', expiresAt: '2030-01-01T00:00:00.000Z' };
   const parsed = through('startLogin', { ...approval, deviceSecret: 'PRIVATE_POLL', controlKey: 'PRIVATE_CONTROL', runtimeKey: 'PRIVATE_RUNTIME' });
   assert.deepEqual(parsed, approval);
+  const liveApproval = { ...approval, activationUrl: 'https://open-design.ai/cloud/cli/activate?deviceId=device-1&userCode=AB12-CD34' };
+  assert.deepEqual(through('startLogin', liveApproval), liveApproval);
   assert.doesNotMatch(JSON.stringify(parsed), /PRIVATE/);
   for (const state of ['success', 'cancelled', 'error', 'verifying']) {
     const terminal = parseLoginState({ ...approval, state });

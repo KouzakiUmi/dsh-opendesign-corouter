@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MODELS, findModel, modelsFor } from '../src/catalog.js';
 
-// Design Plan 名单（官网四档一致），12 款。
+// 官网 Core 12 款，加当前工作区 billing preflight 确认覆盖的 MiniMax。
 const PLAN_IDS = [
   'claude-haiku-5.5',
   'gpt-6-luna',
@@ -20,9 +20,10 @@ const PLAN_IDS = [
   'deepseek-v4-pro',
   'glm-5.3-flash',
   'kimi-k2.7-code',
+  'minimax-m3.1-flash',
 ] as const;
 
-// 其余 21 款官网在售公开对话模型：付费通道（不等于“套餐可抵扣名单”）。
+// 25 项归付费通道；不承诺每个账号的具体套餐权限。
 const PAID_IDS = [
   'qwen3.7-max',
   'claude-fable-5',
@@ -45,6 +46,10 @@ const PAID_IDS = [
   'grok-4.5',
   'grok-4.6',
   'grok-4.7',
+  'gemini-4-argon',
+  'kimi-k3.1-pro',
+  'muse-spark-1.3',
+  'muse-wonder',
 ] as const;
 
 const EFFORTS_FULL = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'] as const;
@@ -72,10 +77,10 @@ const GO_DEFAULTS = new Map<string, {
   ['mimo-v2.6-pro', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_STD] }],
 ]);
 
-test('catalog 收录官网全部 33 款公开 chat 模型：plan 12 + paid 21', () => {
-  assert.equal(MODELS.length, 33);
-  assert.equal(modelsFor('plan').length, 12);
-  assert.equal(modelsFor('paid').length, 21);
+test('catalog 收录 38 个目录项：Core 附赠通道 13 + 付费通道 25', () => {
+  assert.equal(MODELS.length, 38);
+  assert.equal(modelsFor('plan').length, 13);
+  assert.equal(modelsFor('paid').length, 25);
   assert.deepEqual([...modelsFor('plan').map(model => model.id)].sort(), [...PLAN_IDS].sort());
   assert.deepEqual([...modelsFor('paid').map(model => model.id)].sort(), [...PAID_IDS].sort());
 });
@@ -93,18 +98,18 @@ test('模型 ID 与显示名非空且全局唯一，两个分组不重叠', () =
   }
 });
 
-test('媒体模型与 ID 未公开的套餐模型不进对话目录', () => {
+test('媒体专用模型不进对话目录', () => {
   for (const model of MODELS) {
     assert.doesNotMatch(model.id, /^(gpt-image-|nano-banana-|seedream-|imagen-|veo-|doubao-seedance-|sora-)/u);
   }
-  for (const id of ['muse-spark-1.3', 'gemini-4-argon', 'gpt-image-2', 'nano-banana-2', 'seedream-5.0']) {
+  for (const id of ['gpt-image-2', 'nano-banana-2', 'seedream-5.0']) {
     assert.equal(findModel(id), undefined, `${id} 不应出现在目录中`);
   }
 });
 
 test('plan 12 款能力与 Go 0.1.9 MODEL_DEFAULTS 逐项一致', () => {
-  assert.equal(GO_DEFAULTS.size, PLAN_IDS.length);
-  for (const model of modelsFor('plan')) {
+  assert.equal(GO_DEFAULTS.size, PLAN_IDS.length - 1);
+  for (const model of modelsFor('plan').filter(model => model.id !== 'minimax-m3.1-flash')) {
     const expected = GO_DEFAULTS.get(model.id);
     assert.ok(expected, `${model.id} 缺少 Go defaults 期望值`);
     assert.equal(model.contextWindow, expected.contextWindow, `${model.id} contextWindow`);
@@ -114,8 +119,11 @@ test('plan 12 款能力与 Go 0.1.9 MODEL_DEFAULTS 逐项一致', () => {
   }
 });
 
-test('paid 21 款不编造能力：上下文 / 输出 / 模态 / 思考档位全部缺省', () => {
-  for (const model of modelsFor('paid')) {
+test('付费组及新附赠 M3.1 Flash 不编造能力：未知字段保持缺省', () => {
+  const minimax = findModel('minimax-m3.1-flash');
+  assert.ok(minimax);
+  assert.equal(minimax.group, 'plan');
+  for (const model of [...modelsFor('paid'), minimax]) {
     assert.equal(model.contextWindow, undefined, `${model.id} 不应携带 contextWindow`);
     assert.equal(model.maxOutputTokens, undefined, `${model.id} 不应携带 maxOutputTokens`);
     assert.equal(model.inputModalities, undefined, `${model.id} 不应推断 inputModalities`);

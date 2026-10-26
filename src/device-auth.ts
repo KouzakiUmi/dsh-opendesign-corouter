@@ -3,7 +3,7 @@
 // official compatibility guarantee). No browser automation or credential discovery.
 export interface DeviceTokens { controlKey: string; runtimeKey: string }
 export const DEVICE_AUTH_ENDPOINT = 'https://amr-api.open-design.ai/api/v1/cli/device-authorizations';
-export const DEVICE_AUTH_PLUGIN_VERSION = '0.1.5';
+export const DEVICE_AUTH_PLUGIN_VERSION = '0.1.6';
 export const DEVICE_REQUEST_TIMEOUT_MS = 20_000;
 /** One bounded launch step of the temporary activation window. */
 export const DEVICE_OPEN_TIMEOUT_MS = 30_000;
@@ -17,24 +17,33 @@ export class DeviceAuthError extends Error {
   constructor(readonly code: string) { super('设备授权未完成，请重新开始'); }
 }
 
-/** Strict public-link allowlist: only an optional, single, non-secret code is allowed. */
-export function validateActivationUrl(value: unknown, userCode?: string): string | null {
+/** Strict public-link allowlist: a legacy code or the public deviceId/userCode pair. */
+export function validateActivationUrl(value: unknown, userCode?: string, deviceId?: string): string | null {
   if (typeof value !== 'string' || value.length > 512 || !/^https:\/\/open-design\.ai\/cloud\/cli\/activate(?:\?[^#]*)?$/u.test(value) || /[\s\\]/u.test(value)) return null;
   try {
     const url = new URL(value);
     if (url.origin !== 'https://open-design.ai' || url.pathname !== '/cloud/cli/activate' || url.username || url.password || url.hash) return null;
     const entries = [...url.searchParams];
-    if (entries.length > 1) return null;
-    if (entries.length) {
+    if (entries.length === 2) {
+      // The live authorization endpoint returns this pair. Neither field is the private
+      // polling credential; bind both to the response when parsing the Host snapshot.
+      if (entries.some(([key]) => key !== 'deviceId' && key !== 'userCode')) return null;
+      const id = url.searchParams.get('deviceId');
+      const code = url.searchParams.get('userCode');
+      if (!validDeviceId(id) || !validUserCode(code) || (deviceId !== undefined && id !== deviceId) || (userCode !== undefined && code !== userCode)) return null;
+    } else if (entries.length === 1) {
       const entry = entries[0]!;
       if (!['code', 'user_code'].includes(entry[0]) || !validUserCode(entry[1]) || (userCode !== undefined && entry[1] !== userCode)) return null;
-    }
+    } else if (entries.length > 2) return null;
     return url.href;
   } catch { return null; }
 }
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+function validDeviceId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9_-]{1,200}$/iu.test(value);
 }
 function validUserCode(value: unknown): value is string {
   return typeof value === 'string' && /^[a-z0-9][a-z0-9-]{3,31}$/iu.test(value);
@@ -53,8 +62,8 @@ export interface DeviceAuthorization {
 }
 
 export function parseDeviceAuthorization(value: unknown): DeviceAuthorization {
-  if (!object(value) || typeof value.deviceId !== 'string' || !/^[a-z0-9_-]{1,200}$/iu.test(value.deviceId) || !secret(value.deviceSecret) || !validUserCode(value.userCode)) throw new DeviceAuthError('opendesign/login-response');
-  const activationUrl = validateActivationUrl(value.activationUrl, value.userCode);
+  if (!object(value) || !validDeviceId(value.deviceId) || !secret(value.deviceSecret) || !validUserCode(value.userCode)) throw new DeviceAuthError('opendesign/login-response');
+  const activationUrl = validateActivationUrl(value.activationUrl, value.userCode, value.deviceId);
   // The server's public fields must never echo the private polling credential.
   if (!activationUrl || value.userCode.toLowerCase().includes(value.deviceSecret.toLowerCase()) || decodeURIComponent(activationUrl).toLowerCase().includes(value.deviceSecret.toLowerCase())) throw new DeviceAuthError('opendesign/login-response');
   const expiresAt = typeof value.expiresAt === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/u.test(value.expiresAt) ? Date.parse(value.expiresAt) : NaN;
@@ -74,6 +83,10 @@ export function parseDevicePoll(value: unknown): DevicePollResult {
   // A failure envelope with stray keys is contradictory, not an authorized account.
   if (value.error !== undefined && value.error !== null && value.error !== '') throw new DeviceAuthError('opendesign/login-response');
   const user = object(value.user) ? value.user : {};
+  // The live service explicitly returns null keys while approval is pending. Only an
+  // entirely empty token snapshot may keep waiting; partial/nonempty keys still fail.
+  if ((state === 'pending' || state === 'authorization_pending') &&
+      [value.controlKey, value.runtimeKey, user.controlKey, user.runtimeKey].every(key => key === undefined || key === null)) return { state: 'pending' };
   // Never assemble a pair from conflicting top-level/user snapshots.
   const topPresent = value.controlKey !== undefined || value.runtimeKey !== undefined;
   const source = topPresent ? value : user;

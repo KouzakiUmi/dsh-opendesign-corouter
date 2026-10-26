@@ -32,7 +32,7 @@ dsh plugin --profile web add dsh-opendesign-corouter
 也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
-dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.5.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.6.tgz
 ```
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。
@@ -40,7 +40,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.5.tgz
 ### 2. 配置连接
 
 1. 打开 **设置 → OpenDesign CoRouter → 连接与登录**。
-2. 点击 **开始设备授权**，再用 **在新窗口打开授权页** 显示官方页面，核对授权码并确认；也可复制链接到你自己的常用浏览器，或单独配置工作空间 API Key / 沿用 `COROUTER_API_KEY`。
+2. 点击 **开始设备授权**，取得授权码后自动打开临时 Chrome 官方授权页，核对并确认；打开失败可用 **在新窗口打开授权页** 重试，也可复制链接到常用浏览器，或单独配置工作空间 API Key / 沿用 `COROUTER_API_KEY`。
 3. 返回设置页等待保存成功。额度默认优先读取桌面登录态；要明确使用设备授权的账号，可关闭桌面优先。
 4. 回到模型选择器，选择 **OpenDesign CoRouter · 套餐赠送** 或 **OpenDesign CoRouter · 付费模型**。
 
@@ -52,8 +52,8 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.5.tgz
 
 | Provider | 模型数 | 用途 |
 | --- | ---: | --- |
-| `opendesign-corouter-plan` | 12 | 官网 Design Plan 套餐赠送模型 |
-| `opendesign-corouter-paid` | 21 | 其余公开对话模型 |
+| `opendesign-corouter-plan` | 13 | Core / Design Plan 附赠通道，含预检确认覆盖的 MiniMax M3.1 Flash |
+| `opendesign-corouter-paid` | 25 | Plan 套餐模型及其他钱包付费模型 |
 
 上表为内置目录。模型页可从 OpenAI `/models` 端口刷新，逐个启用或停用模型，并配置温度、top-p、默认输出上限、上下文预算及思考深度。停用同时影响模型选择器和直接调用；参数会保存并应用到实际请求。媒体生成接口不在对话目录中，未知能力不按名称猜测。
 

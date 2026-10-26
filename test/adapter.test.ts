@@ -11,11 +11,26 @@ async function collect(stream: AsyncIterable<StreamChunk>) { const chunks: Strea
 test('two independent Providers advertise disjoint catalogs and reject cross-group calls', async () => {
   let calls = 0;
   const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'test-key', fetch: async () => { calls++; return sse('ok'); } });
-  assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 12);
-  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 21);
+  assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 13);
+  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 25);
   assert.throws(() => adapter.stream(options(PLAN_PROVIDER, 'gpt-6-astra')), { code: 'INVALID_REQUEST' });
   assert.equal(calls, 0);
 });
+test('verified API additions advertise and invoke through their evidence-backed provider', async () => {
+  const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'test-key', fetch: async (_input, init) => {
+    const wire = JSON.parse(String(init?.body));
+    assert.ok(['minimax-m3.1-flash', 'gemini-4-argon', 'kimi-k3.1-pro', 'muse-spark-1.3', 'muse-wonder'].includes(wire.model));
+    return sse('ok');
+  } });
+  for (const id of ['minimax-m3.1-flash', 'gemini-4-argon', 'kimi-k3.1-pro', 'muse-spark-1.3', 'muse-wonder']) {
+    const provider = id === 'minimax-m3.1-flash' ? PLAN_PROVIDER : PAID_PROVIDER;
+    assert.ok((await adapter.listModels(provider)).some(model => model.id === id));
+    assert.equal((await collect(adapter.stream(options(provider, id)))).at(-1)?.type, 'finish');
+    const wrong = provider === PLAN_PROVIDER ? PAID_PROVIDER : PLAN_PROVIDER;
+    assert.throws(() => adapter.stream(options(wrong, id)), { code: 'INVALID_REQUEST' });
+  }
+});
+
 test('wire uses documented API-key endpoint, attribution and safe budget/reasoning projection', async () => {
   const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'test-key', fetch: async (input, init) => {
     assert.equal(String(input), 'https://amr-link.open-design.ai/v1/chat/completions');
@@ -75,8 +90,8 @@ test('credential routing receives the prepared gateway even after configuration 
 test('model switches hide routes and enforce rejection on direct calls', async () => {
   const configured: RuntimeConfig = { ...base, modelSettings: { 'deepseek-v4.1-flash': { enabled: false } } };
   const adapter = new CoRouterAdapter({ config: () => configured, apiKey: async () => 'test-key', fetch: async () => { assert.fail('disabled model must not fetch'); } });
-  assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 11);
-  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 21);
+  assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 12);
+  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 25);
   assert.throws(() => adapter.stream(options()), { code: 'MODEL_DISABLED' });
   await assert.rejects(adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash'), { code: 'MODEL_DISABLED' });
 });

@@ -68,6 +68,34 @@ function assertNoCode(login: ConsoleLogin): void {
   for (const field of ['activationUrl', 'userCode', 'expiresAt']) assert.equal(field in status, false);
 }
 
+test('live pending null keys preserve the waiting job until a later approval commits', async () => {
+  const gate = deferred<void>();
+  let waits = 0;
+  let settled = 0;
+  const f = fixture({
+    replies: [authorization({ activationUrl: `https://open-design.ai/cloud/cli/activate?deviceId=fixture-device-id&userCode=${CODE}` }),
+      { status: 'pending', controlKey: null, runtimeKey: null, user: null }, TOKENS],
+    options: {
+      delay: async () => { if (++waits === 2) await gate.promise; },
+      onSettled: () => { settled++; },
+    },
+  });
+  try {
+    f.login.start(request);
+    await waitFor(() => waits === 2);
+    assert.equal(f.login.status().state, 'waiting');
+    assert.ok(f.login.activationLink());
+    assert.equal(settled, 0, 'pending must not trigger window cleanup');
+    assert.equal(f.commits.length, 0);
+    assertNoSecrets(f.login);
+    gate.resolve();
+    await waitFor(() => f.login.status().state === 'success');
+    assert.equal(f.commits.length, 1);
+    assert.equal(settled, 1);
+    assertNoCode(f.login);
+  } finally { gate.resolve(); f.login.dispose(); }
+});
+
 test('start returns before capture/network; complete tokens commit directly without quota verification', async () => {
   const f = fixture();
   assert.deepEqual(f.login.status(), { jobId: null, state: 'idle' });

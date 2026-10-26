@@ -16,16 +16,17 @@
  * 分组语义（重要）：`plan`/`paid` 是**本插件本地目录分类**，用于把“套餐赠送通道”与
  * “其余付费通道”拆成两个 Provider，不是上游强制计费契约。最终可用性、扣哪个额度池、
  * 是否先扣 Design Plan 额度再用套餐模型/钱包额度，全部由服务端按账号套餐决定。
- * `paid` 21 款里只有 8 款出现在官网套餐可抵扣名单，其余 13 款同样可经钱包/按量付费调用，
- * 因此 `paid` 收录 21 款而不是 13 款。
+ * 2026-10-27 官方 GET /v1/models 实测补齐五个 ID，现为 plan 13 + paid 25。
+ * 同日桌面 Vela 按模型 billing preflight：M3.1 Flash 的 modelCovered=true /
+ * funding=coding_plan，新增于附赠通道；其余四项为 false / wallet，归付费通道。
+ * 此分类以当次工作区证据为依据，不保证其他账号或未来套餐权益。
+ * 新增项证据及名称来源见 docs/client-evidence.md；不从型号名推断能力。
  *
- * 未收录（证据不足，不猜测）：
- * - 套餐模型组中尚未公开精确 ID 的 `Muse Spark 1.3`、`Gemini 4 Argon`：
- *   前者详情页没有 `data-model`/模型 ID，后者在模型目录里没有详情页。
+ * 未收录：
  * - 媒体模型 `GPT Image 2`、`Nano Banana 2`、`Seedream 5 Lite / Pro`：
  *   走 `/api/v1/media/*`，不应出现在对话模型列表里，避免选中后 chat 请求必败。
  *
- * `paid` 21 款的能力字段一律缺省：既没有官网数值，也没有可信默认表，
+ * `paid` 25 款及新增 M3.1 Flash 的能力字段一律缺省：没有可核实的能力数值，
  * 不按名称推断图像能力，也不给未知项填 `['text']` 谎称不支持图像。
  */
 export interface CatalogModel {
@@ -47,8 +48,8 @@ const EFFORTS_STD = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 const EFFORTS_LOW_HIGH = ['low', 'high', 'max'] as const;
 
 /**
- * 顺序按供应商分组（与官网模型目录导航一致）；`plan` 为 Design Plan 额度覆盖的 12 款，
- * 其余 21 款公开对话模型归 `paid`。
+ * `plan` 为官网 12 款 Core / Design Plan 模型，加预检确认覆盖的 M3.1 Flash；
+ * 其余 25 项归 `paid`（Plan / 钱包付费通道）。
  */
 export const MODELS: readonly CatalogModel[] = [
   // ── OpenAI（7） ─────────────────────────────────────────────
@@ -145,7 +146,7 @@ export const MODELS: readonly CatalogModel[] = [
   },
   { id: 'glm-5.2', name: 'GLM-5.2', group: 'paid' },
 
-  // ── Moonshot（2） ───────────────────────────────────────────
+  // ── Moonshot（3） ───────────────────────────────────────────
   {
     id: 'kimi-k2.7-code',
     name: 'Kimi K2.7 Code',
@@ -156,8 +157,10 @@ export const MODELS: readonly CatalogModel[] = [
     reasoningEfforts: EFFORTS_STD,
   },
   { id: 'kimi-k3', name: 'Kimi K3', group: 'paid' },
+  { id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro', group: 'paid' },
 
-  // ── Google（2） ─────────────────────────────────────────────
+  // ── Google（3） ─────────────────────────────────────────────
+  { id: 'gemini-4-argon', name: 'Gemini 4 Argon', group: 'paid' },
   { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', group: 'paid' },
   { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', group: 'paid' },
 
@@ -199,6 +202,11 @@ export const MODELS: readonly CatalogModel[] = [
 
   // ── Alibaba（1） ────────────────────────────────────────────
   { id: 'qwen3.7-max', name: 'Qwen3.7 Max', group: 'paid' },
+
+  // Official API additions; display labels for undocumented entries are local formatting.
+  { id: 'minimax-m3.1-flash', name: 'MiniMax M3.1 Flash', group: 'plan' },
+  { id: 'muse-spark-1.3', name: 'Muse Spark 1.3', group: 'paid' },
+  { id: 'muse-wonder', name: 'Muse Wonder', group: 'paid' },
 ];
 
 const BY_ID = new Map(MODELS.map(model => [model.id, model] as const));
