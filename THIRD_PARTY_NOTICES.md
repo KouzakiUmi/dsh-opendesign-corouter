@@ -4,7 +4,7 @@
 
 离线主题夹具使用 [DeepSeek Harness 官方主题令牌](https://github.com/deepseek-ai/deepseek-harness/blob/22ddee3792402c3e70ec5f86a63c3e3e895a2f60/packages/client/ui-theme/src/styles/design-platform.css)，仅供测试，不随插件安装包分发。
 
-Client bundle 内含 [Zod 4.4.3](https://github.com/colinhacks/zod) 与 DSH 协议辅助代码，分别保留 Colin McDonnell 与 DeepSeek 的 MIT 声明。
+Client bundle 内含 [Zod 4.6.6](https://github.com/colinhacks/zod) 与 DSH 协议辅助代码，分别保留 Colin McDonnell 与 DeepSeek 的 MIT 声明。
 
 以上项目为 MIT 许可。保留如下版权和许可声明，适用于相应移植与改编部分：
 

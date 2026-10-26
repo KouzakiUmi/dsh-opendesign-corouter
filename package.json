@@ -4,10 +4,22 @@
   "description": "OpenDesign CoRouter：套餐赠送与付费模型双 Provider、桌面登录态额度及独立登录",
   "type": "module",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/KouzakiUmi/dsh-opendesign-corouter.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KouzakiUmi/dsh-opendesign-corouter.git"
+  },
   "homepage": "https://github.com/KouzakiUmi/dsh-opendesign-corouter#readme",
-  "bugs": { "url": "https://github.com/KouzakiUmi/dsh-opendesign-corouter/issues" },
-  "keywords": ["dsh", "dsh-plugin", "opendesign", "corouter", "llm-provider", "quota"],
+  "bugs": {
+    "url": "https://github.com/KouzakiUmi/dsh-opendesign-corouter/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "opendesign",
+    "corouter",
+    "llm-provider",
+    "quota"
+  ],
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
@@ -66,40 +78,47 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",
-    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.3 <0.3.0-0",
+    "@deepseek-ai/dsh-api-remotes": ">=0.2.1-rc.3 <0.3.0-0",
+    "@deepseek-ai/dsh-attachment": ">=0.2.1-rc.3 <0.3.0-0",
     "@deepseek-ai/dsh-credentials": ">=0.2.1-rc.3 <0.3.0-0",
     "@deepseek-ai/dsh-launch-environment": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-attachment": ">=0.2.1-rc.3 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.3 <0.3.0-0",
+    "@deepseek-ai/dsh-settings": ">=0.2.1-rc.3 <0.3.0-0",
     "@deepseek-ai/dsh-typert-protocol": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-api-remotes": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-typert-registry": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-settings": ">=0.2.1-rc.3 <0.3.0-0"
+    "@deepseek-ai/dsh-typert-registry": ">=0.2.1-rc.3 <0.3.0-0"
   },
-  "peerDependenciesMeta": { "@deepseek-ai/dsh-settings": { "optional": true } },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-settings": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "@deepseek-ai/schemastery": "~3.18.5",
     "playwright-core": "1.63.0",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
+  },
+  "overrides": {
+    "zod": "$zod"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.6",
+    "@deepseek-ai/dsh-api-remotes": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-attachment": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-credentials": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-launch-environment": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-settings": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-typert-loader": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-typert-registry": "0.2.1-rc.3",
     "@types/node": "^22.20.1",
-    "typescript": "^6.0.3",
-    "tsx": "^4.23.13",
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.0",
     "esbuild": "^0.28.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "@types/react": "^18.3.1",
-    "@types/react-dom": "^18.3.0",
-    "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-credentials": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-launch-environment": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-attachment": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-typert-registry": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-api-remotes": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-typert-loader": "0.2.1-rc.3",
-    "@deepseek-ai/cordis-plugin-loader": "1.0.6",
-    "@deepseek-ai/dsh-settings": "0.2.1-rc.3"
+    "tsx": "^4.23.13",
+    "typescript": "^6.0.3"
   }
 }

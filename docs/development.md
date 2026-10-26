@@ -2,7 +2,7 @@
 
 ## 环境与命令
 
-Node.js `>=24.9.0`，以锁文件中的官方 DSH Core `0.2.1-rc.3` 包进行开发。无需另一份 DSH 源码 checkout，不修改宿主或 Profile。
+Node.js `>=24.9.0`，以锁文件中的官方 DSH Core `0.2.1-rc.3` 包进行开发。本仓库为其固定的旧 Zod 添加定向 override，统一使用修复版本 4.6.6；这只影响开发依赖树，已安装宿主的依赖仍由宿主维护。无需另一份 DSH 源码 checkout。
 
 ```console
 npm ci --ignore-scripts
