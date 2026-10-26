@@ -39,7 +39,7 @@ export function isOfficialApiUrl(raw: string): boolean {
   if (url.username || url.password) return false;
   if (url.search || url.hash) return false;
   if (url.pathname !== '/' && url.pathname !== '') return false;
-  return url.hostname.toLowerCase() === API_HOST;
+  return url.hostname.toLowerCase() === API_HOST && !url.port;
 }
 
 /** Canonical `https://host` form, or `undefined` when the value is not an official origin. */
@@ -163,10 +163,35 @@ export async function readDesktopCredential(deps: DesktopDeps = {}): Promise<Des
 }
 
 /** Cookie payload persisted through the credential seam as a `grant` record. */
-export interface LoginGrant {
+export interface CookieLoginGrant {
   cookie: string;
-  /** Epoch ms; `0`/absent means the console declared no expiry. */
+  /** Legacy cookie expiry only; never applied to device tokens. */
   expiresAt?: number;
+}
+export interface DeviceLoginGrant {
+  kind: 'device';
+  controlKey: string;
+  runtimeKey: string;
+  savedAt?: string;
+}
+export type LoginGrant = CookieLoginGrant | DeviceLoginGrant;
+
+/** Validate both keys as one snapshot; never combine an incomplete grant with another source. */
+export function deviceGrant(value: unknown): DeviceLoginGrant | undefined {
+  if (!record(value) || value.kind !== 'device' || typeof value.controlKey !== 'string' || typeof value.runtimeKey !== 'string') return;
+  try {
+    const controlKey = safeSecret(value.controlKey), runtimeKey = safeSecret(value.runtimeKey);
+    if ([controlKey, runtimeKey].some(key => key.length > 8192 || /\s/u.test(key))) return;
+    return { kind: 'device', controlKey, runtimeKey, ...(typeof value.savedAt === 'string' ? { savedAt: value.savedAt } : {}) };
+  } catch { return undefined; }
+}
+
+/** Device runtime credentials may only reach this exact HTTPS origin, never a custom gateway. */
+export function isOfficialRuntimeUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.origin === 'https://amr-link.open-design.ai' && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
 }
 
 export type AuthSource = 'desktop' | 'login' | 'environment';
@@ -220,6 +245,12 @@ export function desktopSession(credential: DesktopCredential, apiUrl = credentia
   };
 }
 
+/** Device control token: Bearer on the official control plane only. No inferred token expiry. */
+export function deviceSession(tokens: { controlKey: string } | string): AuthSession {
+  const controlKey = typeof tokens === 'string' ? tokens : tokens.controlKey;
+  return { headers: { authorization: `Bearer ${safeSecret(controlKey)}` }, source: 'login', via: 'login', apiUrl: DEFAULT_API_URL, credentialType: 'device' };
+}
+
 /** A persisted or environment-supplied console cookie as a `cookie` header. */
 export function cookieSession(cookie: string, source: SessionSource, apiUrl = DEFAULT_API_URL): AuthSession | undefined {
   const header = cookieHeader(cookie);
@@ -234,7 +265,7 @@ export function cookieSession(cookie: string, source: SessionSource, apiUrl = DE
 
 /**
  * Resolve the session in the order the user asked for: **desktop first**, then the
- * cookie saved by this plugin's own login, then environment references.
+ * device grant saved by this plugin, then legacy cookies and environment references.
  *
  * A desktop config whose `apiUrl` is not an official origin is *skipped*, not used: the
  * token must not travel to a host the plugin cannot vouch for. The skip is reported as a
@@ -271,10 +302,15 @@ export async function resolveSession(deps: AuthDeps = {}): Promise<AuthOutcome> 
   if (deps.readGrant) {
     let grant: LoginGrant | undefined;
     try { grant = await deps.readGrant(); } catch { grant = undefined; }
-    const expiry = typeof grant?.expiresAt === 'number' && Number.isFinite(grant.expiresAt) ? grant.expiresAt : 0;
-    if (grant && (expiry === 0 || expiry > now())) {
-      const session = cookieSession(grant.cookie, 'login');
-      if (session) return { state: 'ready', session, warnings };
+    if (grant && 'kind' in grant && grant.kind === 'device') {
+      const device = deviceGrant(grant);
+      if (device) return { state: 'ready', session: deviceSession(device), warnings };
+    } else if (grant && 'cookie' in grant) {
+      const expiry = typeof grant.expiresAt === 'number' && Number.isFinite(grant.expiresAt) ? grant.expiresAt : 0;
+      if (expiry === 0 || expiry > now()) {
+        const session = cookieSession(grant.cookie, 'login');
+        if (session) return { state: 'ready', session, warnings };
+      }
     }
   }
 

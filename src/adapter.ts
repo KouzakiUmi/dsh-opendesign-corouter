@@ -16,7 +16,7 @@ import type { ApiProtocol } from './protocol-options.js';
 export interface AdapterOptions {
   config(): RuntimeConfig;
   models?(): readonly CatalogModel[];
-  apiKey(ref: string): Promise<string | undefined>;
+  apiKey(ref: string, baseURL?: string): Promise<string | undefined>;
   imageDataUrl?(image: ImageAttachmentRef, signal: AbortSignal): Promise<string | undefined>;
   onEmptyTurn?(): void;
   fetch?: typeof fetch;
@@ -83,8 +83,8 @@ export class CoRouterAdapter extends LlmAdapter {
   async *#stream(options: GenerateOptions, config: RuntimeConfig, row: CatalogModel): AsyncGenerator<StreamChunk> {
     const signal = AbortSignal.any([combinedSignal(options.signal, config.requestTimeoutMs), this.#lifetime.signal]);
     signal.throwIfAborted();
-    const raw = await this.options.apiKey(config.apiKeyEnv);
-    if (!raw) throw new LlmError('未配置 CoRouter API Key；请在插件设置中保存或设置对应环境变量', 'MISSING_CREDENTIAL');
+    const raw = await this.options.apiKey(config.apiKeyEnv, config.baseURL);
+    if (!raw) throw new LlmError('未配置当前网关的推理凭据；请完成设备授权或配置对应 API Key', 'MISSING_CREDENTIAL');
     const key = assertUsableApiKey(raw, 'dsh-opendesign-corouter', config.apiKeyEnv);
     const setting: ModelSettings = config.modelSettings?.[row.id] ?? {};
     const protocolId = config.apiProtocol ?? 'chat-completions';

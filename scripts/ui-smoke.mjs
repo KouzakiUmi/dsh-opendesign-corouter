@@ -125,7 +125,12 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
         }
         return { ok: true, value: quota };
       },
-      startLogin: async () => { login = { jobId: 'fixture-job', state: 'waiting', message: '模拟登录等待，不会打开浏览器' }; return { ok: true, value: login }; },
+      startLogin: async () => {
+        login = { jobId: 'fixture-job', state: 'waiting', message: '请在常用浏览器确认设备授权',
+          activationUrl: 'https://open-design.ai/cloud/cli/activate?code=AB12-CD34', userCode: 'AB12-CD34',
+          expiresAt: new Date(Date.now() + 300_000).toISOString() };
+        return { ok: true, value: login };
+      },
       loginStatus: async (...args) => { if (args.length) throw new Error('loginStatus requires zero arguments'); return { ok: true, value: login }; },
       cancelLogin: async () => { login = { jobId: 'fixture-job', state: 'cancelled' }; return { ok: true, value: login }; },
       saveApiKey: async request => { if (request.value !== 'fixture-api-key') throw new Error('Unexpected fixture key'); return { ok: true, value: status() }; },
@@ -135,6 +140,9 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
       window.__forceRefreshCalls += 1;
       if (quota.autoRefreshPaused) quota = initialQuota();
       return api.refreshQuota();
+    };
+    window.__finishLogin = state => {
+      login = { ...login, state, message: state === 'success' ? '设备授权已完成并保存' : '设备授权已过期，请重新开始' };
     };
     window.__setQuotaPaused = () => { quota = { ...quota, state: 'partial', autoRefreshPaused: true, refreshFailures: 6, nextRefreshAt: undefined }; };
     window.__setModelsFail = value => { window.__modelsFail = value; };
@@ -349,7 +357,31 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await page.evaluate(() => window.__setModelsFail(false));
 
   await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
+  const startDevice = page.getByRole('button', { name: '开始设备授权', exact: true });
+  await startDevice.click();
+  const approvalLink = page.getByRole('link', { name: '打开授权页', exact: true });
+  await approvalLink.waitFor();
+  assert.equal(await approvalLink.getAttribute('href'), 'https://open-design.ai/cloud/cli/activate?code=AB12-CD34');
+  assert.equal(await approvalLink.getAttribute('target'), '_blank');
+  assert.match(await approvalLink.getAttribute('rel'), /noopener/u);
+  assert.equal(await page.getByLabel('设备授权码', { exact: true }).innerText(), 'AB12-CD34');
+  assert.equal(await startDevice.isDisabled(), true);
   await page.screenshot({ path: 'docs/previews/connection.png', fullPage: true });
+  await page.getByRole('button', { name: '取消登录', exact: true }).click();
+  await approvalLink.waitFor({ state: 'detached' });
+  assert.equal(await startDevice.isEnabled(), true);
+  await startDevice.click();
+  await approvalLink.waitFor();
+  await page.evaluate(() => window.__finishLogin('error'));
+  await page.getByText('设备授权已过期，请重新开始', { exact: true }).waitFor();
+  await approvalLink.waitFor({ state: 'detached' });
+  await startDevice.click();
+  await approvalLink.waitFor();
+  await page.evaluate(() => window.__finishLogin('success'));
+  await page.getByText('设备授权已完成并保存', { exact: true }).waitFor();
+  await approvalLink.waitFor({ state: 'detached' });
+  assert.equal(await page.getByLabel('设备授权码', { exact: true }).count(), 0);
+  assert.doesNotMatch(await page.locator('.odc-settings').innerText(), /deviceSecret|controlKey|runtimeKey/);
   const password = page.locator('input[type=password]');
   await password.fill('fixture-api-key');
   await page.getByRole('button', { name: /保存.*Key/u }).click();

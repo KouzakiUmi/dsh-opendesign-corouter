@@ -10,6 +10,8 @@ Required behavior:
 - Settings prioritize actionable connection status and controls; model parameters and explanatory details are progressively disclosed. Disabled controls explain loading, unavailable, or read-only state. Model capacity edits validate output against the effective context budget before saving.
 - Quota displays Design Plan windows, subscription credits, recharge credits, and total balance as distinct amounts. Window resets, subscription period end, and the next local refresh are different timestamps. Missing values remain unknown.
 - Desktop authentication is tried first when enabled. A complete saved console session may replace a partial desktop result as one whole snapshot; account data is never combined across identities.
+- Independent login uses bounded device authorization and an ordinary browser approval link; never create or control a browser profile. Only waiting-state public code/link/expiry reach the UI. Store both issued keys atomically; preserve commit/cancel ordering and read compatibility for legacy Cookie grants.
+- Explicit credential references and manually saved API keys outrank device runtime tokens. Device tokens are bound to the prepared request’s official origin, not mutable current configuration. Device quota never uses desktop CLI data; only explicitly personal workspaces may read account billing summaries.
 - Each model can be enabled or disabled and given explicit generation defaults. Disabling affects both advertised models and direct invocation. Settings are persisted through the host configuration service.
 - Inference supports Chat Completions, Responses, and Messages. Model discovery always uses the OpenAI-compatible `GET /models` endpoint, independently of inference protocol selection.
 - The Design Plan empty-turn guard remains a separate setting and does not silently apply to paid models. Model request retries belong to the host retry extension; do not add a second adapter replay loop.
@@ -22,6 +24,7 @@ Required behavior:
 - `src/index.ts`: host service, credential references, quota/model refresh lifetimes, and provider registration.
 - `src/remote.ts`: explicit JSON allowlists for the browser interface. Update them whenever a visible field is added.
 - `src/quota.ts`, `src/desktop-quota.ts`: quota request/normalization; keep source and unit semantics explicit.
+- `src/login.ts`, `src/device-auth.ts`: device authorization lifecycle, strict public-link validation, bounded requests and polling.
 - `src/model-discovery.ts`: bounded OpenAI model discovery; no inference-protocol branching.
 - `src/adapter.ts`, `src/protocols/`: snapshot a call's configuration, translate requests and streams, and enforce model enablement.
 - `src/client.ts`: settings interactions and DSH semantic-theme styling. Form values must drive real host behavior.

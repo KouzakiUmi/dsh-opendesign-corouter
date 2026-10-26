@@ -157,6 +157,25 @@ test('login state never carries the session it is proving', () => {
   assert.throws(() => parseLoginState({ jobId: 'job-1', state: 'error', message: 'x'.repeat(1025) }), /登录说明/u);
 });
 
+test('device approval exposes only validated public fields while waiting', () => {
+  const approval = { jobId: 'job-device', state: 'waiting', userCode: 'AB12-CD34',
+    activationUrl: 'https://open-design.ai/cloud/cli/activate?code=AB12-CD34', expiresAt: '2030-01-01T00:00:00.000Z' };
+  const parsed = through('startLogin', { ...approval, deviceSecret: 'PRIVATE_POLL', controlKey: 'PRIVATE_CONTROL', runtimeKey: 'PRIVATE_RUNTIME' });
+  assert.deepEqual(parsed, approval);
+  assert.doesNotMatch(JSON.stringify(parsed), /PRIVATE/);
+  for (const state of ['success', 'cancelled', 'error', 'verifying']) {
+    const terminal = parseLoginState({ ...approval, state });
+    assert.equal(terminal.activationUrl, undefined);
+    assert.equal(terminal.userCode, undefined);
+    assert.equal(terminal.expiresAt, undefined);
+  }
+  for (const activationUrl of ['javascript:alert(1)', 'https://evil.example/cloud/cli/activate?code=AB12-CD34',
+    'https://open-design.ai/cloud/cli/activate?code=WRONG', 'https://open-design.ai/cloud/cli/activate?deviceSecret=PRIVATE']) {
+    assert.throws(() => parseLoginState({ ...approval, activationUrl }), /授权链接/);
+  }
+  assert.throws(() => parseLoginState({ ...approval, expiresAt: 'not-a-date' }), /时间/);
+});
+
 test('login requests require the revision or job they act on', () => {
   assert.deepEqual(parseStartLoginRequest({ expectedRevision: 'rev-1', extra: true }), { expectedRevision: 'rev-1' });
   assert.deepEqual(parseCancelLoginRequest({ jobId: 'job-1' }), { jobId: 'job-1' });

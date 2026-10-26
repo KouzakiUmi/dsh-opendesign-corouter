@@ -32,7 +32,7 @@ dsh plugin --profile web add dsh-opendesign-corouter
 也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
-dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.2.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.4.tgz
 ```
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。
@@ -40,11 +40,11 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.2.tgz
 ### 2. 配置连接
 
 1. 打开 **设置 → OpenDesign CoRouter → 连接与登录**。
-2. 为推理配置 CoRouter 工作空间 **API Key**，或沿用启动环境中的 `COROUTER_API_KEY`。
-3. 额度默认读取桌面登录态；没有桌面端时，点击 **登录并保存会话**，在官方页面自行完成登录。
+2. 点击 **开始设备授权**，再用常用浏览器 **打开授权页**，核对授权码并确认；也可单独配置工作空间 API Key 或沿用 `COROUTER_API_KEY`。
+3. 返回设置页等待保存成功。额度默认优先读取桌面登录态；要明确使用设备授权的账号，可关闭桌面优先。
 4. 回到模型选择器，选择 **OpenDesign CoRouter · 套餐赠送** 或 **OpenDesign CoRouter · 付费模型**。
 
-**API Key 用于推理，桌面 / 控制台会话用于查额度。两者不能互相代替。** [完整连接说明](docs/usage.md)
+**设备授权同时取得查额度和官方网关推理的两类令牌；显式配置的 API Key 仍优先。** [完整连接说明](docs/usage.md)
 
 ## 功能预览
 
@@ -72,7 +72,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.2.tgz
 
 ### 桌面优先，也能独立登录
 
-不复制或修改桌面配置。独立登录使用临时 Chrome 窗口，用户亲自完成官方登录与人机验证；验证通过才保存到 DSH 凭据服务。支持取消、超时和卸载清理，不触碰日常浏览器。
+独立登录采用设备授权，在常用浏览器打开普通官方授权页，沿用现有配置、密码管理器和自动填充。确认后设备令牌保存到 DSH 凭据服务；取消、超时和卸载停止轮询，不关闭用户浏览器，也不修改桌面配置。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/previews/theme-dark.png">
@@ -98,7 +98,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.2.tgz
 | 目标 DSH Core | `0.2.1-rc.3`，以官方同版本发布包验证 |
 | Core 声明范围 | `>=0.2.1-rc.3 <0.3.0-0`，范围内其他版本不代表已实测 |
 | Node.js | `>=24.9.0` |
-| 独立登录 | 本机 Google Chrome；插件不会自动下载 |
+| 独立登录 | 能访问官方授权页的常用浏览器；无需浏览器自动化或扩展 |
 | 默认推理接口 | `https://amr-link.open-design.ai/v1/chat/completions` |
 
 CI 在 Windows 与 Ubuntu 执行构建、类型检查及隔离测试；Ubuntu 另执行四页签浏览器和亮暗主题检查。通过 CI 不等于已安装或已通过真实账号验收。[开发与验证范围](docs/development.md)

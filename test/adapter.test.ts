@@ -55,6 +55,23 @@ test('prepareCall binds metadata and dispatch to a single settings generation', 
   assert.equal(called[0], `${base.baseURL}/chat/completions`);
   assert.equal(call.model.context?.contextWindow, 750000);
 });
+test('credential routing receives the prepared gateway even after configuration changes', async () => {
+  let config = { ...base, baseURL: 'https://custom.example/v1' };
+  let sent = 0;
+  const adapter = new CoRouterAdapter({ config: () => config,
+    apiKey: async (ref, target) => {
+      assert.equal(ref, base.apiKeyEnv);
+      assert.equal(target, 'https://custom.example/v1');
+      return target === base.baseURL ? 'device-runtime-fixture' : undefined;
+    },
+    fetch: async () => { sent++; return sse('must not send'); },
+  });
+  const call = await adapter.prepareCall(PLAN_PROVIDER, 'deepseek-v4.1-flash');
+  config = { ...base };
+  await assert.rejects(collect(call.stream(options())), { code: 'MISSING_CREDENTIAL' });
+  assert.equal(sent, 0);
+});
+
 test('model switches hide routes and enforce rejection on direct calls', async () => {
   const configured: RuntimeConfig = { ...base, modelSettings: { 'deepseek-v4.1-flash': { enabled: false } } };
   const adapter = new CoRouterAdapter({ config: () => configured, apiKey: async () => 'test-key', fetch: async () => { assert.fail('disabled model must not fetch'); } });

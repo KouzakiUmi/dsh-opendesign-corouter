@@ -41,14 +41,37 @@ GET https://amr-api.open-design.ai/api/v1/billing/summary
 
 先取得真实 workspaceId，再查询窗口；只有 personal 工作区读取账号钱包汇总。401 使身份失效，403 表示该层读取权限不足，允许另一层已成功结果独立显示；不会用成功结果掩盖 401。
 
-## 独立登录
+## 设备授权登录
 
-[登录实现](../src/login.ts) 使用独立非持久 Chrome 上下文，用户在官方控制台亲自登录；只提取对控制面 URL 生效、尚未过期的 Cookie。额度端点验证通过后经 DSH credentials 的插件专属 grant 原子保存，不写桌面文件。
+本机 OpenDesign 0.26.1 的 daemon 启动 `vela login`，解析 stdout 中的激活网址与用户码。随附 Vela 二进制确认了 `CreateDeviceAuthorization`、`PollDeviceAuthorizationToken` 及请求 / 返回字段。公开[官方解析测试](https://github.com/nexu-io/open-design/blob/26d60298f8129e229a1c10aab4df7ca25b1e9ad3/apps/daemon/tests/vela-login-activation.test.ts)确认设备授权流程；具体 HTTP 请求依据 [opencode-opendesign-auth 0.1.4](https://unpkg.com/opencode-opendesign-auth@0.1.4/index.mjs)交叉核对，不视为标准 OAuth 或服务端稳定契约。
 
-- 状态封闭为 idle / launching / waiting / verifying / success / cancelled / error。
-- 五分钟超时；取消、关闭窗口和卸载清理自身浏览器。
-- 登录起点捕获 revision，提交前检查记录 / 配置冲突与 AbortSignal。
-- 持久化成功是提交边界；写入后不谎称取消能撤回。
-- Cookie 的最早声明过期时间透传保存；未声明过期的会话型 Cookie 记为 0，不猜截止时间。
+```text
+POST https://amr-api.open-design.ai/api/v1/cli/device-authorizations
+  { cliVersion: <本插件版本>, host: "DSH CoRouter", profile: "prod" }
+  → deviceId, deviceSecret, userCode, activationUrl, pollIntervalSeconds, expiresAt
+POST https://amr-api.open-design.ai/api/v1/cli/device-authorizations/<deviceId>/token
+  { deviceSecret }
+  → 等待状态，或同一响应中完整的 controlKey / runtimeKey
+```
 
-测试使用合成凭据和注入的请求 / 浏览器桩，不访问真实账号。完整取数、真实 Chrome 登录和 API Key 推理仍需后续账号验收。
+[登录实现](../src/login.ts)将官方激活页作为普通链接交给用户。浏览器沿用既有配置；插件不启动或控制浏览器。授权服务发出完整双令牌后，经 DSH credentials 的插件专属 grant 原子保存，不写桌面文件。额度的 403 / 未知数据不影响登录成功判定。
+
+- 状态为 idle / launching / waiting / verifying / success / cancelled / error。只有 waiting 暴露公开授权码、白名单链接与本地有效期；deviceSecret 与双令牌不进入 RPC。
+- 每次 HTTP 请求最多 20 秒、响应最多 64 KiB，禁止自动重定向。轮询不早于服务端间隔；等待上限取服务端到期与本地五分钟中较早者。
+- 登录起点捕获 revision，提交前检查记录 / 配置冲突与 AbortSignal。取消、超时和卸载中止轮询，不关闭用户浏览器。
+- 持久化成功是提交边界；写入后不谎称取消能撤回。设备码有效期不套用为令牌失效期，不推断永久有效或 refresh-token 能力。
+- 旧版 Cookie grant 继续按原有效期读取，仅供兼容；新登录不再产生 Cookie grant。
+
+## 设备令牌额度通道
+
+设备 controlKey 使用独立 Bearer 请求，接口依据上述 0.1.4 实现：
+
+```text
+GET /api/v1/workspaces/current
+GET /api/v1/workspaces/<真实 workspaceId>/billing/preflight
+GET /api/v1/billing/summary  （仅工作区明确为 personal）
+```
+
+从 preflight 的 `codingPlan` 解析窗口、从 `balanceUsd` 读取报告的总额；个人汇总提供有证据的分池和订阅周期。身份为团队或类型未知时不调用个人汇总，不从桌面 CLI 拼入其他账户的额度。401 表示失效，403 或字段缺失显示部分未知。设备 runtimeKey 仅在没有显式 Key 且目标为官方推理 origin 时用于模型目录和推理。
+
+测试使用合成凭据、注入请求和离线 UI。设备授权服务对本插件 cliVersion 的接受情况、实际激活页返回格式、令牌权限及真实推理仍需账号验收；本次未发起真实授权或读取用户凭据。

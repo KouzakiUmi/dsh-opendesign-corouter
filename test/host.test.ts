@@ -208,6 +208,31 @@ test('failed optional console fallback preserves the usable desktop snapshot', a
   } finally { await fiber.dispose(); await credentials.dispose(); }
 });
 
+test('desktop fallback cache identity follows the selected login, never the desktop that was replaced', async () => {
+  const ctx = new Context();
+  const credentials = await ctx.plugin(MemoryCredentials);
+  const deps = dependencies([]);
+  let account = 'first', failure = false;
+  deps.resolveSession = async input => input?.useDesktop !== false
+    ? { state: 'ready', warnings: [], session: { source: 'desktop', via: 'desktop', apiUrl: 'https://amr-api.open-design.ai', headers: { authorization: 'Bearer desktop' } } }
+    : { state: 'ready', warnings: [], session: { source: 'login', via: 'login', apiUrl: 'https://amr-api.open-design.ai', headers: { cookie: `${account}=fixture` } } };
+  deps.readQuota = async () => { if (failure) throw new ConsoleError('network'); return structuredClone(quota); };
+  const fiber = await ctx.plugin(scope => { new OpenDesignCoRouterService(scope, () => config, deps); });
+  try {
+    const service = ctx.openDesignCoRouter;
+    assert.equal((await service.refreshQuotaNow()).source, 'login');
+    failure = true;
+    const same = await service.refreshQuotaNow();
+    assert.equal(same.stale, true);
+    assert.deepEqual(same.balances, quota.balances);
+    account = 'second';
+    const changed = await service.refreshQuotaNow();
+    assert.equal(changed.state, 'error');
+    assert.equal(changed.stale, undefined);
+    assert.deepEqual(changed.balances, {});
+  } finally { await fiber.dispose(); await credentials.dispose(); }
+});
+
 test('API key saves use owned credential records, reject stale writes and never echo values', async () => {
   const ctx = new Context();
   const credentials = await ctx.plugin(MemoryCredentials);

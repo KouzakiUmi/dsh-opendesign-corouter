@@ -9,6 +9,9 @@ import {
   desktopConfigDir,
   desktopConfigPath,
   desktopSession,
+  deviceSession,
+  deviceGrant,
+  isOfficialRuntimeUrl,
   endpoints,
   isOfficialApiUrl,
   normalizeApiUrl,
@@ -239,6 +242,35 @@ test('no resolved outcome embeds a credential value anywhere but its header', as
   const serialized = JSON.stringify(outcome);
   assert.equal(serialized.includes(CONTROL_KEY), true, 'the header must carry it');
   assert.equal(serialized.split(CONTROL_KEY).length - 1, 1, 'exactly once, inside the header');
+});
+
+test('device grants are whole snapshots and do not inherit device-code expiry', async () => {
+  const grant = { kind: 'device' as const, controlKey: 'fixture-control', runtimeKey: 'fixture-runtime', expiresAt: 1 };
+  const result = await resolveSession({ useDesktop: false, readGrant: async () => grant, resolveRef: async () => COOKIE, now: () => 999_999 });
+  assert.equal(result.state, 'ready');
+  if (result.state !== 'ready') return;
+  assert.deepEqual(result.session, deviceSession(grant));
+  assert.equal(result.session.credentialType, 'device');
+  assert.equal(result.session.apiUrl, DEFAULT_API_URL);
+  assert.deepEqual(result.session.headers, { authorization: 'Bearer fixture-control' });
+  assert.equal(JSON.stringify(result).includes('fixture-runtime'), false);
+  assert.equal(deviceGrant({ kind: 'device', controlKey: 'fixture-control' }), undefined);
+  assert.equal(deviceGrant({ ...grant, runtimeKey: 'bad\r\nheader' }), undefined);
+  const invalid = await resolveSession({ useDesktop: false, readGrant: async () => ({ ...grant, runtimeKey: '' }), resolveRef: async () => COOKIE });
+  assert.equal(invalid.state, 'ready');
+  if (invalid.state === 'ready') assert.equal(invalid.session.via, 'environment');
+});
+
+test('device authorization remains below desktop priority', async () => {
+  const result = await resolveSession({ env: {}, readFile: async () => config({ prod: { controlKey: CONTROL_KEY } }), readGrant: async () => ({ kind: 'device', controlKey: 'other-account', runtimeKey: 'runtime' }) });
+  assert.equal(result.state, 'ready');
+  if (result.state === 'ready') assert.equal(result.session.source, 'desktop');
+});
+
+test('device runtime origin gate rejects custom ports, sibling hosts and URL credentials', () => {
+  for (const url of ['https://amr-link.open-design.ai/v1', 'https://AMR-LINK.open-design.ai:443/v2']) assert.equal(isOfficialRuntimeUrl(url), true);
+  for (const url of ['http://amr-link.open-design.ai/v1', 'https://amr-link.open-design.ai:8443/v1', 'https://amr-link.open-design.ai.evil.example/v1', 'https://custom.example/v1', 'https://user:pass@amr-link.open-design.ai/v1', 'https://amr-link.open-design.ai/v1?key=x']) assert.equal(isOfficialRuntimeUrl(url), false);
+  assert.equal(isOfficialApiUrl('https://amr-api.open-design.ai:8443'), false);
 });
 
 test('endpoints mirror quota.ts for an arbitrary official origin', () => {

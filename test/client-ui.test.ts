@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   Advanced,
   Models,
+  LoginApproval,
   QuotaView,
   SettingsPage,
   formatTime,
@@ -24,6 +25,21 @@ import type { Status, StatusModel } from '../src/remote.js';
 import type { QuotaSnapshot } from '../src/quota.js';
 
 const h = React.createElement;
+
+test('device approval uses a normal browser link and hides stale or unsafe links', () => {
+  const login = { jobId: 'fixture', state: 'waiting' as const, userCode: 'AB12-CD34',
+    activationUrl: 'https://open-design.ai/cloud/cli/activate?code=AB12-CD34', expiresAt: '2030-01-01T00:00:00.000Z' };
+  const html = renderToStaticMarkup(h(LoginApproval, { login }));
+  assert.match(html, /target="_blank"/);
+  assert.match(html, /rel="noreferrer noopener"/);
+  assert.match(html, /AB12-CD34/);
+  assert.match(html, /打开授权页/);
+  assert.match(html, /密码管理器和自动填充/);
+  for (const state of ['idle', 'launching', 'verifying', 'success', 'cancelled', 'error'] as const) {
+    assert.equal(renderToStaticMarkup(h(LoginApproval, { login: { ...login, state } })), '');
+  }
+  assert.equal(renderToStaticMarkup(h(LoginApproval, { login: { ...login, activationUrl: 'https://evil.example' } })), '');
+});
 
 const models: readonly StatusModel[] = [
   {

@@ -9,6 +9,7 @@ import {
 import type { QuotaSnapshot, QuotaWindow } from './quota.js';
 import { inferenceEndpoint, API_PROTOCOL_OPTIONS, type ApiProtocol } from './protocol-options.js';
 import type { ModelSettings, ModelSettingsMap } from './model-settings.js';
+import { validateActivationUrl } from './device-auth.js';
 
 const h = React.createElement;
 const SETTINGS_NS = 'llm-opendesign-corouter';
@@ -99,10 +100,10 @@ interface Notice {
 const GENERIC_ERROR = '操作未完成，请稍后重试。';
 const LOGIN_LABELS: Record<LoginState['state'], string> = {
   idle: '尚未开始独立登录',
-  launching: '正在打开官方登录页面…',
-  waiting: '等待你在官方页面完成登录…',
-  verifying: '正在验证并保存会话…',
-  success: '登录成功，会话已保存。',
+  launching: '正在申请设备授权码…',
+  waiting: '请打开授权页，在常用浏览器中确认本次登录。',
+  verifying: '正在保存设备授权…',
+  success: '登录成功，设备授权已保存。',
   cancelled: '已取消本次登录。',
   error: '登录未完成，请重试。',
 };
@@ -455,7 +456,7 @@ export function Overview({ status, busy, onRefresh, nextAutoRefreshAt, refreshIn
     status !== undefined && (status.apiKeyConfigured === false || status.quota.state === 'need-login')
       ? h('section', { className: 'odc-card odc-row', 'aria-label': '连接待完成' },
         h('div', null, h('h3', null, '先完成连接'),
-          h('p', { className: 'odc-hint' }, status.apiKeyConfigured === false ? '推理尚缺 API Key；额度登录与推理凭据分别配置。' : 'API Key 已配置；登录后即可查看账号额度。')),
+          h('p', { className: 'odc-hint' }, status.apiKeyConfigured === false ? '尚无当前网关的推理凭据；可完成设备授权或单独配置 API Key。' : 'API Key 已配置；登录后即可查看账号额度。')),
         onConnection === undefined ? null : h('button', { type: 'button', className: 'odc-button odc-button-primary', onClick: onConnection }, '前往连接与登录')) : null,
     h('div', { className: 'odc-card-head' },
       h('div', null, h('h3', null, '额度概览'), h('p', { className: 'odc-hint' }, '套餐窗口与钱包余额分开计量；未知数据不做推算。')),
@@ -909,6 +910,20 @@ function loginInFlight(state: LoginState['state']): boolean {
   return state === 'launching' || state === 'waiting' || state === 'verifying';
 }
 
+/** Approval opens through an ordinary link; no browser profile is created or controlled. */
+export function LoginApproval({ login }: { login: LoginState | undefined }) {
+  if (login?.state !== 'waiting' || login.userCode === undefined || login.expiresAt === undefined) return null;
+  const url = validateActivationUrl(login.activationUrl, login.userCode);
+  if (url === null) return null;
+  return h('div', { className: 'odc-readonly', 'aria-label': '设备授权' },
+    h('span', { className: 'odc-label' }, '核对授权码'),
+    h('code', { className: 'odc-metric-value', 'aria-label': '设备授权码' }, login.userCode),
+    h('div', { className: 'odc-actions' },
+      h('a', { className: 'odc-button odc-button-primary', href: url, target: '_blank', rel: 'noreferrer noopener' }, '打开授权页')),
+    h('p', { className: 'odc-hint' }, `授权码有效至 ${formatTime(login.expiresAt)}。在常用浏览器确认后，返回此页查看结果。`),
+    h('p', { className: 'odc-hint' }, '可右键复制授权链接到常用浏览器；密码管理器和自动填充由浏览器正常提供。仅确认你本人发起的授权。'));
+}
+
 function Connection({ status, formSnapshot, setFormField, pendingField, caller, loadStatus, refreshAfterLogin }: {
   status: Status | undefined;
   formSnapshot: FormSnapshot;
@@ -933,11 +948,11 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
     if (status === undefined || busy || keyBusy) return;
     const version = ++actionVersion.current;
     setBusy(true);
-    setNotice({ kind: 'status', text: '正在启动官方登录…' });
+    setNotice({ kind: 'status', text: '正在申请设备授权…' });
     try {
       const next = await caller<LoginState>('startLogin', { expectedRevision: status.revision });
       if (!mounted.current || version !== actionVersion.current) return;
-      setNotice({ kind: 'status', text: '请在打开的官方页面中亲自完成登录。' });
+      setNotice(null);
       await (next.state === 'success' ? refreshAfterLogin() : loadStatus());
     } catch {
       if (mounted.current && version === actionVersion.current) setNotice({ kind: 'error', text: '无法启动登录，请稍后重试。' });
@@ -999,17 +1014,18 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
         })),
       h('p', { className: 'odc-meta' }, `当前会话来源：${status?.sessionSource === undefined ? '—' : { desktop: '桌面登录态', login: '独立登录', environment: '环境凭据' }[status.sessionSource]}`)),
     h('section', { className: 'odc-card' },
-      h('h3', null, '独立登录'),
-      h('p', { className: 'odc-hint' }, '登录需由你在官方页面亲自完成；插件不会代填账号或密码。验证通过后才保存会话。'),
+      h('h3', null, '设备授权登录'),
+      h('p', { className: 'odc-hint' }, '申请授权码后，在常用浏览器打开官方授权页。沿用已有登录状态、密码管理器和自动填充；确认后自动保存设备令牌，用于查询额度及官方网关推理。'),
       h('div', { className: 'odc-actions', style: { marginTop: 14 } },
-        h('button', { className: 'odc-button odc-button-primary', type: 'button', disabled: status === undefined || busy || keyBusy || inFlight, onClick: () => { void startLogin(); } }, '登录并保存会话'),
+        h('button', { className: 'odc-button odc-button-primary', type: 'button', disabled: status === undefined || busy || keyBusy || inFlight, onClick: () => { void startLogin(); } }, '开始设备授权'),
         inFlight ? h('button', { className: 'odc-button', type: 'button', disabled: busy || keyBusy || login?.jobId == null, onClick: () => { void cancelLogin(); } }, '取消登录') : null,
         h('a', { className: 'odc-link', href: OFFICIAL_SITE, target: '_blank', rel: 'noreferrer noopener' }, '打开 CoRouter 官网')),
-      h('p', { className: 'odc-meta', role: state === 'error' ? 'alert' : 'status' }, LOGIN_LABELS[state]),
+      h(LoginApproval, { login }),
+      h('p', { className: 'odc-meta', role: state === 'error' ? 'alert' : 'status' }, login?.message ?? LOGIN_LABELS[state]),
       h(NoticeView, { notice })),
     h('section', { className: 'odc-card' },
-      h('h3', null, 'API Key'),
-      h('p', { className: 'odc-hint' }, status?.apiKeyConfigured === true ? '已配置 API Key。保存仅替换本插件保存的 Key；环境变量或已有凭据引用仍优先。' : '尚未配置 API Key；推理需要 CoRouter Key，额度登录不能代替。'),
+      h('h3', null, 'API Key（可选覆盖）'),
+      h('p', { className: 'odc-hint' }, status?.apiKeyConfigured === true ? '当前网关已有可用推理凭据。优先级：环境或凭据引用 → 手动保存的 API Key → 设备授权令牌。' : '当前网关尚无推理凭据。可完成设备授权以使用官方网关，或为当前网关单独保存 API Key。'),
       h('form', { onSubmit: (event: React.FormEvent) => { void saveKey(event); } },
         h('div', { className: 'odc-field' },
           h('label', { htmlFor: 'odc-api-key' }, '新的 API Key'),

@@ -2,6 +2,7 @@
 
 import type { QuotaSnapshot, QuotaWindow, SessionSource } from './quota.js';
 import { record } from './util.js';
+import { validateActivationUrl } from './device-auth.js';
 import { API_PROTOCOL_IDS, type ApiProtocol } from './protocol-options.js';
 import { parseModelSettingsMap, type ModelSettingsMap } from './model-settings.js';
 
@@ -64,6 +65,10 @@ export interface LoginState {
   message?: string;
   startedAt?: string;
   finishedAt?: string;
+  /** Public device approval information; available only while waiting. */
+  activationUrl?: string;
+  userCode?: string;
+  expiresAt?: string;
 }
 
 /** Everything the settings/usage surface may read; no field is derived from a secret. */
@@ -195,9 +200,19 @@ export function parseLoginState(value: unknown): LoginState {
   if (!record(value)) throw new Error('登录状态必须是对象');
   const jobId = value.jobId;
   if (jobId !== null && jobId !== undefined && typeof jobId !== 'string') throw new Error('登录任务 id 必须是字符串或 null');
+  const state = member(value.state, LOGIN_PHASES, '登录阶段');
+  let approval: Pick<LoginState, 'activationUrl' | 'userCode' | 'expiresAt'> = {};
+  if (state === 'waiting' && (value.activationUrl !== undefined || value.userCode !== undefined || value.expiresAt !== undefined)) {
+    const userCode = text(value.userCode, '设备授权码', 64);
+    if (!/^[A-Za-z0-9-]+$/u.test(userCode)) throw new Error('设备授权码格式无效');
+    const activationUrl = validateActivationUrl(value.activationUrl, userCode);
+    if (activationUrl === null) throw new Error('设备授权链接无效');
+    approval = { activationUrl, userCode, expiresAt: isoTime(value.expiresAt, '设备授权到期时间') };
+  }
   return {
     jobId: typeof jobId === 'string' && jobId.length > 0 ? text(jobId, '登录任务 id', MAX_JOB_ID) : null,
-    state: member(value.state, LOGIN_PHASES, '登录阶段'),
+    state,
+    ...approval,
     ...(value.message === undefined ? {} : { message: text(value.message, '登录说明', MAX_MESSAGE) }),
     ...(value.startedAt === undefined ? {} : { startedAt: isoTime(value.startedAt, '登录开始时间') }),
     ...(value.finishedAt === undefined ? {} : { finishedAt: isoTime(value.finishedAt, '登录结束时间') }),

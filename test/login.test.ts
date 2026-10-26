@@ -1,385 +1,313 @@
-// Tests for src/login.ts. No browser, network or real credential is involved: the launcher,
-// clock and delay are injected, and the cookie is a literal test string.
+// Offline device-auth regression tests: no browser, process, real login or credentials.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import {
-  CHROME_LAUNCH_OPTIONS,
-  ConsoleLogin,
-  LoginError,
-  consoleSite,
-  extractConsoleSession,
-  type BrowserLike,
-  type ContextLike,
-  type LoginCallbacks,
-  type LoginStatus,
-  type PageLike,
-  type RawCookie,
-} from '../src/login.js';
+import { ConsoleLogin, LoginError, type DeviceTokens, type LoginCallbacks, type LoginOptions } from '../src/login.js';
+import { DEVICE_AUTH_ENDPOINT, DEVICE_AUTH_PLUGIN_VERSION } from '../src/device-auth.js';
 
-const COOKIE_VALUE = 'secret-cookie-value';
-const SESSION_COOKIE = `__Secure-better-auth.session_token=${COOKIE_VALUE}`;
-const REVISION = 'rev-1';
-
-interface FakeBrowser {
-  browser: BrowserLike;
-  closed: () => boolean;
-  disconnect: () => void;
-  closePage: () => void;
+const START = Date.parse('2026-10-01T00:00:00Z');
+const TOKENS: DeviceTokens = { controlKey: 'fixture-control-key', runtimeKey: 'fixture-runtime-key' };
+const DEVICE_SECRET = 'fixture-device-secret';
+const CODE = 'ABCD-1234';
+const URL = `https://open-design.ai/cloud/cli/activate?code=${CODE}`;
+const authorization = (changes: Record<string, unknown> = {}) => ({ deviceId: 'fixture-device-id', deviceSecret: DEVICE_SECRET, userCode: CODE, activationUrl: URL, pollIntervalSeconds: 2, expiresAt: new Date(START + 600_000).toISOString(), ...changes });
+const request = { expectedRevision: 'rev-1' };
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
 }
-
-function fakeBrowser(cookies: () => readonly RawCookie[]): FakeBrowser {
-  let closed = false;
-  let disconnected: (() => void) | undefined;
-  let pageClose: (() => void) | undefined;
-  const page: PageLike = {
-    on(event, listener) { if (event === 'close') pageClose = listener; },
-    goto: async () => undefined,
-  };
-  const context: ContextLike = { newPage: async () => page, cookies: async () => cookies() };
-  const browser: BrowserLike = {
-    on(event, listener) { if (event === 'disconnected') disconnected = listener; },
-    newContext: async () => context,
-    close: async () => { closed = true; },
-  };
-  return { browser, closed: () => closed, disconnect: () => disconnected?.(), closePage: () => pageClose?.() };
-}
-
-const fastDelay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, Math.max(0, ms)));
-
-function site() {
-  return consoleSite({ loginUrl: 'https://open-design.ai/cloud/dashboard', cookieUrls: ['https://amr-api.open-design.ai/api/v1/workspaces/current'] });
-}
-
-async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
-  const started = Date.now();
-  while (!predicate()) {
-    if (Date.now() - started > timeoutMs) throw new Error('timed out waiting for the expected state');
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let i = 0; i < 500; i++) {
+    if (predicate()) return;
     await new Promise(resolve => setTimeout(resolve, 2));
   }
+  assert.fail('timed out waiting for login state');
 }
-
-interface Recorder {
-  commits: { cookie: string; captured: unknown; expiresAt: number }[];
-  verifies: string[];
+interface Fixture {
+  login: ConsoleLogin;
+  calls: { url: string; init: RequestInit | undefined }[];
+  commits: { tokens: DeviceTokens; captured: unknown; signal: AbortSignal }[];
   captures: string[];
+  sleeps: number[];
+  time: { now: number };
+}
+function fixture({ replies = [authorization(), TOKENS], callbacks = {}, options = {} }: {
+  replies?: unknown[];
+  callbacks?: Partial<LoginCallbacks>;
+  options?: LoginOptions;
+} = {}): Fixture {
+  const time = { now: START };
+  const calls: Fixture['calls'] = [];
+  const commits: Fixture['commits'] = [];
+  const captures: string[] = [];
+  const sleeps: number[] = [];
+  const login = new ConsoleLogin({
+    capture: revision => { captures.push(revision); return { revision }; },
+    commit: async (tokens, captured, signal) => { signal.throwIfAborted(); commits.push({ tokens, captured, signal }); },
+    ...callbacks,
+  }, {
+    now: () => time.now,
+    fetcher: async (input, init) => {
+      calls.push({ url: String(input), init });
+      const reply = replies.shift();
+      return reply instanceof Response ? reply : Response.json(reply ?? { status: 'pending' });
+    },
+    delay: async ms => { sleeps.push(ms); time.now += ms; await new Promise(resolve => setTimeout(resolve, 0)); },
+    ...options,
+  });
+  return { login, calls, commits, captures, sleeps, time };
+}
+function assertNoSecrets(login: ConsoleLogin): void {
+  const text = JSON.stringify(login.status());
+  for (const secret of [DEVICE_SECRET, TOKENS.controlKey, TOKENS.runtimeKey]) assert.equal(text.includes(secret), false);
+  for (const field of ['deviceSecret', 'controlKey', 'runtimeKey', 'cookie', 'browserOpenFailed']) assert.equal(field in login.status(), false);
+}
+function assertNoCode(login: ConsoleLogin): void {
+  const status = login.status();
+  for (const field of ['activationUrl', 'userCode', 'expiresAt']) assert.equal(field in status, false);
 }
 
-function recorder(): Recorder { return { commits: [], verifies: [], captures: [] }; }
-
-function callbacks(state = recorder(), overrides: Partial<LoginCallbacks> = {}): LoginCallbacks {
-  return {
-    capture: expectedRevision => { state.captures.push(expectedRevision); return { revision: expectedRevision }; },
-    verify: async cookie => { state.verifies.push(cookie); return { balanceOk: true }; },
-    commit: async (cookie, captured, _signal, expiresAt) => { state.commits.push({ cookie, captured, expiresAt }); return {}; },
-    ...overrides,
-  };
-}
-
-const statusOf = (login: ConsoleLogin): LoginStatus => login.status();
-
-test('a successful verify commits immediately and reports success', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => [{ name: '__Secure-better-auth.session_token', value: COOKIE_VALUE, expires: -1 }]);
-  const login = new ConsoleLogin(callbacks(state), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  const started = login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'success');
-  const done = statusOf(login);
-  assert.equal(done.state, 'success');
-  assert.equal(done.finishedAt !== undefined, true);
-  assert.equal(JSON.stringify(done).includes(COOKIE_VALUE), false, 'status must never carry the cookie');
-  assert.deepEqual(state.captures, [REVISION]);
-  assert.equal(state.commits.length, 1);
-  assert.equal(state.commits[0]?.cookie, SESSION_COOKIE);
-  assert.deepEqual(state.commits[0]?.captured, { revision: REVISION });
-  // A console session cookie declares no expiry, so the seam reports 0 (not a fake deadline).
-  assert.equal(state.commits[0]?.expiresAt, 0);
-  assert.equal(fake.closed(), true, 'the browser is closed once the session is saved');
-  assert.equal(started.jobId, done.jobId);
+test('start returns before capture/network; complete tokens commit directly without quota verification', async () => {
+  const f = fixture();
+  assert.deepEqual(f.login.status(), { jobId: null, state: 'idle' });
+  const started = f.login.start(request);
+  assert.equal(started.state, 'launching');
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.captures.length, 0);
+  assertNoCode(f.login);
+  await waitFor(() => f.login.status().state === 'success');
+  assert.equal(f.login.status().jobId, started.jobId);
+  assert.ok(f.login.status().finishedAt);
+  assert.deepEqual(f.captures, ['rev-1']);
+  assert.equal(f.commits.length, 1);
+  assert.deepEqual(f.commits[0]?.tokens, TOKENS);
+  assert.deepEqual(f.commits[0]?.captured, { revision: 'rev-1' });
+  assert.deepEqual(f.calls.map(call => call.url), [DEVICE_AUTH_ENDPOINT, `${DEVICE_AUTH_ENDPOINT}/fixture-device-id/token`]);
+  assert.deepEqual(JSON.parse(String(f.calls[0]?.init?.body)), { cliVersion: DEVICE_AUTH_PLUGIN_VERSION, host: 'DSH CoRouter', profile: 'prod' });
+  assert.deepEqual(JSON.parse(String(f.calls[1]?.init?.body)), { deviceSecret: DEVICE_SECRET });
+  assert.ok(f.calls.every(call => call.init?.method === 'POST' && call.init.redirect === 'error'));
+  assertNoSecrets(f.login);
+  assertNoCode(f.login);
 });
 
-test('commit receives the earliest declared expiry of the cookie bundle in epoch ms', async () => {
-  const state = recorder();
-  const now = Date.now();
-  const soon = Math.floor(now / 1000) + 3_600;
-  const later = Math.floor(now / 1000) + 7_200;
-  const fake = fakeBrowser(() => [
-    { name: 'a', value: '1', expires: later },
-    { name: 'b', value: '2', expires: soon },
-    { name: 'session', value: '3', expires: -1 },
-  ]);
-  const login = new ConsoleLogin(callbacks(state), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'success');
-  assert.equal(state.commits.length, 1);
-  assert.equal(state.commits[0]?.expiresAt, soon * 1000);
-  // Sanity: the value is a real deadline, not the non-persistent cookie's 0.
-  assert.equal(state.commits[0]?.expiresAt > now, true);
+test('waiting exposes only official public fields, and clears them on cancel', async () => {
+  const sleeping = deferred<void>();
+  let sleepSignal: AbortSignal | undefined;
+  const f = fixture({ options: { delay: async (_ms, signal) => { sleepSignal = signal; await sleeping.promise; } } });
+  const started = f.login.start(request);
+  await waitFor(() => f.login.status().state === 'waiting');
+  const status = f.login.status();
+  assert.equal(status.activationUrl, URL);
+  assert.equal(status.userCode, CODE);
+  assert.equal(status.expiresAt, new Date(START + 300_000).toISOString());
+  assertNoSecrets(f.login);
+  // Mutating returned snapshots cannot change the internal allowlist.
+  status.activationUrl = 'https://evil.test/';
+  assert.equal(f.login.status().activationUrl, URL);
+  assert.equal(f.login.cancel({ jobId: 'not-this-job' }).state, 'waiting');
+  assert.equal(f.login.cancel({ jobId: started.jobId! }).state, 'cancelled');
+  assert.equal(sleepSignal?.aborted, true);
+  sleeping.resolve();
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.commits.length, 0);
+  assertNoCode(f.login);
 });
 
-test('verifying without a readable quota keeps waiting and does not commit', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => [{ name: 'sid', value: COOKIE_VALUE }]);
-  const login = new ConsoleLogin(callbacks(state, {
-    verify: async cookie => { state.verifies.push(cookie); return { balanceOk: true, usageError: { code: 'opendesign/quota-unknown' } }; },
-  }), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  const started = login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'waiting' && state.verifies.length >= 1);
-  const waiting = statusOf(login);
-  assert.equal(waiting.state, 'waiting');
-  assert.equal(waiting.message?.includes('尚未保存'), true);
-  assert.equal(state.commits.length, 0);
-  login.cancel({ jobId: started.jobId as string });
+test('server intervals have lower/upper bounds and every pending result waits before another poll', async () => {
+  for (const [interval, expected] of [[0.001, 1000], [3, 3000], [60, 60_000]] as const) {
+    const f = fixture({ replies: [authorization({ pollIntervalSeconds: interval }), { status: 'pending' }, { status: 'pending' }, { user: TOKENS }] });
+    f.login.start(request);
+    await waitFor(() => f.login.status().state === 'success');
+    assert.deepEqual(f.sleeps, [expected, expected, expected]);
+    assert.equal(f.calls.length, 4);
+    assert.equal(f.commits.length, 1);
+  }
 });
 
-test('a failed verify retries at a limited rate and stays unsaved', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => [{ name: 'sid', value: COOKIE_VALUE }]);
-  const login = new ConsoleLogin(callbacks(state, {
-    verify: async cookie => { state.verifies.push(cookie); throw Object.assign(new Error('nope'), { code: 'opendesign/auth' }); },
-  }), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  const started = login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'waiting' && state.verifies.length >= 1);
-  assert.equal(statusOf(login).message?.includes('未保存'), true);
-  assert.equal(state.commits.length, 0);
-  login.cancel({ jobId: started.jobId as string });
-  assert.equal(new Set(state.verifies).size, 1, 'one verify attempt per extracted session');
+test('a server interval beyond the local lifetime expires without an early poll', async () => {
+  const f = fixture({ replies: [authorization({ pollIntervalSeconds: 600 })] });
+  f.login.start(request);
+  await waitFor(() => f.login.status().state === 'error');
+  assert.equal(f.login.status().errorCode, 'opendesign/login-expired');
+  assert.deepEqual(f.sleeps, [300_000]);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.commits.length, 0);
 });
 
-test('cancelling while waiting writes nothing', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => []);
-  const login = new ConsoleLogin(callbacks(state), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  const started = login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'waiting');
-  assert.equal(login.cancel({ jobId: started.jobId as string }).state, 'cancelled');
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(state.commits.length, 0);
-  assert.equal(fake.closed(), true);
+test('half tokens and unknown status are terminal errors rather than busy retries', async () => {
+  for (const value of [{ controlKey: TOKENS.controlKey }, { runtimeKey: TOKENS.runtimeKey }, { user: { controlKey: TOKENS.controlKey } }, { status: 'unexpected' }, { status: 'success' }]) {
+    const f = fixture({ replies: [authorization(), value] });
+    f.login.start(request);
+    await waitFor(() => f.login.status().state === 'error');
+    assert.equal(f.calls.length, 2);
+    assert.equal(f.commits.length, 0);
+    assertNoSecrets(f.login);
+    assertNoCode(f.login);
+  }
 });
 
-test('a cancel that lands before the store accepts the write cancels the attempt', async () => {
-  const state = recorder();
-  let release: (() => void) | undefined;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  let commitSignal: AbortSignal | undefined;
-  const fake = fakeBrowser(() => [{ name: 'sid', value: COOKIE_VALUE }]);
-  const login = new ConsoleLogin(callbacks(state, {
-    commit: async (cookie, captured, signal, expiresAt) => {
-      commitSignal = signal;
-      await gate;
-      // The Host's atomic mutator re-checks the signal exactly like this.
-      signal.throwIfAborted();
-      state.commits.push({ cookie, captured, expiresAt });
-      return {};
-    },
-  }), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  const started = login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'verifying' && commitSignal !== undefined);
-  const during = login.cancel({ jobId: started.jobId as string });
-  // The commit is in flight: the attempt stays `verifying` and lets the store decide.
-  assert.equal(during.state, 'verifying');
-  assert.equal(commitSignal?.aborted, true);
-  release?.();
-  await waitFor(() => statusOf(login).state === 'cancelled');
-  assert.equal(state.commits.length, 0, 'the aborted store write never happened');
+test('device-secret echoes and malicious activation URLs never become public', async () => {
+  for (const changes of [
+    { activationUrl: 'https://evil.test/' }, { activationUrl: `${URL}&deviceSecret=${DEVICE_SECRET}` },
+    { activationUrl: `https://open-design.ai/cloud/cli/activate?code=${DEVICE_SECRET}`, userCode: DEVICE_SECRET },
+    { userCode: DEVICE_SECRET }, { activationUrl: `${URL}#${DEVICE_SECRET}` },
+  ]) {
+    const f = fixture({ replies: [authorization(changes)] });
+    f.login.start(request);
+    await waitFor(() => f.login.status().state === 'error');
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.commits.length, 0);
+    assertNoSecrets(f.login);
+    assertNoCode(f.login);
+  }
 });
 
-test('a commit that already won the race reports success even after a cancel', async () => {
-  const state = recorder();
-  let release: (() => void) | undefined;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  let signalSeen: AbortSignal | undefined;
-  const fake = fakeBrowser(() => [{ name: 'sid', value: COOKIE_VALUE }]);
-  const login = new ConsoleLogin(callbacks(state, {
-    commit: async (cookie, captured, signal, expiresAt) => {
-      signalSeen = signal;
-      await gate;
-      // This store ignores the abort: its write is the linearization point.
-      state.commits.push({ cookie, captured, expiresAt });
-      return {};
-    },
-  }), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  const started = login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'verifying' && signalSeen !== undefined);
-  login.cancel({ jobId: started.jobId as string });
-  release?.();
-  await waitFor(() => statusOf(login).state === 'success');
-  assert.equal(state.commits.length, 1);
-  assert.equal(statusOf(login).state, 'success');
+test('expired/rejected/cancelled/denied responses and HTTP 401/403 terminate without committing', async () => {
+  for (const value of [
+    { status: 'expired' }, { status: 'cancelled' }, { status: 'denied' },
+    new Response(DEVICE_SECRET, { status: 401 }), new Response(DEVICE_SECRET, { status: 403 }),
+    new Response(null, { status: 302, headers: { location: 'https://evil.test/' } }),
+  ]) {
+    const f = fixture({ replies: [authorization(), value] });
+    f.login.start(request);
+    await waitFor(() => f.login.status().state === 'error');
+    assert.equal(f.commits.length, 0);
+    assertNoSecrets(f.login);
+    assertNoCode(f.login);
+  }
 });
 
-test('timeout, page close, disconnect and dispose defer to the in-flight store result', async t => {
-  for (const trigger of ['timeout', 'page-close', 'disconnect', 'dispose'] as const) {
-    for (const accepted of [false, true]) {
-      await t.test(`${trigger}: store ${accepted ? 'already accepted' : 'has not accepted'} the write`, async () => {
-        const state = recorder();
-        let release: (() => void) | undefined;
-        const gate = new Promise<void>(resolve => { release = resolve; });
+test('server expiry and local five-minute cap use the earlier deadline, with no poll after expiry', async () => {
+  for (const [serverMs, timeoutMs, expected] of [[1500, 300_000, 1500], [600_000, 1000, 1000], [600_000, 900_000, 300_000]] as const) {
+    const f = fixture({ replies: [authorization({ expiresAt: new Date(START + serverMs).toISOString(), pollIntervalSeconds: 30 })], options: { timeoutMs } });
+    f.login.start(request);
+    await waitFor(() => f.login.status().state === 'error');
+    assert.equal(f.login.status().errorCode, 'opendesign/login-expired');
+    assert.equal(f.time.now, START + expected);
+    assert.equal(f.commits.length, 0);
+    assertNoCode(f.login);
+    assert.equal(f.calls.length, expected > 30_000 ? 10 : 1);
+  }
+  const stale = fixture({ replies: [authorization({ expiresAt: new Date(START - 1).toISOString() })] });
+  stale.login.start(request);
+  await waitFor(() => stale.login.status().state === 'error');
+  assert.equal(stale.calls.length, 1);
+  assert.equal(stale.sleeps.length, 0);
+});
+
+test('status invalidates expired codes even while a custom delay has not returned', async () => {
+  const gate = deferred<void>();
+  const f = fixture({ options: { delay: async () => gate.promise } });
+  f.login.start(request);
+  await waitFor(() => f.login.status().state === 'waiting');
+  f.time.now += 300_000;
+  assert.equal(f.login.status().state, 'error');
+  assertNoCode(f.login);
+  gate.resolve();
+});
+
+test('duplicate starts share pending capture/network jobs and new jobs can follow cancellation', async () => {
+  const gate = deferred<unknown>();
+  const f = fixture({ callbacks: { capture: async () => gate.promise } });
+  const first = f.login.start(request);
+  assert.equal(f.login.start({ expectedRevision: 'rev-other' }).jobId, first.jobId);
+  f.login.cancel({ jobId: first.jobId! });
+  const second = f.login.start({ expectedRevision: 'rev-new' });
+  assert.notEqual(first.jobId, second.jobId);
+  gate.resolve({ revision: 'rev-new' });
+  await waitFor(() => f.login.status().state === 'success');
+  assert.equal(f.commits.length, 1);
+  assert.deepEqual(f.commits[0]?.captured, { revision: 'rev-new' });
+});
+
+test('capture failure and unsanitized host errors cannot leak secrets or start HTTP requests', async () => {
+  for (const code of ['opendesign/revision-conflict', DEVICE_SECRET]) {
+    const f = fixture({ callbacks: { capture: () => { throw Object.assign(new Error(DEVICE_SECRET), { code }); } } });
+    f.login.start(request);
+    await waitFor(() => f.login.status().state === 'error');
+    assert.equal(f.login.status().errorCode, code === DEVICE_SECRET ? 'opendesign/login-capture' : code);
+    assert.equal(f.calls.length, 0);
+    assertNoSecrets(f.login);
+  }
+});
+
+test('cancel/dispose abort in-flight fetch and prevent late network results from committing', async () => {
+  for (const dispose of [false, true]) {
+    const gate = deferred<Response>();
+    let signal: AbortSignal | null | undefined;
+    const f = fixture({ options: { fetcher: async (_input, init) => { signal = init?.signal; return gate.promise; } } });
+    const started = f.login.start(request);
+    await waitFor(() => signal !== undefined);
+    if (dispose) f.login.dispose(); else f.login.cancel({ jobId: started.jobId! });
+    assert.equal(signal?.aborted, true);
+    gate.resolve(Response.json(authorization()));
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(f.login.status().state, 'cancelled');
+    assert.equal(f.commits.length, 0);
+    assertNoCode(f.login);
+  }
+});
+
+test('cancel/dispose/timeout defer to atomic commit acceptance in both race orders', async t => {
+  for (const trigger of ['cancel', 'dispose', 'timeout'] as const) {
+    for (const accepted of [true, false]) {
+      await t.test(`${trigger}: accepted=${accepted}`, async () => {
+        const gate = deferred<void>();
         let commitSignal: AbortSignal | undefined;
-        const fake = fakeBrowser(() => [{ name: 'sid', value: COOKIE_VALUE }]);
-        const login = new ConsoleLogin(callbacks(state, {
-          commit: async (cookie, captured, signal, expiresAt) => {
+        let writes = 0;
+        const { login } = fixture({
+          callbacks: { commit: async (_tokens, _captured, signal) => {
             commitSignal = signal;
-            // Model both sides of the store's atomic acceptance boundary, not only a
-            // callback that happens to ignore cancellation before writing.
-            if (accepted) state.commits.push({ cookie, captured, expiresAt });
-            await gate;
-            if (!accepted) {
-              signal.throwIfAborted();
-              state.commits.push({ cookie, captured, expiresAt });
-            }
-            return {};
-          },
-        }), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site(), timeoutMs: trigger === 'timeout' ? 100 : 5000 });
-        try {
-          const started = login.start({ expectedRevision: REVISION });
-          await waitFor(() => commitSignal !== undefined);
-          if (trigger === 'page-close') fake.closePage();
-          else if (trigger === 'disconnect') fake.disconnect();
-          else if (trigger === 'dispose') login.dispose();
-          await waitFor(() => commitSignal?.aborted === true);
-          assert.equal(statusOf(login).state, 'verifying', 'cancellation cannot announce the store outcome early');
-          assert.equal(statusOf(login).finishedAt, undefined);
-          assert.equal(statusOf(login).message, '正在确认会话保存结果');
-          assert.equal(fake.closed(), true, 'the browser closes without waiting for the pending store');
-          if (trigger !== 'dispose') {
-            assert.equal(login.start({ expectedRevision: REVISION }).jobId, started.jobId, 'a pending commit still owns this attempt');
-          }
-          // Teardown can emit more than one browser event. Neither may settle the
-          // transaction or replace the first cancellation reason.
-          fake.closePage();
-          fake.disconnect();
-          release?.();
-          await waitFor(() => statusOf(login).state === (accepted ? 'success' : 'cancelled'));
-          assert.equal(state.commits.length, accepted ? 1 : 0);
-          assert.equal(statusOf(login).finishedAt !== undefined, true);
-          if (accepted) assert.equal(statusOf(login).message?.includes('Cookie 已保存'), true);
-          else if (trigger === 'timeout') assert.equal(statusOf(login).message?.includes('超过五分钟'), true);
-          else if (trigger === 'dispose') assert.equal(statusOf(login).message?.includes('服务已卸载'), true);
-          else assert.equal(statusOf(login).message, '登录窗口已关闭，未保存 Cookie');
-        } finally {
-          release?.();
-          login.dispose();
-        }
+            if (accepted) writes++;
+            await gate.promise;
+            if (!accepted) { signal.throwIfAborted(); writes++; }
+          } },
+          // Keep the synthetic clock inside the shortened real-time deadline so expiry
+          // happens while the Host's commit is pending, not during its preceding poll.
+          options: trigger === 'timeout' ? { timeoutMs: 60, delay: async () => undefined } : { timeoutMs: 10_000 },
+        });
+        const started = login.start(request);
+        await waitFor(() => commitSignal !== undefined);
+        assertNoCode(login);
+        if (trigger === 'cancel') login.cancel({ jobId: started.jobId! });
+        else if (trigger === 'dispose') login.dispose();
+        await waitFor(() => commitSignal?.aborted === true);
+        assert.equal(login.status().state, 'verifying');
+        assert.equal(login.status().finishedAt, undefined);
+        if (trigger !== 'dispose') assert.equal(login.start(request).jobId, started.jobId);
+        gate.resolve();
+        await waitFor(() => login.status().state === (accepted ? 'success' : 'cancelled'));
+        assert.equal(writes, accepted ? 1 : 0);
+        assertNoSecrets(login);
+        assertNoCode(login);
       });
     }
   }
 });
 
-test('a fatal commit failure is reported without retrying', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => [{ name: 'sid', value: COOKIE_VALUE }]);
-  const login = new ConsoleLogin(callbacks(state, {
-    commit: async () => { throw Object.assign(new Error('conflict'), { code: 'opendesign/revision-conflict' }); },
-  }), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'error');
-  const status = statusOf(login);
-  assert.equal(status.errorCode, 'opendesign/revision-conflict');
-  assert.equal(status.message?.includes('设置已改变'), true);
+test('commit exceptions are safe terminal errors, with no duplicate write or token re-poll', async () => {
+  for (const code of ['opendesign/revision-conflict', 'private-unsafe-code']) {
+    let attempts = 0;
+    const f = fixture({ callbacks: { commit: async () => { attempts++; throw Object.assign(new Error(DEVICE_SECRET), { code }); } } });
+    f.login.start(request);
+    await waitFor(() => f.login.status().state === 'error');
+    assert.equal(f.login.status().errorCode, code === 'opendesign/revision-conflict' ? code : 'opendesign/login-commit');
+    assert.equal(attempts, 1);
+    assert.equal(f.calls.length, 2);
+    assertNoSecrets(f.login);
+  }
 });
 
-test('a transient commit failure keeps retrying and never reports success', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => [{ name: 'sid', value: COOKIE_VALUE }]);
-  const login = new ConsoleLogin(callbacks(state, {
-    commit: async () => { throw Object.assign(new Error('io'), { code: 'opendesign/io' }); },
-  }), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  const started = login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'waiting' && statusOf(login).message?.includes('保存暂未成功') === true);
-  assert.equal(state.commits.length, 0);
-  login.cancel({ jobId: started.jobId as string });
-});
-
-test('the attempt times out on its own without writing', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => []);
-  const login = new ConsoleLogin(callbacks(state), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site(), timeoutMs: 15 });
-  login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'cancelled');
-  assert.equal(state.commits.length, 0);
-});
-
-test('dispose during the waiting phase cancels the attempt and never commits', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => []);
-  const login = new ConsoleLogin(callbacks(state), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  login.start({ expectedRevision: REVISION });
-  login.dispose();
-  assert.equal(statusOf(login).state, 'cancelled');
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(state.commits.length, 0);
-});
-
-test('closing the login window cancels and saves nothing', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => []);
-  const login = new ConsoleLogin(callbacks(state), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'waiting');
-  fake.disconnect();
-  assert.equal(statusOf(login).state, 'cancelled');
-  assert.equal(state.commits.length, 0);
-});
-
-test('a capture failure aborts the attempt before any browser work', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => []);
-  const login = new ConsoleLogin(callbacks(state, {
-    capture: () => { throw Object.assign(new Error('conflict'), { code: 'opendesign/revision-conflict' }); },
-  }), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  login.start({ expectedRevision: REVISION });
-  await waitFor(() => statusOf(login).state === 'error');
-  assert.equal(statusOf(login).errorCode, 'opendesign/revision-conflict');
-  assert.equal(state.commits.length, 0);
-});
-
-test('start is idempotent while an attempt is live and opens a new attempt afterwards', async () => {
-  const state = recorder();
-  const fake = fakeBrowser(() => []);
-  const login = new ConsoleLogin(callbacks(state), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site() });
-  const first = login.start({ expectedRevision: REVISION });
-  const second = login.start({ expectedRevision: REVISION });
-  assert.equal(first.jobId, second.jobId);
-  login.cancel({ jobId: first.jobId as string });
-  const third = login.start({ expectedRevision: 'rev-2' });
-  assert.notEqual(third.jobId, first.jobId);
-  login.dispose();
-});
-
-test('a cancel for another job id is ignored', async () => {
-  const state = recorder();
-  const login = new ConsoleLogin(callbacks(state), { launch: async () => fakeBrowser(() => []).browser, pollMs: 1, delay: fastDelay, site: site() });
-  const started = login.start({ expectedRevision: REVISION });
-  assert.equal(login.cancel({ jobId: 'someone-else' }).jobId, started.jobId);
-  login.dispose();
-});
-
-test('starting after dispose throws', () => {
-  const login = new ConsoleLogin(callbacks(), { launch: async () => fakeBrowser(() => []).browser, pollMs: 1, delay: fastDelay, site: site() });
-  assert.deepEqual(login.status(), { jobId: null, state: 'idle' });
-  login.dispose();
-  assert.throws(() => login.start({ expectedRevision: REVISION }), (error: unknown) => error instanceof LoginError && error.code === 'opendesign/login-disposed');
-});
-
-test('extractConsoleSession keeps the browser cookie bundle and reports the earliest expiry', () => {
-  const now = 1_000_000;
-  const session = extractConsoleSession([
-    { name: 'a', value: '1', expires: now / 1000 + 500 },
-    { name: 'b', value: '2', expires: now / 1000 + 100 },
-    { name: 'gone', value: '3', expires: now / 1000 - 1 },
-    { name: 'session', value: '4', expires: -1 },
-    { name: '', value: 'x' },
-  ], now);
-  assert.equal(session?.cookie, 'a=1; b=2; session=4');
-  assert.equal(session?.expiresAt, (now / 1000 + 100) * 1000);
-  assert.equal(extractConsoleSession([], now), null);
-  assert.equal(extractConsoleSession([{ name: 'x', value: '' }], now), null);
-  assert.equal(extractConsoleSession([{ name: 'p', value: '1', expires: -1 }], now)?.expiresAt, 0);
-});
-
-test('the Chrome launch options keep the human-in-the-loop bot-check workaround', () => {
-  assert.equal(CHROME_LAUNCH_OPTIONS.channel, 'chrome');
-  assert.equal(CHROME_LAUNCH_OPTIONS.headless, false);
-  assert.deepEqual([...CHROME_LAUNCH_OPTIONS.args], ['--disable-blink-features=AutomationControlled']);
+test('dispose during capture cancels, and starting after dispose throws', async () => {
+  const gate = deferred<unknown>();
+  const f = fixture({ callbacks: { capture: async () => gate.promise } });
+  f.login.start(request);
+  f.login.dispose();
+  gate.resolve({});
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(f.login.status().state, 'cancelled');
+  assert.equal(f.calls.length, 0);
+  assert.throws(() => f.login.start(request), error => error instanceof LoginError && error.code === 'opendesign/login-disposed');
 });

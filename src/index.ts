@@ -14,8 +14,8 @@ import { isModelEnabled } from './model-settings.js';
 import type { CatalogModel } from './catalog.js';
 import { Config, SETTINGS_NS, PLAN_PROVIDER, PAID_PROVIDER, readConfig, type LiveConfig } from './config.js';
 import { MODELS } from './catalog.js';
-import { resolveSession, cookieSession, type LoginGrant } from './auth.js';
-import { ConsoleLogin } from './login.js';
+import { resolveSession, deviceGrant, isOfficialRuntimeUrl, type LoginGrant } from './auth.js';
+import { ConsoleLogin, type LoginOptions } from './login.js';
 import { readQuota, ConsoleError, type QuotaSnapshot } from './quota.js';
 import { readDesktopQuota } from './desktop-quota.js';
 import { record } from './util.js';
@@ -42,9 +42,12 @@ export interface HostDependencies {
   readDesktopQuota: typeof readDesktopQuota;
   fetchModels?: typeof fetchModelCatalog;
   modelsChanged?: () => void;
+  loginOptions?: LoginOptions;
 }
 function grantOf(value: CredentialRecord | undefined): LoginGrant | undefined {
-  if (value?.kind !== 'grant' || !record(value.payload) || typeof value.payload.cookie !== 'string') return;
+  if (value?.kind !== 'grant' || !record(value.payload)) return;
+  if (value.payload.kind === 'device') return deviceGrant(value.payload);
+  if (typeof value.payload.cookie !== 'string') return;
   return { cookie: value.payload.cookie, ...(typeof value.payload.expiresAt === 'number' ? { expiresAt: value.payload.expiresAt } : {}) };
 }
 export class OpenDesignCoRouterService extends TypertRemoteService {
@@ -79,13 +82,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
         this._credentials();
         return { revision: expectedRevision, sessionHash: hash(state.sessionRecord), configHash: hash(state.config) } satisfies LoginCapture;
       },
-      verify: async (cookie, signal) => {
-        const session = cookieSession(cookie, 'login');
-        if (!session) throw new ConsoleError('auth');
-        const quota = await this.dependencies.readQuota(session, signal);
-        return { balanceOk: true, coverage: quota.state === 'ok' ? 'complete' : 'partial', windows: quota.windows };
-      },
-      commit: async (cookie, captured, signal, expiresAt) => {
+      commit: async (tokens, captured, signal) => {
         if (!record(captured) || typeof captured.revision !== 'string' || typeof captured.sessionHash !== 'string' || typeof captured.configHash !== 'string') throw this._conflict();
         await this._state();
         this._expect(captured.revision);
@@ -93,11 +90,15 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
         await this._credentials().modifyRecord(SESSION, async current => {
           signal.throwIfAborted();
           if (hash(current) !== captured.sessionHash || hash(this._config()) !== captured.configHash) throw this._conflict();
-          return { kind: 'grant', payload: { cookie, expiresAt, savedAt: new Date().toISOString() } };
+          const grant = deviceGrant({ kind: 'device', ...tokens });
+          if (!grant) throw new ConsoleError('auth');
+          return { kind: 'grant', payload: { ...grant, savedAt: new Date().toISOString() } };
         });
         this._invalidateQuota();
+        this._modelsFingerprint = '';
+        this._invalidateModels();
       },
-    });
+    }, dependencies.loginOptions);
     ctx.effect(() => () => { this._lifetime.abort(); this._login.dispose(); });
   }
   private _credentials(): CredentialProvider {
@@ -105,28 +106,41 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     if (!service) throw new RemoteError('opendesign/credentials-unavailable', 'DSH 凭据服务不可用；可先使用启动环境变量', undefined);
     return service;
   }
-  async resolveApiKey(ref: string): Promise<string | undefined> {
+  private async _key(ref: string, baseURL: string, apiRecord: CredentialRecord | undefined, sessionRecord: CredentialRecord | undefined): Promise<string | undefined> {
     const credentials = this.ctx.get('credentials');
     const ambient = credentials ? (await credentials.resolve(credentialRef(ref)))?.value : launchEnvironmentOf(this.ctx).get(ref)?.value;
     if (ambient?.trim()) return ambient;
-    const saved = await credentials?.readRecord(API_KEY);
-    return saved?.kind === 'api-key' ? saved.key : undefined;
+    if (apiRecord?.kind === 'api-key' && apiRecord.key?.trim()) return apiRecord.key;
+    const grant = grantOf(sessionRecord);
+    return isOfficialRuntimeUrl(baseURL) && grant && 'kind' in grant && grant.kind === 'device' ? grant.runtimeKey : undefined;
+  }
+  async resolveApiKey(ref: string, baseURL = this._config().baseURL): Promise<string | undefined> {
+    const credentials = this.ctx.get('credentials');
+    const [apiRecord, sessionRecord] = await Promise.all([credentials?.readRecord(API_KEY), credentials?.readRecord(SESSION)]);
+    return this._key(ref, baseURL, apiRecord, sessionRecord);
+  }
+  private _invalidateModels(): void {
+    const changed = this._modelsUpdatedAt !== undefined;
+    this._modelsEpoch++;
+    this._modelsController?.abort();
+    this._modelsPending = undefined;
+    this._models = MODELS;
+    this._modelsUpdatedAt = undefined;
+    this._modelsError = undefined;
+    if (changed) {
+      try { this.dependencies.modelsChanged?.(); }
+      catch { /* A notification failure cannot undo an accepted credential write or cache invalidation. */ }
+    }
   }
   private async _state(): Promise<CapturedState> {
     const credentials = this.ctx.get('credentials'), config = this._config();
-    const [apiRecord, sessionRecord, key] = await Promise.all([credentials?.readRecord(API_KEY), credentials?.readRecord(SESSION), this.resolveApiKey(config.apiKeyEnv)]);
+    const [apiRecord, sessionRecord] = await Promise.all([credentials?.readRecord(API_KEY), credentials?.readRecord(SESSION)]);
+    const key = await this._key(config.apiKeyEnv, config.baseURL, apiRecord, sessionRecord);
     const state = { apiRecord, sessionRecord, key, config };
     const modelsFingerprint = hash({ key, baseURL: config.baseURL });
     if (modelsFingerprint !== this._modelsFingerprint) {
-      const changed = this._modelsUpdatedAt !== undefined;
       this._modelsFingerprint = modelsFingerprint;
-      this._modelsEpoch++;
-      this._modelsController?.abort();
-      this._modelsPending = undefined;
-      this._models = MODELS;
-      this._modelsUpdatedAt = undefined;
-      this._modelsError = undefined;
-      if (changed) this.dependencies.modelsChanged?.();
+      this._invalidateModels();
     }
     const fingerprint = hash(state);
     if (fingerprint !== this._fingerprint) { this._fingerprint = fingerprint; this._revision = randomUUID(); }
@@ -214,9 +228,10 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     let identity: string | undefined;
     let refreshFailed = false;
     try {
+      const grant = grantOf(await this.ctx.get('credentials')?.readRecord(SESSION));
       const authDeps = {
         useDesktop: config.useDesktopCredential,
-        readGrant: async () => grantOf(await this.ctx.get('credentials')?.readRecord(SESSION)),
+        readGrant: async () => grant,
         resolveRef: async (ref: string) => {
           const credentials = this.ctx.get('credentials');
           return credentials ? (await credentials.resolve(credentialRef(ref)))?.value : launchEnvironmentOf(this.ctx).get(ref)?.value;
@@ -234,7 +249,10 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
             if (fallback.state === 'ready') {
               try {
                 const complete = await this.dependencies.readQuota(fallback.session, signal);
-                if (complete.state === 'ok' && (complete.windows.length > 0 || complete.eligible === false)) result = { ...complete, note: `桌面登录态仅提供部分额度；当前显示独立登录账号的完整额度。${complete.note ? ` ${complete.note}` : ''}` };
+                if (complete.state === 'ok' && (complete.windows.length > 0 || complete.eligible === false)) {
+                   result = { ...complete, note: `桌面登录态仅提供部分额度；当前显示独立登录账号的完整额度。${complete.note ? ` ${complete.note}` : ''}` };
+                   identity = hash(fallback.session);
+                 }
               } catch (error) {
                 if (signal.aborted) throw error;
                 // A failed optional fallback does not discard the usable desktop snapshot.
@@ -247,6 +265,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
           if (!(error instanceof ConsoleError) || !['auth', 'permission'].includes(error.kind)) throw error;
           const fallback = await this.dependencies.resolveSession({ ...authDeps, useDesktop: false });
           if (fallback.state !== 'ready') throw new ConsoleError('auth');
+          identity = hash(fallback.session);
           result = await this.dependencies.readQuota(fallback.session, signal);
         }
       }
@@ -316,7 +335,7 @@ export function apply(ctx: Context, config: LiveConfig): void {
   let modelsChanged = () => {};
   const service = new OpenDesignCoRouterService(ctx, current, { resolveSession, readQuota, readDesktopQuota, modelsChanged: () => modelsChanged() });
   const adapter = new CoRouterAdapter({
-    config: current, models: () => service.modelCatalog(), apiKey: ref => service.resolveApiKey(ref), onEmptyTurn: () => { service.guardedTurns++; },
+    config: current, models: () => service.modelCatalog(), apiKey: (ref, baseURL) => service.resolveApiKey(ref, baseURL), onEmptyTurn: () => { service.guardedTurns++; },
     imageDataUrl: async (ref, signal) => {
       const attachments = ctx.get('attachments');
       if (!attachments) return undefined;
@@ -336,7 +355,7 @@ export function apply(ctx: Context, config: LiveConfig): void {
   ctx.llm.registerModelDiscovery(SETTINGS_NS, async (request, signal) => {
     if (request.provider !== undefined && ![PLAN_PROVIDER, PAID_PROVIDER].includes(request.provider)) throw new LlmError('不是本插件的模型通道', 'INVALID_REQUEST');
     const config = current();
-    const key = request.apiKey ?? await service.resolveApiKey(config.apiKeyEnv);
+    const key = request.apiKey ?? await service.resolveApiKey(config.apiKeyEnv, config.baseURL);
     if (!key) throw new LlmError('请先配置 CoRouter API Key', 'MISSING_CREDENTIAL');
     // Model discovery is always OpenAI-compatible, irrespective of request.api or inference protocol.
     const models = await fetchModelCatalog(config.baseURL, key, signal);
