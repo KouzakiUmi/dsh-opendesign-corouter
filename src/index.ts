@@ -16,11 +16,12 @@ import { Config, SETTINGS_NS, PLAN_PROVIDER, PAID_PROVIDER, readConfig, type Liv
 import { MODELS } from './catalog.js';
 import { resolveSession, deviceGrant, isOfficialRuntimeUrl, type LoginGrant } from './auth.js';
 import { ConsoleLogin, type LoginOptions } from './login.js';
+import { ActivationLauncher, type ActivationLauncherOptions } from './browser-open.js';
 import { readQuota, ConsoleError, type QuotaSnapshot } from './quota.js';
 import { readDesktopQuota } from './desktop-quota.js';
 import { record } from './util.js';
-import { parseStatus, parseLoginState, parseStartLoginRequest as parseStartLogin, parseCancelLoginRequest as parseCancelLogin, parseSaveApiKeyRequest as parseSaveApiKey,
-  type Status, type LoginState, type StartLoginRequest, type CancelLoginRequest, type SaveApiKeyRequest } from './remote.js';
+import { parseStatus, parseLoginState, parseStartLoginRequest as parseStartLogin, parseCancelLoginRequest as parseCancelLogin, parseSaveApiKeyRequest as parseSaveApiKey, parseActivationOpenState,
+  type Status, type LoginState, type StartLoginRequest, type CancelLoginRequest, type SaveApiKeyRequest, type ActivationOpenState } from './remote.js';
 
 export { Config } from './config.js';
 export { CoRouterAdapter } from './adapter.js';
@@ -43,6 +44,7 @@ export interface HostDependencies {
   fetchModels?: typeof fetchModelCatalog;
   modelsChanged?: () => void;
   loginOptions?: LoginOptions;
+  activationOptions?: ActivationLauncherOptions;
 }
 function grantOf(value: CredentialRecord | undefined): LoginGrant | undefined {
   if (value?.kind !== 'grant' || !record(value.payload)) return;
@@ -53,6 +55,7 @@ function grantOf(value: CredentialRecord | undefined): LoginGrant | undefined {
 export class OpenDesignCoRouterService extends TypertRemoteService {
   private readonly _config: () => ReturnType<typeof readConfig>;
   private readonly _login: ConsoleLogin;
+  private readonly _activation: ActivationLauncher;
   private readonly _lifetime = new AbortController();
   private _revision = randomUUID();
   private _fingerprint = '';
@@ -98,8 +101,14 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
         this._modelsFingerprint = '';
         this._invalidateModels();
       },
-    }, dependencies.loginOptions);
-    ctx.effect(() => () => { this._lifetime.abort(); this._login.dispose(); });
+    }, {
+      ...dependencies.loginOptions,
+      // The Host owns the temporary window, so it closes it on every terminal transition —
+      // including expiry, which happens on a timer even when no UI is polling.
+      onSettled: () => { void this._activation.close(); },
+    });
+    this._activation = new ActivationLauncher(dependencies.activationOptions);
+    ctx.effect(() => () => { this._lifetime.abort(); this._login.dispose(); return this._activation.dispose(); });
   }
   private _credentials(): CredentialProvider {
     const service = this.ctx.get('credentials');
@@ -306,6 +315,14 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   loginStatus(): LoginState { return parseLoginState(this._login.status()); }
   @Remote('cancelLogin')
   cancelLogin(input: CancelLoginRequest): LoginState { return parseLoginState(this._login.cancel(parseCancelLogin(input))); }
+  @Remote('openActivationPage')
+  async openActivationPage(): Promise<ActivationOpenState> {
+    // The link is Host-owned state: the UI cannot pass a URL of its own to the launcher.
+    const url = this._login.activationLink();
+    if (url === undefined) return { code: 'no-link', opened: false };
+    const result = await this._activation.open(url);
+    return parseActivationOpenState({ code: result.code, opened: result.opened });
+  }
   @Remote('saveApiKey')
   async saveApiKey(input: SaveApiKeyRequest): Promise<Status> {
     const request = parseSaveApiKey(input), state = await this._state();

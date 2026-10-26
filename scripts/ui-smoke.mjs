@@ -126,13 +126,20 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
         return { ok: true, value: quota };
       },
       startLogin: async () => {
-        login = { jobId: 'fixture-job', state: 'waiting', message: '请在常用浏览器确认设备授权',
+        login = { jobId: 'fixture-job', state: 'waiting', message: '请在授权窗口确认设备授权',
           activationUrl: 'https://open-design.ai/cloud/cli/activate?code=AB12-CD34', userCode: 'AB12-CD34',
           expiresAt: new Date(Date.now() + 300_000).toISOString() };
         return { ok: true, value: login };
       },
       loginStatus: async (...args) => { if (args.length) throw new Error('loginStatus requires zero arguments'); return { ok: true, value: login }; },
       cancelLogin: async () => { login = { jobId: 'fixture-job', state: 'cancelled' }; return { ok: true, value: login }; },
+      openActivationPage: async (...args) => {
+        if (args.length) throw new Error('openActivationPage requires zero arguments');
+        window.__openActivationCalls += 1;
+        if (window.__holdActivation) await new Promise(resolve => { window.__releaseActivation = resolve; });
+        const code = window.__activationCode ?? 'opened';
+        return { ok: true, value: { code, opened: code === 'opened' } };
+      },
       saveApiKey: async request => { if (request.value !== 'fixture-api-key') throw new Error('Unexpected fixture key'); return { ok: true, value: status() }; },
     };
     api.refreshQuotaNow = async (...args) => {
@@ -146,6 +153,8 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     };
     window.__setQuotaPaused = () => { quota = { ...quota, state: 'partial', autoRefreshPaused: true, refreshFailures: 6, nextRefreshAt: undefined }; };
     window.__setModelsFail = value => { window.__modelsFail = value; };
+    window.__openActivationCalls = 0;
+    window.__setActivationCode = code => { window.__activationCode = code; };
     window.__setFormState = (state, writable) => {
       snapshot = { ...snapshot, status: state, writable, value: state === 'ready' ? config : undefined };
       for (const cb of listeners) cb();
@@ -359,14 +368,41 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
   const startDevice = page.getByRole('button', { name: '开始设备授权', exact: true });
   await startDevice.click();
-  const approvalLink = page.getByRole('link', { name: '打开授权页', exact: true });
+  const approvalLink = page.getByRole('link', { name: '复制链接手动打开', exact: true });
   await approvalLink.waitFor();
   assert.equal(await approvalLink.getAttribute('href'), 'https://open-design.ai/cloud/cli/activate?code=AB12-CD34');
   assert.equal(await approvalLink.getAttribute('target'), '_blank');
   assert.match(await approvalLink.getAttribute('rel'), /noopener/u);
   assert.equal(await page.getByLabel('设备授权码', { exact: true }).innerText(), 'AB12-CD34');
   assert.equal(await startDevice.isDisabled(), true);
+  // The Host launches the temporary window; the panel reports what actually happened.
+  const openWindow = page.getByRole('button', { name: '在新窗口打开授权页', exact: true });
+  await openWindow.click();
+  await page.waitForFunction(() => window.__openActivationCalls === 1);
+  await page.getByText('已在新窗口打开官方授权页；请在该窗口确认设备码。', { exact: true }).waitFor();
+  assert.doesNotMatch(await page.locator('.odc-settings').innerText(), /deviceSecret|controlKey|runtimeKey/);
+  // Capture the working state before exercising the failure path.
   await page.screenshot({ path: 'docs/previews/connection.png', fullPage: true });
+  // A Host that cannot offer the window says so instead of claiming success.
+  await page.evaluate(() => window.__setActivationCode('unavailable'));
+  await openWindow.click();
+  await page.waitForFunction(() => window.__openActivationCalls === 2);
+  await page.getByText('无法启动临时浏览器，请确认已安装 Chrome；也可复制链接手动打开。', { exact: true }).waitFor();
+  assert.equal(await approvalLink.isVisible(), true, 'the manual link survives every failure');
+  await page.evaluate(() => window.__setActivationCode('opened'));
+
+  // Regression: the open button owns its own busy state. A cancel racing it must not
+  // strand the button in "正在打开…" for the rest of the session.
+  await page.evaluate(() => { window.__holdActivation = true; });
+  await openWindow.click();
+  await page.getByRole('button', { name: '正在打开…', exact: true }).waitFor();
+  await page.getByRole('button', { name: '取消登录', exact: true }).click();
+  await approvalLink.waitFor({ state: 'detached' });
+  await page.evaluate(() => { window.__holdActivation = false; window.__releaseActivation?.(); });
+  // The stale attempt settles without leaving the button disabled when the next job arrives.
+  await startDevice.click();
+  await approvalLink.waitFor();
+  assert.equal(await page.getByRole('button', { name: '在新窗口打开授权页', exact: true }).isEnabled(), true);
   await page.getByRole('button', { name: '取消登录', exact: true }).click();
   await approvalLink.waitFor({ state: 'detached' });
   assert.equal(await startDevice.isEnabled(), true);
@@ -487,5 +523,5 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   assert.equal(await page.locator('style[data-opendesign-corouter]').count(), 0);
   assert.equal(await page.evaluate(() => window.__remoteDisposed), true);
   assert.deepEqual(errors, []);
-  console.log(`Offline UI smoke passed: 4 tabs, ${fixtureModels.length} models, model enable/edit/reset persistence, protocol selection, quota timing and auto-refresh scheduling, 8 RPCs, credential input, guard switch, keyboard navigation, disposal; ${reports.length} official light/dark/forced-color audits, minimum measured text contrast ${Math.min(...reports.map(report => report.minimum))}:1.`);
+  console.log(`Offline UI smoke passed: 4 tabs, ${fixtureModels.length} models, model enable/edit/reset persistence, protocol selection, quota timing and auto-refresh scheduling, 9 RPCs, credential input, guard switch, keyboard navigation, disposal; ${reports.length} official light/dark/forced-color audits, minimum measured text contrast ${Math.min(...reports.map(report => report.minimum))}:1.`);
 } finally { await browser.close(); }

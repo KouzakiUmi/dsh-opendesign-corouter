@@ -2,6 +2,7 @@ import * as React from 'react';
 import openDesignCoRouterRemote, { type CoRouterRemote } from './generated/typert.remote-client.js';
 import type { TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol';
 import {
+  type ActivationOpenState,
   type LoginState,
   type Status,
   type StatusModel,
@@ -32,6 +33,8 @@ const MAX_REQUEST_TIMEOUT_MS = 3_600_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
 const MIN_STREAM_IDLE_TIMEOUT_MS = 1_000;
 const MAX_STREAM_IDLE_TIMEOUT_MS = 1_800_000;
+/** Client wait per RPC. The Host's slowest operation (one activation open) budgets less. */
+const RPC_TIMEOUT_MS = 30_000;
 /** 与 model-settings.ts 的容量上限保持一致，避免界面先接受再被 Host 拒绝。 */
 const MAX_OUTPUT_TOKENS = 10_000_000;
 const MAX_CONTEXT_WINDOW = 100_000_000;
@@ -101,7 +104,7 @@ const GENERIC_ERROR = '操作未完成，请稍后重试。';
 const LOGIN_LABELS: Record<LoginState['state'], string> = {
   idle: '尚未开始独立登录',
   launching: '正在申请设备授权码…',
-  waiting: '请打开授权页，在常用浏览器中确认本次登录。',
+  waiting: '请在授权窗口或常用浏览器中确认本次登录。',
   verifying: '正在保存设备授权…',
   success: '登录成功，设备授权已保存。',
   cancelled: '已取消本次登录。',
@@ -192,7 +195,7 @@ function createCaller(ctx: ClientContext): RpcCaller {
     if (!operation) throw new Error('Unknown generated Remote method');
     const parameter = operation.parameters[0];
     const input = operation.input({ strict: true }).create().parse(parameter ? { [parameter.wire]: request } : {});
-    const response = await withTimeout(Promise.resolve(operation.invoke(remote, input)), 25_000, controller.signal);
+    const response = await withTimeout(Promise.resolve(operation.invoke(remote, input)), RPC_TIMEOUT_MS, controller.signal);
     if (!('ok' in response) || !response.ok) throw new Error('RPC failed');
     return response.value as T;
   };
@@ -910,8 +913,22 @@ function loginInFlight(state: LoginState['state']): boolean {
   return state === 'launching' || state === 'waiting' || state === 'verifying';
 }
 
-/** Approval opens through an ordinary link; no browser profile is created or controlled. */
-export function LoginApproval({ login }: { login: LoginState | undefined }) {
+/** Open-in-window labels: the Host launches a temporary Chrome, the link stays as fallback. */
+const ACTIVATION_OPEN_LABELS: Record<ActivationOpenState['code'], string> = {
+  opened: '已在新窗口打开官方授权页；请在该窗口确认设备码。',
+  'no-link': '授权码已失效，请重新申请。',
+  'invalid-url': '授权链接未通过校验，请复制链接手动打开。',
+  unavailable: '无法启动临时浏览器，请确认已安装 Chrome；也可复制链接手动打开。',
+  failed: '临时浏览器窗口未能打开，请复制链接手动打开。',
+};
+
+/** Approval is an ordinary official link; the Host may also show it in a temporary window. */
+export function LoginApproval({ login, onOpen, opening, notice }: {
+  login: LoginState | undefined;
+  onOpen?: () => void;
+  opening?: boolean;
+  notice?: { kind: 'status' | 'error'; text: string } | null;
+}) {
   if (login?.state !== 'waiting' || login.userCode === undefined || login.expiresAt === undefined) return null;
   const url = validateActivationUrl(login.activationUrl, login.userCode);
   if (url === null) return null;
@@ -919,9 +936,14 @@ export function LoginApproval({ login }: { login: LoginState | undefined }) {
     h('span', { className: 'odc-label' }, '核对授权码'),
     h('code', { className: 'odc-metric-value', 'aria-label': '设备授权码' }, login.userCode),
     h('div', { className: 'odc-actions' },
-      h('a', { className: 'odc-button odc-button-primary', href: url, target: '_blank', rel: 'noreferrer noopener' }, '打开授权页')),
-    h('p', { className: 'odc-hint' }, `授权码有效至 ${formatTime(login.expiresAt)}。在常用浏览器确认后，返回此页查看结果。`),
-    h('p', { className: 'odc-hint' }, '可右键复制授权链接到常用浏览器；密码管理器和自动填充由浏览器正常提供。仅确认你本人发起的授权。'));
+      h('button', {
+        className: 'odc-button odc-button-primary', type: 'button', disabled: opening === true || onOpen === undefined,
+        onClick: () => { onOpen?.(); },
+      }, opening === true ? '正在打开…' : '在新窗口打开授权页'),
+      h('a', { className: 'odc-button', href: url, target: '_blank', rel: 'noreferrer noopener' }, '复制链接手动打开')),
+    notice ? h(NoticeView, { notice }) : null,
+    h('p', { className: 'odc-hint' }, `授权码有效至 ${formatTime(login.expiresAt)}。在授权窗口确认后，返回此页查看结果。`),
+    h('p', { className: 'odc-hint' }, '新窗口是独立的临时 Chrome，不会读取或改动你正在使用的浏览器配置；需要沿用已有登录态时，右键复制链接到常用浏览器。仅确认你本人发起的授权。'));
 }
 
 function Connection({ status, formSnapshot, setFormField, pendingField, caller, loadStatus, refreshAfterLogin }: {
@@ -939,8 +961,23 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
   const [notice, setNotice] = React.useState<Notice | null>(null);
   const [apiKey, setApiKey] = React.useState('');
   const [keyBusy, setKeyBusy] = React.useState(false);
+  const [opening, setOpening] = React.useState(false);
+  const [activationNotice, setActivationNotice] = React.useState<Notice | null>(null);
+  /** Which login job the current activation notice belongs to. */
+  const activationJob = React.useRef<string | null>(null);
+  /** The single activation request allowed to own the busy label right now. */
+  const activationToken = React.useRef(0);
   React.useEffect(() => () => { actionVersion.current += 1; }, []);
   const login = status?.login;
+  React.useEffect(() => {
+    // A new approval cycle starts with its own feedback: never carry the last one over.
+    const job = login?.jobId ?? null;
+    if (activationJob.current === job) return;
+    activationJob.current = job;
+    activationToken.current += 1;
+    setActivationNotice(null);
+    setOpening(false);
+  }, [login?.jobId]);
   const state = login?.state ?? 'idle';
   const inFlight = loginInFlight(state);
 
@@ -953,6 +990,7 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
       const next = await caller<LoginState>('startLogin', { expectedRevision: status.revision });
       if (!mounted.current || version !== actionVersion.current) return;
       setNotice(null);
+      setActivationNotice(null);
       await (next.state === 'success' ? refreshAfterLogin() : loadStatus());
     } catch {
       if (mounted.current && version === actionVersion.current) setNotice({ kind: 'error', text: '无法启动登录，请稍后重试。' });
@@ -999,6 +1037,29 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
     }
   };
 
+  const openActivation = async () => {
+    if (status === undefined || busy || keyBusy || opening || login?.state !== 'waiting') return;
+    // This action owns `opening` only. Sharing the login action version would let a
+    // concurrent cancel swallow the reset and strand the button in its busy label.
+    // The outcome is tagged with its job: a result from a login that already ended must
+    // not appear as feedback for the next one.
+    const job = login.jobId;
+    // A request token owns both the busy label and the notice. They differ from the login
+    // action version: a page settling late must not clear a newer request's busy state.
+    const token = ++activationToken.current;
+    activationJob.current = job;
+    setOpening(true);
+    setActivationNotice(null);
+    const current = () => mounted.current && activationToken.current === token && activationJob.current === job;
+    try {
+      const result = await caller<ActivationOpenState>('openActivationPage');
+      if (current()) setActivationNotice({ kind: result.opened ? 'status' : 'error', text: ACTIVATION_OPEN_LABELS[result.code] });
+    } catch {
+      if (current()) setActivationNotice({ kind: 'error', text: ACTIVATION_OPEN_LABELS.failed });
+    } finally {
+      if (mounted.current && activationToken.current === token) setOpening(false);
+    }
+  };
   const desktopChecked = formSnapshot.value?.useDesktopCredential ?? status?.config.useDesktopCredential ?? true;
   return h(React.Fragment, null,
     h('section', { className: 'odc-card' },
@@ -1015,12 +1076,12 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
       h('p', { className: 'odc-meta' }, `当前会话来源：${status?.sessionSource === undefined ? '—' : { desktop: '桌面登录态', login: '独立登录', environment: '环境凭据' }[status.sessionSource]}`)),
     h('section', { className: 'odc-card' },
       h('h3', null, '设备授权登录'),
-      h('p', { className: 'odc-hint' }, '申请授权码后，在常用浏览器打开官方授权页。沿用已有登录状态、密码管理器和自动填充；确认后自动保存设备令牌，用于查询额度及官方网关推理。'),
+      h('p', { className: 'odc-hint' }, '申请授权码后，由插件启动临时窗口显示官方授权页，也可复制链接到你自己的常用浏览器。确认后自动保存设备令牌，用于查询额度及官方网关推理。'),
       h('div', { className: 'odc-actions', style: { marginTop: 14 } },
         h('button', { className: 'odc-button odc-button-primary', type: 'button', disabled: status === undefined || busy || keyBusy || inFlight, onClick: () => { void startLogin(); } }, '开始设备授权'),
         inFlight ? h('button', { className: 'odc-button', type: 'button', disabled: busy || keyBusy || login?.jobId == null, onClick: () => { void cancelLogin(); } }, '取消登录') : null,
         h('a', { className: 'odc-link', href: OFFICIAL_SITE, target: '_blank', rel: 'noreferrer noopener' }, '打开 CoRouter 官网')),
-      h(LoginApproval, { login }),
+      h(LoginApproval, { login, onOpen: () => { void openActivation(); }, opening, notice: activationNotice }),
       h('p', { className: 'odc-meta', role: state === 'error' ? 'alert' : 'status' }, login?.message ?? LOGIN_LABELS[state]),
       h(NoticeView, { notice })),
     h('section', { className: 'odc-card' },

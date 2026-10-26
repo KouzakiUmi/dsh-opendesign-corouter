@@ -31,6 +31,7 @@ const ENDPOINTS = [
   `${REMOTE_SERVICE}/startLogin`,
   `${REMOTE_SERVICE}/loginStatus`,
   `${REMOTE_SERVICE}/cancelLogin`,
+  `${REMOTE_SERVICE}/openActivationPage`,
   `${REMOTE_SERVICE}/saveApiKey`,
 ] as const;
 
@@ -56,7 +57,7 @@ async function eventually(loader: Loader, ready: () => boolean): Promise<void> {
 const entry = (config: Record<string, unknown> = {}) => ({ id: ENTRY_ID, name: REMOTE_PACKAGE, config });
 const providerIds = (ctx: Context) => ctx.llm.listProviders().map(row => row.id).sort();
 
-test('official Loader mounts the built package, typert-loader auto-registers its eight RPC, and reload is conflict-free', async () => {
+test('official Loader mounts the built package, typert-loader auto-registers its nine RPC, and reload is conflict-free', async () => {
   const ctx = new Context();
   ctx.baseUrl = ANCHOR;
   const llm = await ctx.plugin(LlmRuntime);

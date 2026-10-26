@@ -3,8 +3,10 @@
 // official compatibility guarantee). No browser automation or credential discovery.
 export interface DeviceTokens { controlKey: string; runtimeKey: string }
 export const DEVICE_AUTH_ENDPOINT = 'https://amr-api.open-design.ai/api/v1/cli/device-authorizations';
-export const DEVICE_AUTH_PLUGIN_VERSION = '0.1.4';
+export const DEVICE_AUTH_PLUGIN_VERSION = '0.1.5';
 export const DEVICE_REQUEST_TIMEOUT_MS = 20_000;
+/** One bounded launch step of the temporary activation window. */
+export const DEVICE_OPEN_TIMEOUT_MS = 30_000;
 export const DEVICE_RESPONSE_MAX_BYTES = 65_536;
 export const DEVICE_POLL_MIN_MS = 1_000;
 // Intervals above the local lifetime need no request: waiting reaches the deadline.

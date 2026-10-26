@@ -26,15 +26,38 @@ import type { QuotaSnapshot } from '../src/quota.js';
 
 const h = React.createElement;
 
-test('device approval uses a normal browser link and hides stale or unsafe links', () => {
+test('device approval offers a Host window button and keeps the official link as fallback', () => {
   const login = { jobId: 'fixture', state: 'waiting' as const, userCode: 'AB12-CD34',
     activationUrl: 'https://open-design.ai/cloud/cli/activate?code=AB12-CD34', expiresAt: '2030-01-01T00:00:00.000Z' };
-  const html = renderToStaticMarkup(h(LoginApproval, { login }));
+  const html = renderToStaticMarkup(h(LoginApproval, { login, onOpen: () => {}, opening: false, notice: null }));
+  assert.match(html, /在新窗口打开授权页/);
+  assert.match(html, /<button[^>]*type="button"/);
+  assert.doesNotMatch(html, /<button[^>]*disabled/, 'a ready panel leaves the window button usable');
+  // The ordinary link survives as the manual path (copy, password manager, existing session).
+  assert.match(html, /href="https:\/\/open-design\.ai\/cloud\/cli\/activate\?code=AB12-CD34"/);
   assert.match(html, /target="_blank"/);
   assert.match(html, /rel="noreferrer noopener"/);
+  assert.match(html, /复制链接手动打开/);
   assert.match(html, /AB12-CD34/);
-  assert.match(html, /打开授权页/);
-  assert.match(html, /密码管理器和自动填充/);
+  // The temporary window never reads the user's browser profile, and the panel says so.
+  assert.match(html, /独立的临时 Chrome/);
+  assert.match(html, /不会读取或改动你正在使用的浏览器配置/);
+
+  const opening = renderToStaticMarkup(h(LoginApproval, { login, onOpen: () => {}, opening: true }));
+  assert.match(opening, /正在打开…/);
+  assert.match(opening, /<button[^>]*disabled[^>]*>正在打开…/);
+  const hostless = renderToStaticMarkup(h(LoginApproval, { login }));
+  assert.match(hostless, /<button[^>]*disabled[^>]*>在新窗口打开授权页/, 'a Host without the opener cannot promise it');
+  assert.equal(hostless.includes('复制链接手动打开'), true, 'the manual link never depends on the Host');
+
+  for (const code of ['no-link', 'invalid-url', 'unavailable', 'failed'] as const) {
+    const noticed = renderToStaticMarkup(h(LoginApproval, { login, onOpen: () => {}, notice: { kind: 'error', text: code } }));
+    assert.match(noticed, new RegExp(code, 'u'));
+    assert.match(noticed, /role="alert"/);
+  }
+  const opened = renderToStaticMarkup(h(LoginApproval, { login, onOpen: () => {}, notice: { kind: 'status', text: 'opened-here' } }));
+  assert.match(opened, /role="status"/);
+
   for (const state of ['idle', 'launching', 'verifying', 'success', 'cancelled', 'error'] as const) {
     assert.equal(renderToStaticMarkup(h(LoginApproval, { login: { ...login, state } })), '');
   }
@@ -414,3 +437,4 @@ test('an unconfigured form snapshot keeps the guard on its host value', () => {
   assert.doesNotMatch(html, /type="checkbox" checked=""/u);
   assert.match(html, /本次运行已拦截 2 轮/u);
 });
+

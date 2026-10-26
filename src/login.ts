@@ -36,6 +36,12 @@ export interface LoginOptions {
   delay?: (ms: number, signal: AbortSignal) => Promise<void>;
   /** May shorten, but cannot extend, the local five-minute maximum. */
   timeoutMs?: number;
+  /**
+   * Called once whenever an approval job leaves `waiting` — success, cancel, expiry or
+   * failure — including on a timer with nobody polling. Resource cleanup lives here
+   * instead of in a status getter, whose side effect depends on someone reading it.
+   */
+  onSettled?: () => void;
 }
 export class LoginError extends Error {
   constructor(readonly code: 'opendesign/login-state' | 'opendesign/login-disposed' | 'opendesign/login-capture') {
@@ -54,6 +60,7 @@ interface Job {
   captured: unknown;
   committing: boolean;
   cancelRequested: boolean;
+  settled: boolean;
   cancellationMessage?: string;
 }
 
@@ -87,6 +94,11 @@ export class ConsoleLogin {
       } : {}),
     };
   }
+  /** Host-only: the live approval link, so the Host can open it in a bounded window. */
+  activationLink(): string | undefined {
+    const status = this.status();
+    return status.state === 'waiting' ? status.activationUrl : undefined;
+  }
   /** Synchronous/non-blocking and idempotent while capture/network/commit is pending. */
   start(request: LoginStartRequest): LoginStatus {
     if (this.disposed) throw new LoginError('opendesign/login-disposed');
@@ -98,7 +110,7 @@ export class ConsoleLogin {
     const job: Job = {
       id: randomUUID(), controller: new AbortController(), deadline: started + timeoutMs,
       status: { jobId: null, state: 'launching', startedAt: new Date(started).toISOString(), message: '正在申请官方设备授权码' },
-      captured: undefined, committing: false, cancelRequested: false,
+      captured: undefined, committing: false, cancelRequested: false, settled: false,
     };
     job.status.jobId = job.id;
     this.job = job;
@@ -122,7 +134,8 @@ export class ConsoleLogin {
   }
   dispose(): void {
     this.disposed = true;
-    if (this.job) this.requestCancellation(this.job, '服务已卸载，登录已取消');
+    const job = this.job;
+    if (job) { this.requestCancellation(job, '服务已卸载，登录已取消'); this.settle(job); }
   }
   private alive(job: Job): boolean {
     return this.job === job && !this.disposed && !job.controller.signal.aborted && ACTIVE.has(job.status.state);
@@ -165,6 +178,14 @@ export class ConsoleLogin {
     this.clearCode(job);
     this.stopTimer(job);
     job.controller.abort();
+    this.settle(job);
+  }
+  /** Report one terminal transition per job, exactly once. */
+  private settle(job: Job): void {
+    if (job.settled) return;
+    job.settled = true;
+    try { this.options.onSettled?.(); }
+    catch { /* A cleanup callback cannot change the job's recorded outcome. */ }
   }
   private async run(job: Job): Promise<void> {
     const signal = job.controller.signal;
@@ -179,7 +200,7 @@ export class ConsoleLogin {
     if (this.now() >= job.deadline) { this.expire(job); return; }
     this.armExpiry(job);
     job.status.state = 'waiting';
-    job.status.message = '请在常用浏览器打开官方授权页，使用已保存的密码登录并确认设备码';
+    job.status.message = '请在授权窗口或常用浏览器打开官方授权页，登录并确认设备码';
     job.status.activationUrl = device.activationUrl;
     job.status.userCode = device.userCode;
     job.status.expiresAt = new Date(job.deadline).toISOString();

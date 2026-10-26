@@ -101,6 +101,13 @@ export interface SaveApiKeyRequest {
   expectedRevision: string;
 }
 
+/** Outcome of asking the Host to show the approval page in a temporary window. */
+export interface ActivationOpenState {
+  code: 'opened' | 'no-link' | 'invalid-url' | 'unavailable' | 'failed';
+  opened: boolean;
+}
+const ACTIVATION_OPEN_CODES: readonly ActivationOpenState['code'][] = ['opened', 'no-link', 'invalid-url', 'unavailable', 'failed'];
+
 const LOGIN_PHASES: readonly LoginPhase[] = ['idle', 'launching', 'waiting', 'verifying', 'success', 'cancelled', 'error'];
 const QUOTA_STATES: readonly QuotaSnapshot['state'][] = ['ok', 'partial', 'need-login', 'error'];
 const SESSION_SOURCES: readonly SessionSource[] = ['desktop', 'login', 'environment'];
@@ -304,4 +311,10 @@ export function parseSaveApiKeyRequest(value: unknown): SaveApiKeyRequest {
   if (!HTTP_ASCII.test(key)) throw new Error('API Key 为空或含有不可用于 HTTP 请求头的字符');
   if (key.length > MAX_API_KEY) throw new Error(`API Key 不能超过 ${MAX_API_KEY} 字符`);
   return { value: key, expectedRevision: text(value.expectedRevision, '配置版本', MAX_REVISION) };
+}
+
+/** The opener reports one public code; an unknown value is refused, never guessed. */
+export function parseActivationOpenState(value: unknown): ActivationOpenState {
+  if (!record(value)) throw new Error('授权页打开结果必须是对象');
+  return { code: member(value.code, ACTIVATION_OPEN_CODES, '授权页打开结果'), opened: flag(value.opened, '授权页是否已打开') };
 }

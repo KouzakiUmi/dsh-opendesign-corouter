@@ -9,6 +9,7 @@ import { resolveSession } from '../src/auth.js';
 import { readQuota, CURRENT_URL, SUMMARY_URL, preflightUrl, usageUrl } from '../src/quota.js';
 import { DEVICE_AUTH_ENDPOINT } from '../src/device-auth.js';
 import type { RuntimeConfig } from '../src/config.js';
+import type { ActivationBrowser, ActivationLauncherOptions } from '../src/browser-open.js';
 
 const SESSION = credentialKey(name, 'console');
 const API_KEY = credentialKey(name, 'api-key');
@@ -52,7 +53,7 @@ function deviceFetcher(beforeToken?: () => Promise<void>): typeof fetch {
     return Response.json({ status: 'approved', ...tokens });
   };
 }
-async function fixture(options: { fetcher?: typeof fetch; setup?: (store: Store) => void; configure?: (current: RuntimeConfig) => void } = {}) {
+async function fixture(options: { fetcher?: typeof fetch; setup?: (store: Store) => void; configure?: (current: RuntimeConfig) => void; activation?: ActivationLauncherOptions } = {}) {
   const ctx = new Context();
   const credentialFiber = await ctx.plugin(Store);
   const store = ctx.get('credentials') as Store;
@@ -75,6 +76,7 @@ async function fixture(options: { fetcher?: typeof fetch; setup?: (store: Store)
     fetchModels: async (_base, key) => { assert.equal(key, tokens.runtimeKey); return [{ id: 'device-model', name: 'Device model', group: 'paid' }]; },
     modelsChanged: () => { modelChanges++; },
     loginOptions: { fetcher: options.fetcher ?? deviceFetcher(), delay: async () => { await tick(); } },
+    ...(options.activation === undefined ? {} : { activationOptions: options.activation }),
   };
   const fiber = await ctx.plugin(scope => { new OpenDesignCoRouterService(scope, () => current, deps); });
   return { service: ctx.openDesignCoRouter, store, current, deps, counts: () => ({ desktopReads, quotaReads, modelChanges }), dispose: async () => { await fiber.dispose(); await credentialFiber.dispose(); } };
@@ -242,5 +244,123 @@ test('Host legacy cookie grants stay read-only compatible and never become runti
     assert.equal(f.store.writes, 0);
     assert.deepEqual(await f.store.readRecord(SESSION), { kind: 'grant', payload: legacy });
     noSecrets(await f.service.status());
+  } finally { await f.dispose(); }
+});
+
+/** A stand-in Chrome that records navigations instead of visiting them. */
+function fakeChrome() {
+  const gotos: string[] = [];
+  let closes = 0;
+  const browser: ActivationBrowser = {
+    close: async () => { closes++; },
+    isConnected: () => true,
+    newPage: async () => ({ goto: async url => { gotos.push(url); } }),
+  };
+  return { browser, gotos, closes: () => closes };
+}
+
+test('openActivationPage navigates the temporarily launched window to the Host-owned link', async () => {
+  const chrome = fakeChrome();
+  let launches = 0;
+  const f = await fixture({ activation: { launch: async () => { launches++; return chrome.browser; } } });
+  try {
+    // Before an approval code exists there is nothing to show, and nothing is launched.
+    assert.deepEqual(await f.service.openActivationPage(), { code: 'no-link', opened: false });
+    assert.equal(launches, 0);
+    await start(f.service);
+    await until(() => f.service.loginStatus().state === 'waiting');
+    assert.deepEqual(await f.service.openActivationPage(), { code: 'opened', opened: true });
+    assert.deepEqual(chrome.gotos, ['https://open-design.ai/cloud/cli/activate?code=TEST-1234']);
+    // A second click reuses the same window instead of launching another Chrome.
+    assert.deepEqual(await f.service.openActivationPage(), { code: 'opened', opened: true });
+    assert.equal(launches, 1);
+    noSecrets(await f.service.openActivationPage());
+  } finally { await f.dispose(); }
+  assert.equal(chrome.closes(), 1, 'plugin disposal closes the temporary window');
+});
+
+test('openActivationPage refuses to open once the approval window is gone', async () => {
+  const chrome = fakeChrome();
+  const f = await fixture({ activation: { launch: async () => chrome.browser } });
+  try {
+    await start(f.service);
+    await until(() => f.service.loginStatus().state === 'waiting');
+    await f.service.cancelLogin({ jobId: f.service.loginStatus().jobId! });
+    assert.deepEqual(await f.service.openActivationPage(), { code: 'no-link', opened: false });
+    assert.deepEqual(chrome.gotos, [], 'a cancelled job has no link left to show');
+  } finally { await f.dispose(); }
+});
+
+test('a missing Chrome reports unavailable without failing the login itself', async () => {
+  const f = await fixture({ activation: { available: () => false, launch: async () => { throw new Error('must not launch'); } } });
+  try {
+    await start(f.service);
+    await until(() => f.service.loginStatus().state === 'waiting');
+    assert.deepEqual(await f.service.openActivationPage(), { code: 'unavailable', opened: false });
+    assert.equal(f.service.loginStatus().state, 'waiting');
+    noSecrets(await f.service.status());
+  } finally { await f.dispose(); }
+});
+
+test('cancelling or expiring an approval closes the window this plugin opened', async () => {
+  const chrome = fakeChrome();
+  const f = await fixture({ activation: { launch: async () => chrome.browser } });
+  try {
+    await start(f.service);
+    await until(() => f.service.loginStatus().state === 'waiting');
+    assert.deepEqual(await f.service.openActivationPage(), { code: 'opened', opened: true });
+    assert.equal(chrome.closes(), 0);
+    const cancelled = f.service.cancelLogin({ jobId: f.service.loginStatus().jobId! });
+    assert.equal(cancelled.state, 'cancelled');
+    await until(() => chrome.closes() === 1);
+    // The next approval may open a new window: closing is not retirement.
+    await start(f.service);
+    await until(() => f.service.loginStatus().state === 'waiting');
+    assert.deepEqual(await f.service.openActivationPage(), { code: 'opened', opened: true });
+  } finally { await f.dispose(); }
+});
+
+test('the approval job closes its window on every terminal transition without polling', async () => {
+  const chrome = fakeChrome();
+  const f = await fixture({ activation: { launch: async () => chrome.browser } });
+  try {
+    // Each cycle opens a window, then ends the job through a non-polling path.
+    for (const end of ['cancel', 'success'] as const) {
+      await start(f.service);
+      await until(() => f.service.loginStatus().state === 'waiting');
+      assert.deepEqual(await f.service.openActivationPage(), { code: 'opened', opened: true });
+      const before = chrome.closes();
+      if (end === 'cancel') f.service.cancelLogin({ jobId: f.service.loginStatus().jobId! });
+      else await until(() => f.service.loginStatus().state === 'success');
+      await until(() => chrome.closes() === before + 1);
+    }
+  } finally { await f.dispose(); }
+});
+
+test('an expiry that nobody polls still closes the window', async () => {
+  // The token endpoint never answers, so only the expiry timer can end this job — a
+  // successful approval is impossible. No status surface is read while waiting.
+  const chrome = fakeChrome();
+  const f = await fixture({
+    activation: { launch: async () => chrome.browser },
+    fetcher: async input => {
+      if (String(input) === DEVICE_AUTH_ENDPOINT) {
+        return Response.json({ deviceId: 'fixture-device', deviceSecret: 'fixture-poll-secret', userCode: 'SHORT-1',
+          activationUrl: 'https://open-design.ai/cloud/cli/activate?code=SHORT-1', pollIntervalSeconds: 1,
+          expiresAt: new Date(Date.now() + 60).toISOString() });
+      }
+      return new Promise<Response>(() => undefined);
+    },
+  });
+  try {
+    await start(f.service);
+    await until(() => f.service.loginStatus().state === 'waiting');
+    assert.deepEqual(await f.service.openActivationPage(), { code: 'opened', opened: true });
+    await new Promise(resolve => setTimeout(resolve, 400));
+    // Assert the window closed BEFORE reading any state, so the read cannot cause it.
+    // The job's exact terminal code depends on the poll/expiry race in this fixture, but
+    // every path is terminal and every terminal path must take the window away.
+    await until(() => chrome.closes() === 1);
+    assert.notEqual(f.service.loginStatus().state, 'waiting', 'the job itself reached a terminal state');
   } finally { await f.dispose(); }
 });

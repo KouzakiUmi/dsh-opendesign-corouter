@@ -8,6 +8,7 @@ import {
   parseCancelLoginRequest,
   parseLoginState,
   parseQuotaSnapshot,
+  parseActivationOpenState,
   parseSaveApiKeyRequest,
   parseStartLoginRequest,
   parseStatus,
@@ -45,10 +46,10 @@ function through(method: string, value: unknown): unknown {
   return descriptor.result.create().parse(value);
 }
 
-test('eight descriptors state every wire fact typert validates', () => {
+test('nine descriptors state every wire fact typert validates', () => {
   const descriptors = openDesignCoRouterRemote.descriptors;
   assert.equal(openDesignCoRouterRemote.package, REMOTE_PACKAGE);
-  assert.deepEqual(descriptors.map(d => d.method), ['status', 'refreshModels', 'refreshQuota', 'refreshQuotaNow', 'startLogin', 'loginStatus', 'cancelLogin', 'saveApiKey']);
+  assert.deepEqual(descriptors.map(d => d.method), ['status', 'refreshModels', 'refreshQuota', 'refreshQuotaNow', 'startLogin', 'loginStatus', 'cancelLogin', 'openActivationPage', 'saveApiKey']);
   for (const descriptor of descriptors) {
     // typert rejects an empty/#-bearing id, a foreign service, and any non-RPC segment.
     assert.equal(descriptor.id, `${REMOTE_PACKAGE}#${REMOTE_SERVICE}/${descriptor.method}`);
@@ -196,4 +197,16 @@ test('a saved key is trimmed once and must be HTTP-safe ASCII', () => {
   assert.throws(() => parseSaveApiKeyRequest({ value: 'sk-abc' }), /配置版本/u);
   // The parsed request is what the Host writes; it never requests the old value back.
   assert.deepEqual(Object.keys(parseSaveApiKeyRequest({ value: 'sk-abc', expectedRevision: 'r' })).sort(), ['expectedRevision', 'value']);
+});
+
+test('the activation-window result is a closed set of public codes', () => {
+  for (const code of ['opened', 'no-link', 'invalid-url', 'unavailable', 'failed'] as const) {
+    assert.deepEqual(through('openActivationPage', { code, opened: code === 'opened' }), { code, opened: code === 'opened' });
+  }
+  // No URL, browser handle or error text may travel back through this result.
+  assert.deepEqual(through('openActivationPage', { code: 'opened', opened: true, url: 'https://evil.test', error: 'PRIVATE', pid: 42 }), { code: 'opened', opened: true });
+  for (const code of ['launched', 'OPENED', '', 'success']) assert.throws(() => parseActivationOpenState({ code, opened: true }), /授权页打开结果/u, code);
+  assert.throws(() => parseActivationOpenState({ code: 'opened', opened: 'yes' }), /授权页是否已打开/u);
+  assert.throws(() => parseActivationOpenState({ opened: true }), /授权页打开结果/u);
+  assert.throws(() => parseActivationOpenState(null), /必须是对象/u);
 });
