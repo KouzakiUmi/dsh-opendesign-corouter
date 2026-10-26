@@ -1,0 +1,4 @@
+- insert:
+    - id: llm-opendesign-corouter
+      name: dsh-opendesign-corouter
+      config: {}

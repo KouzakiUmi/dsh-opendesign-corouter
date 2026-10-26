@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Config, assertBaseURL, readConfig } from '../src/config.js';
+test('configuration rejects unsafe URLs before persistence and exposes live defaults', () => {
+  const config = readConfig(Config({}));
+  assert.equal(config.emptyTurnGuard, true);
+  assert.equal(config.useDesktopCredential, true);
+  assert.equal(config.baseURL, 'https://amr-link.open-design.ai/v1');
+  assert.equal(assertBaseURL('https://example.com/v1/'), 'https://example.com/v1');
+  for (const baseURL of ['https://user:password@example.com/v1', 'https://example.com/v1?secret=fixture', 'https://example.com/v1#fragment', 'http://example.com/v1', 'not a URL']) assert.throws(() => Config({ baseURL }));
+  assert.equal(readConfig(Config({ baseURL: 'http://127.0.0.1:8080/v1' })).baseURL, 'http://127.0.0.1:8080/v1');
+});

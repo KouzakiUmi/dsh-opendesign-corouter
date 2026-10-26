@@ -1,0 +1,105 @@
+{
+  "scope": "Enabled visible text and placeholders; WCAG sRGB contrast calculation; offline official palette fixture, not a full accessibility certification.",
+  "checks": [
+    {
+      "label": "1-light-概览",
+      "checked": 29,
+      "minimum": 5.8
+    },
+    {
+      "label": "1-light-模型",
+      "checked": 116,
+      "minimum": 5.8
+    },
+    {
+      "label": "1-light-连接与登录",
+      "checked": 22,
+      "minimum": 5.8
+    },
+    {
+      "label": "1-light-高级",
+      "checked": 19,
+      "minimum": 5.8
+    },
+    {
+      "label": "1-light-hover",
+      "checked": 22,
+      "minimum": 5.8
+    },
+    {
+      "label": "1-light-error",
+      "checked": 30,
+      "minimum": 5.77
+    },
+    {
+      "label": "2-dark-概览",
+      "checked": 29,
+      "minimum": 10.42
+    },
+    {
+      "label": "2-dark-模型",
+      "checked": 116,
+      "minimum": 9.25
+    },
+    {
+      "label": "2-dark-连接与登录",
+      "checked": 22,
+      "minimum": 9.25
+    },
+    {
+      "label": "2-dark-高级",
+      "checked": 19,
+      "minimum": 10.42
+    },
+    {
+      "label": "2-dark-hover",
+      "checked": 22,
+      "minimum": 9.25
+    },
+    {
+      "label": "2-dark-error",
+      "checked": 30,
+      "minimum": 4.95
+    },
+    {
+      "label": "3-light-概览",
+      "checked": 29,
+      "minimum": 5.8
+    },
+    {
+      "label": "3-light-模型",
+      "checked": 116,
+      "minimum": 5.8
+    },
+    {
+      "label": "3-light-连接与登录",
+      "checked": 22,
+      "minimum": 5.8
+    },
+    {
+      "label": "3-light-高级",
+      "checked": 19,
+      "minimum": 5.8
+    },
+    {
+      "label": "3-light-hover",
+      "checked": 22,
+      "minimum": 5.8
+    },
+    {
+      "label": "3-light-error",
+      "checked": 30,
+      "minimum": 5.77
+    },
+    {
+      "label": "forced-colors-connection",
+      "checked": 22,
+      "minimum": 13.98
+    },
+    {
+      "label": "dark-mobile-overview",
+      "checked": 29,
+      "minimum": 10.42
+    }
+  ]
+}
