@@ -38,6 +38,8 @@ export async function readDesktopQuota(session: AuthSession, signal?: AbortSigna
     consoleJson(`${session.apiUrl}/api/v1/wallet/balance`, session, deadline, fetcher),
     cli,
   ]);
+  // An expired wallet credential is not a scope limitation, even if the CLI still has data.
+  if (wallet.status === 'rejected' && wallet.reason instanceof ConsoleError && wallet.reason.kind === 'auth') throw wallet.reason;
   const walletBalances = wallet.status === 'fulfilled' ? normalizeBalances(wallet.value) : {};
   const cliBalances = funding.status === 'fulfilled' && 'balance' in funding.value ? normalizeBalances({ balanceUsd: funding.value.balance }) : {};
   const windows = funding.status === 'fulfilled' ? funding.value.windows : [];
@@ -56,10 +58,10 @@ export async function readDesktopQuota(session: AuthSession, signal?: AbortSigna
   // (`billing/summary`); `vela` has no command that reports them. Leave both unknown instead of
   // inferring them, and say which half is missing so the host can fall back deliberately.
   const note = noSubscription
-    ? '桌面登录态显示该账号没有 Design Plan 订阅；未读到的分池保持未知。如需完整分池，请在连接页登录并关闭“优先桌面登录态”。'
+    ? '桌面登录态显示该账号没有 Design Plan 订阅；未读到的分池保持未知。可在连接页完成独立登录，插件会优先采用可读取的完整额度。'
     : !windows.length
-      ? '桌面登录态未返回套餐窗口；已读到的钱包余额照常显示，未读到的分池保持未知。如需完整分池，请在连接页登录并关闭“优先桌面登录态”。'
-      : '桌面登录态部分接口权限受限；未读到的分池显示未知。如需完整分池，请在连接页登录并关闭“优先桌面登录态”。';
+      ? '桌面登录态未返回套餐窗口；已读到的钱包余额照常显示，未读到的分池保持未知。可在连接页完成独立登录，插件会优先采用可读取的完整额度。'
+      : '桌面登录态部分接口权限受限；未读到的分池显示未知。可在连接页完成独立登录，插件会优先采用可读取的完整额度。';
   return { state: 'partial', source: 'desktop', updatedAt, windows, balances,
     ...(tier ? { tier } : {}), ...(eligible === undefined ? {} : { eligible }),
     note,

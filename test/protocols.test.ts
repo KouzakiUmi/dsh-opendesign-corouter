@@ -263,6 +263,100 @@ test('Responses 交错文本/推理/工具调用与不相交 usage', async () =>
   assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'tool-calls' } });
 });
 
+test('Responses 完整工具项补齐参数后缀，增量与终块一致且不重复', async t => {
+  const argumentsText = '{"path":"a"}';
+  const item = { id: 'fc_1', type: 'function_call', call_id: 'call_1', name: 'read', arguments: argumentsText };
+  for (const source of ['done', 'completed'] as const) {
+    for (const prefix of ['', '{"path":', argumentsText]) {
+      await t.test(`${source}: ${JSON.stringify(prefix)}`, async () => {
+        const chunks = await streamOfUntilFinish('responses', [
+          { type: 'response.output_item.added', output_index: 0, item: { ...item, arguments: '' } },
+          { type: 'response.function_call_arguments.delta', item_id: item.id, output_index: 0, delta: prefix },
+          ...(source === 'done' ? [{ type: 'response.output_item.done', output_index: 0, item }] : []),
+          { type: 'response.completed', response: { status: 'completed', output: [item] } },
+        ]);
+        const deltas = chunks.filter(chunk => chunk.type === 'tool-call-delta');
+        assert.equal(deltas.map(chunk => chunk.argumentsDelta).join(''), argumentsText);
+        assert.deepEqual(deltas.map(chunk => chunk.argumentsDelta).filter(Boolean), [prefix, argumentsText.slice(prefix.length)].filter(Boolean));
+        assert.ok(deltas.every(chunk => chunk.index === 0 && chunk.id === item.call_id));
+        assert.equal(chunks.filter(chunk => chunk.type === 'block-start').length, 1);
+        assert.deepEqual(blocks(chunks), [{ type: 'tool-call', id: item.call_id, name: item.name, arguments: argumentsText }]);
+        assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'tool-calls' } });
+      });
+    }
+  }
+});
+
+test('Responses 仅完整工具项也会投递参数，保留原始空字符串', async t => {
+  for (const source of ['done', 'completed'] as const) {
+    for (const argumentsText of ['', '{"path":"a"}']) {
+      await t.test(`${source}: ${JSON.stringify(argumentsText)}`, async () => {
+        const item = { id: 'fc_1', type: 'function_call', call_id: 'call_1', name: 'read', arguments: argumentsText };
+        const chunks = await streamOf('responses', [
+          ...(source === 'done' ? [{ type: 'response.output_item.done', output_index: 0, item }] : []),
+          { type: 'response.completed', response: { status: 'completed', output: [item] } },
+        ]);
+        const deltas = chunks.filter(chunk => chunk.type === 'tool-call-delta');
+        assert.equal(deltas.map(chunk => chunk.argumentsDelta).join(''), argumentsText);
+        assert.equal(chunks.filter(chunk => chunk.type === 'block-start').length, 1);
+        assert.deepEqual(blocks(chunks), [{ type: 'tool-call', id: item.call_id, name: item.name, arguments: argumentsText }]);
+        assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'tool-calls' } });
+      });
+    }
+  }
+});
+
+test('Responses 权威工具参数矛盾或缩短时，在终块和成功 finish 前拒绝', async t => {
+  const item = { id: 'fc_1', type: 'function_call', call_id: 'call_1', name: 'read' };
+  for (const source of ['done', 'completed', 'done-then-completed'] as const) {
+    for (const argumentsText of ['{"other":"a"}', '{"path":', '']) {
+      await t.test(`${source}: ${JSON.stringify(argumentsText)}`, async () => {
+        const seen: StreamChunk[] = [];
+        const streamed = '{"path":"a"}';
+        const authoritative = { ...item, arguments: argumentsText };
+        const events = [
+          { type: 'response.output_item.added', output_index: 0, item },
+          { type: 'response.function_call_arguments.delta', item_id: item.id, output_index: 0, delta: streamed },
+          ...(source === 'done-then-completed' ? [{ type: 'response.output_item.done', output_index: 0, item: { ...item, arguments: streamed } }] : []),
+          ...(source === 'done' ? [{ type: 'response.output_item.done', output_index: 0, item: authoritative }] : []),
+          { type: 'response.completed', response: { status: 'completed', output: [authoritative] } },
+        ];
+        await assert.rejects(async () => {
+          for await (const chunk of protocolFor('responses').stream(body(events), new AbortController().signal, 1000)) {
+            seen.push(chunk);
+            if (chunk.type === 'finish') break;
+          }
+        }, { code: 'INVALID_RESPONSE' });
+        assert.equal(seen.some(chunk => chunk.type === 'block-end' || chunk.type === 'finish'), false);
+      });
+    }
+  }
+});
+
+test('Responses completed 按 call_id 补齐交错工具调用，不新建重复块', async () => {
+  const first = { id: 'fc_1', type: 'function_call', call_id: 'call_1', name: 'read' };
+  const second = { id: 'fc_2', type: 'function_call', call_id: 'call_2', name: 'read' };
+  const chunks = await streamOf('responses', [
+    { type: 'response.output_item.added', output_index: 0, item: first },
+    { type: 'response.output_item.added', output_index: 1, item: second },
+    { type: 'response.function_call_arguments.delta', item_id: first.id, output_index: 0, delta: '{"path":' },
+    { type: 'response.function_call_arguments.delta', item_id: second.id, output_index: 1, delta: '{"path":"b"}' },
+    { type: 'response.completed', response: { status: 'completed', output: [
+      { type: 'function_call', call_id: first.call_id, name: first.name, arguments: '{"path":"a"}' },
+      { ...second, arguments: '{"path":"b"}' },
+    ] } },
+  ]);
+  for (const [index, args] of ['{"path":"a"}', '{"path":"b"}'].entries()) {
+    const joined = chunks.filter(chunk => chunk.type === 'tool-call-delta').filter(chunk => chunk.index === index).map(chunk => chunk.argumentsDelta).join('');
+    assert.equal(joined, args);
+  }
+  assert.equal(chunks.filter(chunk => chunk.type === 'block-start').length, 2);
+  assert.deepEqual(blocks(chunks), [
+    { type: 'tool-call', id: first.call_id, name: first.name, arguments: '{"path":"a"}' },
+    { type: 'tool-call', id: second.call_id, name: second.name, arguments: '{"path":"b"}' },
+  ]);
+});
+
 test('Messages 交错 thinking/文本/工具参数分片与不相交 usage', async () => {
   const chunks = await streamOf('messages', [
     { type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 1, cache_creation_input_tokens: 2, cache_read_input_tokens: 3 } } },

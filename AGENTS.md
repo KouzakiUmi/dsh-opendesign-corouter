@@ -5,6 +5,9 @@
 This package connects OpenDesign CoRouter to DSH with separate Design Plan and paid-model providers. Its settings page is an operational configuration surface, not a static catalog.
 
 Required behavior:
+- Settings controls show pending values immediately and roll back rejected saves. Serialize configuration writes, track every pending field, and distinguish namespace readiness from transport writability. Load local status independently of quota reads; background quota refresh must not hold a saved control disabled.
+- Configuration schemas must survive JSON serialization and fresh-browser rehydration. Transform callbacks must be self-contained; validate the shipped schema in the offline browser fixture as well as the Host. Configuration and Remote field limits must agree.
+- Settings prioritize actionable connection status and controls; model parameters and explanatory details are progressively disclosed. Disabled controls explain loading, unavailable, or read-only state. Model capacity edits validate output against the effective context budget before saving.
 - Quota displays Design Plan windows, subscription credits, recharge credits, and total balance as distinct amounts. Window resets, subscription period end, and the next local refresh are different timestamps. Missing values remain unknown.
 - Desktop authentication is tried first when enabled. A complete saved console session may replace a partial desktop result as one whole snapshot; account data is never combined across identities.
 - Each model can be enabled or disabled and given explicit generation defaults. Disabling affects both advertised models and direct invocation. Settings are persisted through the host configuration service.

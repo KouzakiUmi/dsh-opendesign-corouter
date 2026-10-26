@@ -229,12 +229,27 @@ export async function* streamResponses(
     out.push({ type: 'tool-call-delta', index: call.index, id: ToolCallId(call.id), ...name, argumentsDelta: delta });
   }
 
+  /** 完整项是权威快照；已发增量只能追加，不能回退或改写。 */
+  function completeCall(call: CallState, item: Record<string, unknown>, out: StreamChunk[]): void {
+    const args = item.arguments;
+    let delta = '';
+    if (args !== undefined) {
+      // 空字符串也是权威值，不能用 str() 当作“字段缺失”跳过矛盾校验。
+      if (typeof args !== 'string' || !args.startsWith(call.args)) {
+        throw new LlmError('OpenDesign：工具调用完整参数与流式增量不一致', 'INVALID_RESPONSE');
+      }
+      delta = args.slice(call.args.length);
+      call.args = args;
+    }
+    flushCall(call, delta, out);
+  }
+
   function keyFor(value: Record<string, unknown>, kind: string, outputIndex?: number): string {
     const itemId = str(value.item_id) ?? (outputIndex === undefined ? undefined : keyByOutput.get(outputIndex));
     return `${kind}:${itemId ?? `idx:${outputIndex ?? -1}`}`;
   }
 
-  /** 只出现在终态 `output` 里的输出项补成块。 */
+  /** 终态 `output` 补齐已有工具调用，也把仅在终态出现的输出项补成块。 */
   function hydrate(output: unknown, out: StreamChunk[]): void {
     if (!Array.isArray(output)) return;
     for (const item of output) {
@@ -242,10 +257,10 @@ export async function* streamResponses(
       if (item.type === 'function_call') {
         const itemId = str(item.id) ?? str(item.call_id);
         const callId = str(item.call_id) ?? itemId;
-        if (!callId || [...calls.values()].some(call => call.id === callId)) continue;
-        const call = callState(`call:${itemId ?? callId}`, item, out);
-        call.args = str(item.arguments) ?? call.args;
-        flushCall(call, call.args, out);
+        if (!callId) continue;
+        const existing = [...calls].find(([, call]) => call.id === callId);
+        const call = callState(existing?.[0] ?? `call:${itemId ?? callId}`, item, out);
+        completeCall(call, item, out);
         continue;
       }
       if (item.type === 'message') {
@@ -368,11 +383,7 @@ export async function* streamResponses(
         const outputIndex = int(value.output_index);
         if (item.type === 'function_call') {
           const call = callState(keyFor(value, 'call', outputIndex), item, out);
-          const args = str(item.arguments);
-          if (args !== undefined && call.args === '') {
-            call.args = args;
-            flushCall(call, args, out);
-          } else flushCall(call, '', out);
+          completeCall(call, item, out);
         } else if (item.type === 'message') {
           const key = `text:${str(item.id) ?? `idx:${outputIndex ?? -1}`}:0`;
           if (!texts.has(key)) {

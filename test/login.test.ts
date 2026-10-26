@@ -208,6 +208,64 @@ test('a commit that already won the race reports success even after a cancel', a
   assert.equal(statusOf(login).state, 'success');
 });
 
+test('timeout, page close, disconnect and dispose defer to the in-flight store result', async t => {
+  for (const trigger of ['timeout', 'page-close', 'disconnect', 'dispose'] as const) {
+    for (const accepted of [false, true]) {
+      await t.test(`${trigger}: store ${accepted ? 'already accepted' : 'has not accepted'} the write`, async () => {
+        const state = recorder();
+        let release: (() => void) | undefined;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        let commitSignal: AbortSignal | undefined;
+        const fake = fakeBrowser(() => [{ name: 'sid', value: COOKIE_VALUE }]);
+        const login = new ConsoleLogin(callbacks(state, {
+          commit: async (cookie, captured, signal, expiresAt) => {
+            commitSignal = signal;
+            // Model both sides of the store's atomic acceptance boundary, not only a
+            // callback that happens to ignore cancellation before writing.
+            if (accepted) state.commits.push({ cookie, captured, expiresAt });
+            await gate;
+            if (!accepted) {
+              signal.throwIfAborted();
+              state.commits.push({ cookie, captured, expiresAt });
+            }
+            return {};
+          },
+        }), { launch: async () => fake.browser, pollMs: 1, delay: fastDelay, site: site(), timeoutMs: trigger === 'timeout' ? 100 : 5000 });
+        try {
+          const started = login.start({ expectedRevision: REVISION });
+          await waitFor(() => commitSignal !== undefined);
+          if (trigger === 'page-close') fake.closePage();
+          else if (trigger === 'disconnect') fake.disconnect();
+          else if (trigger === 'dispose') login.dispose();
+          await waitFor(() => commitSignal?.aborted === true);
+          assert.equal(statusOf(login).state, 'verifying', 'cancellation cannot announce the store outcome early');
+          assert.equal(statusOf(login).finishedAt, undefined);
+          assert.equal(statusOf(login).message, '正在确认会话保存结果');
+          assert.equal(fake.closed(), true, 'the browser closes without waiting for the pending store');
+          if (trigger !== 'dispose') {
+            assert.equal(login.start({ expectedRevision: REVISION }).jobId, started.jobId, 'a pending commit still owns this attempt');
+          }
+          // Teardown can emit more than one browser event. Neither may settle the
+          // transaction or replace the first cancellation reason.
+          fake.closePage();
+          fake.disconnect();
+          release?.();
+          await waitFor(() => statusOf(login).state === (accepted ? 'success' : 'cancelled'));
+          assert.equal(state.commits.length, accepted ? 1 : 0);
+          assert.equal(statusOf(login).finishedAt !== undefined, true);
+          if (accepted) assert.equal(statusOf(login).message?.includes('Cookie 已保存'), true);
+          else if (trigger === 'timeout') assert.equal(statusOf(login).message?.includes('超过五分钟'), true);
+          else if (trigger === 'dispose') assert.equal(statusOf(login).message?.includes('服务已卸载'), true);
+          else assert.equal(statusOf(login).message, '登录窗口已关闭，未保存 Cookie');
+        } finally {
+          release?.();
+          login.dispose();
+        }
+      });
+    }
+  }
+});
+
 test('a fatal commit failure is reported without retrying', async () => {
   const state = recorder();
   const fake = fakeBrowser(() => [{ name: 'sid', value: COOKIE_VALUE }]);

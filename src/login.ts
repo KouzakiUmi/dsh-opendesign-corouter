@@ -192,6 +192,7 @@ interface Job {
   committing: boolean;
   /** A cancel arrived while `commit` was in flight: only the store's own abort check decides. */
   cancelRequested: boolean;
+  cancellationMessage?: string;
 }
 
 export class ConsoleLogin {
@@ -248,7 +249,7 @@ export class ConsoleLogin {
     job.status.jobId = job.id;
     job.status.startedAt = job.startedAt;
     this.job = job;
-    job.timer = setTimeout(() => this.finish(job, 'cancelled', '登录已超过五分钟，请重新开始'), this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    job.timer = setTimeout(() => this.requestCancellation(job, '登录已超过五分钟，请重新开始'), this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     job.timer.unref?.();
     // The capture runs before the browser opens, so a revision conflict is discovered while
     // nothing is on screen yet.
@@ -270,25 +271,32 @@ export class ConsoleLogin {
   cancel(request: LoginJobRequest): LoginStatus {
     const job = this.job;
     if (!job || job.status.jobId !== request.jobId) return this.status();
-    if (job.committing) {
-      job.cancelRequested = true;
-      job.controller.abort();
-      return this.status();
-    }
-    if (ACTIVE.has(job.status.state)) this.finish(job, 'cancelled', '登录已取消，未保存 Cookie');
+    this.requestCancellation(job, '登录已取消，未保存 Cookie');
     return this.status();
   }
 
   /** Plugin teardown: abort the attempt and close the browser. */
   dispose(): void {
     const job = this.job;
-    if (job && job.committing) {
-      job.cancelRequested = true;
-      job.controller.abort();
-    } else if (job && ACTIVE.has(job.status.state)) {
-      this.finish(job, 'cancelled', '服务已卸载，登录已取消');
-    }
+    if (job) this.requestCancellation(job, '服务已卸载，登录已取消');
     this.disposed = true;
+  }
+
+  /** Every cancellation source must let an in-flight atomic store decide the final outcome. */
+  private requestCancellation(job: Job, message: string): void {
+    if (this.job !== job || !ACTIVE.has(job.status.state)) return;
+    if (!job.committing) {
+      this.finish(job, 'cancelled', message);
+      return;
+    }
+    if (!job.cancelRequested) {
+      job.cancellationMessage = message;
+      job.status.message = '正在确认会话保存结果';
+    }
+    job.cancelRequested = true;
+    this.stopTimer(job);
+    job.controller.abort();
+    void this.close(job);
   }
 
   private alive(job: Job): boolean {
@@ -326,7 +334,7 @@ export class ConsoleLogin {
     const browser = await launch(job.controller.signal);
     if (!browser) return null;
     job.browser = browser;
-    browser.on?.('disconnected', () => this.finish(job, 'cancelled', '登录窗口已关闭，未保存 Cookie'));
+    browser.on?.('disconnected', () => this.requestCancellation(job, '登录窗口已关闭，未保存 Cookie'));
     return browser;
   }
 
@@ -338,7 +346,7 @@ export class ConsoleLogin {
     const context = await browser.newContext();
     if (!this.alive(job)) { await this.close(job); return; }
     const page = await context.newPage();
-    page.on?.('close', () => this.finish(job, 'cancelled', '登录窗口已关闭，未保存 Cookie'));
+    page.on?.('close', () => this.requestCancellation(job, '登录窗口已关闭，未保存 Cookie'));
     if (!this.alive(job)) { await this.close(job); return; }
     // Navigate to the page that actually triggers sign-in; the site home is only a fallback
     // for the times the dashboard is down, so the user can still navigate somewhere useful.
@@ -416,7 +424,7 @@ export class ConsoleLogin {
     } catch (error) {
       job.committing = false;
       if (job.cancelRequested || job.controller.signal.aborted) {
-        this.finish(job, 'cancelled', '登录已取消，未保存 Cookie');
+        this.finish(job, 'cancelled', job.cancellationMessage ?? '登录已取消，未保存 Cookie');
         return 'cancelled';
       }
       if (FATAL_COMMIT_CODES.has(errorCode(error) ?? '')) {

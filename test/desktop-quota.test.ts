@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readDesktopQuota, type VelaRunner } from '../src/desktop-quota.js';
 import { desktopSession } from '../src/auth.js';
+import { ConsoleError } from '../src/quota.js';
 const session = desktopSession({ profile: 'prod', controlKey: 'fixture-desktop', signedIn: true });
 const walletFetcher: typeof fetch = async (url, init) => {
   assert.equal(String(url), 'https://amr-api.open-design.ai/api/v1/wallet/balance');
@@ -52,6 +53,18 @@ test('missing CLI can still display desktop wallet, not a fabricated zero quota'
   assert.equal(result.state, 'partial');
   assert.match(result.note ?? '', /未返回套餐窗口/u);
 });
+test('expired wallet authentication is not hidden by CLI windows or a no-plan result', async () => {
+  for (const eligible of [true, false]) {
+    const runner: VelaRunner = async argv => argv[0] === 'team-projects'
+      ? { workspaceId: 'workspace_fixture' }
+      : { codingPlan: { eligible, windows: eligible ? [{ durationSeconds: 18000, usedCredits: '1', limitCredits: '10' }] : [] } };
+    await assert.rejects(readDesktopQuota(session, undefined, runner, async () => new Response('{}', { status: 401 })),
+      error => error instanceof ConsoleError && error.kind === 'auth');
+    const partial = await readDesktopQuota(session, undefined, runner, async () => new Response('{}', { status: 403 }));
+    assert.equal(partial.state, 'partial', 'limited scope still preserves usable CLI readings');
+  }
+});
+
 test('a definite no-subscription answer survives an unreadable wallet', async () => {
   const runner: VelaRunner = async argv => argv[0] === 'team-projects'
     ? { workspaceId: 'workspace_fixture' }

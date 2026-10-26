@@ -3,12 +3,12 @@
   "checks": [
     {
       "label": "1-light-概览",
-      "checked": 39,
+      "checked": 40,
       "minimum": 5.8
     },
     {
       "label": "1-light-模型",
-      "checked": 497,
+      "checked": 203,
       "minimum": 5.77
     },
     {
@@ -28,17 +28,17 @@
     },
     {
       "label": "1-light-error",
-      "checked": 40,
+      "checked": 41,
       "minimum": 5.77
     },
     {
       "label": "2-dark-概览",
-      "checked": 39,
+      "checked": 40,
       "minimum": 10.42
     },
     {
       "label": "2-dark-模型",
-      "checked": 497,
+      "checked": 203,
       "minimum": 4.95
     },
     {
@@ -58,17 +58,17 @@
     },
     {
       "label": "2-dark-error",
-      "checked": 40,
+      "checked": 41,
       "minimum": 4.95
     },
     {
       "label": "3-light-概览",
-      "checked": 39,
+      "checked": 40,
       "minimum": 5.8
     },
     {
       "label": "3-light-模型",
-      "checked": 497,
+      "checked": 203,
       "minimum": 5.77
     },
     {
@@ -88,7 +88,7 @@
     },
     {
       "label": "3-light-error",
-      "checked": 40,
+      "checked": 41,
       "minimum": 5.77
     },
     {
@@ -98,7 +98,7 @@
     },
     {
       "label": "dark-mobile-overview",
-      "checked": 39,
+      "checked": 40,
       "minimum": 10.42
     }
   ]

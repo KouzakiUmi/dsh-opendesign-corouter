@@ -13,7 +13,6 @@
  */
 
 import type { CatalogModel } from './catalog.js';
-import { record } from './util.js';
 
 /** One model's optional overrides; every field absent means "inherit the catalog row". */
 export interface ModelSettings {
@@ -34,73 +33,54 @@ export interface ModelSettings {
 /** Model id → settings. Keys are model ids, never provider-scoped. */
 export type ModelSettingsMap = Record<string, ModelSettings>;
 
-/** 上限与目录、远程设置视图保持同一量级。 */
-const MAX_ENTRIES = 512;
-const MAX_MODEL_ID_LENGTH = 128;
-/** 允许字母、数字与 `.` `_` `:` `/` `-`；不含空白、引号与路径穿越符。 */
-const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/u;
-const MAX_TEMPERATURE = 2;
-const MAX_TOP_P = 1;
-const MAX_TOKENS = 10_000_000;
-const MAX_CONTEXT_WINDOW = 100_000_000;
-/** 与 catalog.ts 的 EFFORTS_* 同一档位集合。 */
-const REASONING_EFFORTS: readonly string[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
 /** Never accepted as a model id: they would reach `Object.prototype` through a plain copy. */
 const RESERVED_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
-/** The only fields a settings object may carry; anything else is a smuggling attempt. */
-const SETTINGS_FIELDS: ReadonlySet<string> = new Set(['enabled', 'temperature', 'topP', 'maxTokens', 'contextWindow', 'reasoningEffort']);
-
-function flag(value: unknown): boolean {
-  if (typeof value !== 'boolean') throw new Error('模型设置的 enabled 必须是布尔值');
-  return value;
-}
-
-function bounded(value: unknown, max: number, label: 'temperature' | 'topP'): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > max) throw new Error(`模型设置的 ${label} 必须是 0 到 ${max} 之间的有限数字`);
-  return value;
-}
-
-function capacity(value: unknown, max: number, label: 'maxTokens' | 'contextWindow'): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`模型设置的 ${label} 必须是 1 到 ${max} 之间的整数`);
-  return value;
-}
-
-function effort(value: unknown): string {
-  const hit = REASONING_EFFORTS.find(candidate => candidate === value);
-  if (hit === undefined) throw new Error('模型设置的 reasoningEffort 不在允许的取值内');
-  return hit;
-}
-
-/** Rebuild one entry from the allowlist; unknown fields and secrets never survive. */
-function settingsOf(value: unknown): ModelSettings {
-  if (!record(value)) throw new Error('每个模型的设置必须是对象');
-  for (const field of Object.keys(value)) {
-    if (!SETTINGS_FIELDS.has(field)) throw new Error('模型设置含有不支持的字段');
-  }
-  const out: ModelSettings = {};
-  if (value.enabled !== undefined) out.enabled = flag(value.enabled);
-  if (value.temperature !== undefined) out.temperature = bounded(value.temperature, MAX_TEMPERATURE, 'temperature');
-  if (value.topP !== undefined) out.topP = bounded(value.topP, MAX_TOP_P, 'topP');
-  if (value.maxTokens !== undefined) out.maxTokens = capacity(value.maxTokens, MAX_TOKENS, 'maxTokens');
-  if (value.contextWindow !== undefined) out.contextWindow = capacity(value.contextWindow, MAX_CONTEXT_WINDOW, 'contextWindow');
-  if (value.reasoningEffort !== undefined) out.reasoningEffort = effort(value.reasoningEffort);
-  return out;
-}
 
 /**
- * Validate an untrusted settings payload (settings store, credential-free Host state)
- * into a fresh map. Rejects non-objects, oversized maps, reserved/unsafe ids, unknown
- * fields and out-of-range values; never returns the input's objects or arrays.
+ * Validate an untrusted settings payload into a fresh, allowlisted map.
+ * This is also a Schemastery transform: all runtime dependencies must live inside
+ * the function so JSON serialization and fresh-realm rehydration preserve validation.
  */
 export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
-  if (!record(value)) throw new Error('模型设置必须是对象');
+  // Match the Host record check without importing a closure dependency.
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('模型设置必须是对象');
   const keys = Object.keys(value);
-  if (keys.length > MAX_ENTRIES) throw new Error(`模型设置最多允许 ${MAX_ENTRIES} 个模型`);
+  if (keys.length > 512) throw new Error('模型设置最多允许 512 个模型');
+  const fields = new Set(['enabled', 'temperature', 'topP', 'maxTokens', 'contextWindow', 'reasoningEffort']);
+  const efforts: readonly unknown[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
   const out: ModelSettingsMap = {};
   for (const id of keys) {
-    if (RESERVED_KEYS.has(id)) throw new Error('模型设置不允许保留字段名');
-    if (!MODEL_ID.test(id)) throw new Error(`模型 ID 必须是 1–${MAX_MODEL_ID_LENGTH} 位字母、数字或 . _ : / -`);
-    out[id] = settingsOf(value[id]);
+    if (['__proto__', 'constructor', 'prototype'].includes(id)) throw new Error('模型设置不允许保留字段名');
+    if (!/^[A-Za-z0-9._:/-]{1,128}$/u.test(id)) throw new Error('模型 ID 必须是 1–128 位字母、数字或 . _ : / -');
+    const entry: unknown = (value as Record<string, unknown>)[id];
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('每个模型的设置必须是对象');
+    const settings = entry as Record<string, unknown>;
+    for (const field of Object.keys(settings)) {
+      if (!fields.has(field)) throw new Error('模型设置含有不支持的字段');
+    }
+    const parsed: ModelSettings = {};
+    if (settings.enabled !== undefined) {
+      if (typeof settings.enabled !== 'boolean') throw new Error('模型设置的 enabled 必须是布尔值');
+      parsed.enabled = settings.enabled;
+    }
+    for (const [field, max] of [['temperature', 2], ['topP', 1]] as const) {
+      const item = settings[field];
+      if (item === undefined) continue;
+      if (typeof item !== 'number' || !Number.isFinite(item) || item < 0 || item > max) throw new Error(`模型设置的 ${field} 必须是 0 到 ${max} 之间的有限数字`);
+      parsed[field] = item;
+    }
+    for (const [field, max] of [['maxTokens', 10_000_000], ['contextWindow', 100_000_000]] as const) {
+      const item = settings[field];
+      if (item === undefined) continue;
+      if (typeof item !== 'number' || !Number.isSafeInteger(item) || item < 1 || item > max) throw new Error(`模型设置的 ${field} 必须是 1 到 ${max} 之间的整数`);
+      parsed[field] = item;
+    }
+    if (settings.reasoningEffort !== undefined) {
+      if (typeof settings.reasoningEffort !== 'string' || !efforts.includes(settings.reasoningEffort)) throw new Error('模型设置的 reasoningEffort 不在允许的取值内');
+      parsed.reasoningEffort = settings.reasoningEffort;
+    }
+    if (parsed.maxTokens !== undefined && parsed.contextWindow !== undefined && parsed.maxTokens >= parsed.contextWindow) throw new Error('模型设置的 maxTokens 必须小于 contextWindow');
+    out[id] = parsed;
   }
   return out;
 }
@@ -113,10 +93,14 @@ export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
 export function applyModelSettings(row: CatalogModel, settings?: ModelSettings): CatalogModel {
   const { contextWindow, maxTokens } = settings ?? {};
   if (contextWindow === undefined && maxTokens === undefined) return { ...row };
+  // Validate each override independently; the adapter owns effective-capacity errors
+  // (including inherited catalog values) and reports them through its LlmError contract.
+  if (contextWindow !== undefined) parseModelSettingsMap({ model: { contextWindow } });
+  if (maxTokens !== undefined) parseModelSettingsMap({ model: { maxTokens } });
   return {
     ...row,
-    ...(contextWindow === undefined ? {} : { contextWindow: capacity(contextWindow, MAX_CONTEXT_WINDOW, 'contextWindow') }),
-    ...(maxTokens === undefined ? {} : { maxOutputTokens: capacity(maxTokens, MAX_TOKENS, 'maxTokens') }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(maxTokens === undefined ? {} : { maxOutputTokens: maxTokens }),
   };
 }
 

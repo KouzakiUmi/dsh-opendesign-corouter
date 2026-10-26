@@ -4,8 +4,8 @@ import { build } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { auditTheme } from './theme-audit.mjs';
 import assert from 'node:assert/strict';
-import { MODELS } from '../lib/index.js';
-const react = await build({ stdin: { contents: `import * as React from 'react'; import {createRoot} from 'react-dom/client'; window.__React=React; window.__mount=(component,props)=>{window.__root=createRoot(document.getElementById('root'));window.__root.render(React.createElement(component,props));};`, resolveDir: process.cwd(), loader: 'js' }, bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"development"' } });
+import { MODELS, Config } from '../lib/index.js';
+const react = await build({ stdin: { contents: `import * as React from 'react'; import {createRoot} from 'react-dom/client'; import Schema from '@deepseek-ai/schemastery'; window.__Schema=Schema; window.__React=React; window.__mount=(component,props)=>{window.__root=createRoot(document.getElementById('root'));window.__root.render(React.createElement(component,props));};`, resolveDir: process.cwd(), loader: 'js' }, bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"development"' } });
 const client = await readFile('lib/client.js', 'utf8');
 const theme = await readFile('test/fixtures/dsh-theme.css', 'utf8');
 assert.ok(!client.includes('node:'));
@@ -32,7 +32,13 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
   ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
 }));
-  await page.evaluate(rawModels => {
+  await page.evaluate(({ rawModels, wireSchema }) => {
+    // Rehydrate the shipped schema in the browser, without the Host module's closures.
+    for (const node of Object.values(wireSchema.refs)) {
+      if (node.meta) delete node.meta.volatile;
+    }
+    const schema = new window.__Schema(wireSchema);
+    const validateConfig = value => { schema(structuredClone(value)); };
     const resetAt = new Date(Date.now() + 86_400_000).toISOString();
     const initialQuota = () => ({
       state: 'ok', source: 'login', updatedAt: new Date().toISOString(), tier: 'Pro', eligible: true,
@@ -50,12 +56,16 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
       emptyTurnGuard: true, useDesktopCredential: true, baseURL: 'https://amr-link.open-design.ai/v1', apiKeyEnv: 'COROUTER_API_KEY',
       apiProtocol: 'chat-completions', modelSettings: {}, quotaRefreshSeconds: 60, requestTimeoutMs: 1800000, streamIdleTimeoutMs: 300000,
     };
+    validateConfig(config);
     let models = rawModels.map(model => ({ ...model, enabled: true }));
     let modelsSource = 'builtin';
     let modelsUpdatedAt;
     let modelsError;
     let snapshot = { status: 'ready', writable: true, value: config };
     const listeners = new Set(), disposers = [];
+    window.__holdQuota = true;
+    window.__holdSaves = false;
+    window.__rejectSave = false;
     window.__refreshQuotaCalls = 0;
     window.__forceRefreshCalls = 0;
     window.__refreshModelsCalls = 0;
@@ -108,6 +118,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
       refreshQuota: async (...args) => {
         if (args.length) throw new Error('refreshQuota requires zero arguments');
         window.__refreshQuotaCalls += 1;
+        if (window.__holdQuota) await new Promise(resolve => { window.__releaseQuota = resolve; });
         if (window.__autoRefreshBump && window.__refreshQuotaCalls >= 2) {
           quota = { ...quota, nextRefreshAt: new Date(Date.now() + 3_600_000).toISOString(), updatedAt: new Date().toISOString() };
           window.__autoRefreshBump = false;
@@ -127,11 +138,21 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     };
     window.__setQuotaPaused = () => { quota = { ...quota, state: 'partial', autoRefreshPaused: true, refreshFailures: 6, nextRefreshAt: undefined }; };
     window.__setModelsFail = value => { window.__modelsFail = value; };
+    window.__setFormState = (state, writable) => {
+      snapshot = { ...snapshot, status: state, writable, value: state === 'ready' ? config : undefined };
+      for (const cb of listeners) cb();
+    };
+    window.__saveCalls = [];
     const form = {
       getSnapshot: () => snapshot,
       subscribe: cb => { listeners.add(cb); return () => listeners.delete(cb); },
       set: async (field, value) => {
-        config = { ...config, [field]: value };
+        window.__saveCalls.push(field);
+        if (window.__holdSaves) await new Promise(resolve => { window.__releaseSave = resolve; });
+        if (window.__rejectSave) { window.__rejectSave = false; return false; }
+        const next = { ...config, [field]: value };
+        validateConfig(next);
+        config = next;
         syncConfig();
         snapshot = { ...snapshot, value: config };
         for (const cb of listeners) cb();
@@ -147,10 +168,65 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     };
     window.__cleanup = async () => { window.__root.unmount(); for (const off of disposers.reverse()) await off(); };
     window.__plugin.apply(ctx);
-  }, fixtureModels);
+  }, { rawModels: fixtureModels, wireSchema: JSON.parse(JSON.stringify(Config.toJSON())) });
   const config = () => page.evaluate(() => window.__config);
   const modelSettings = () => page.evaluate(() => window.__config.modelSettings ?? {});
   await page.getByRole('heading', { name: '额度概览', exact: true }).waitFor();
+  // A blocked quota reader must not prevent the configuration page from becoming usable.
+  await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
+  const desktopSwitch = page.getByRole('checkbox', { name: /优先使用桌面登录态/u });
+  await desktopSwitch.waitFor();
+  await page.waitForFunction(() => !document.querySelector('.odc-switch input').disabled, null, { timeout: 3000 });
+  await page.evaluate(() => { window.__holdSaves = true; });
+  await desktopSwitch.uncheck();
+  assert.equal(await desktopSwitch.isChecked(), false, 'pending save shows the requested checkbox state');
+  await page.getByText('正在保存设置…', { exact: true }).waitFor();
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.waitForFunction(() => window.__config.useDesktopCredential === false);
+  await page.waitForFunction(() => !document.querySelector('.odc-switch input').disabled, null, { timeout: 3000 });
+  assert.equal(await desktopSwitch.isEnabled(), true, 'a saved control must unlock while quota is pending');
+  await desktopSwitch.check();
+  await page.waitForFunction(() => window.__config.useDesktopCredential === true);
+  await page.getByRole('tab', { name: '高级', exact: true }).click();
+  const pendingGuard = page.getByRole('checkbox', { name: /启用空轮监控/u });
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await pendingGuard.uncheck();
+  assert.equal(await pendingGuard.isChecked(), false);
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
+  assert.equal(await pendingGuard.isChecked(), true, 'rejected save restores the accepted value');
+  // Namespace availability is separate from transport writability.
+  await page.evaluate(() => window.__setFormState('unavailable', true));
+  await page.getByText('配置暂不可用，请检查插件是否已启用。', { exact: true }).waitFor();
+  assert.equal(await pendingGuard.isDisabled(), true);
+  await page.evaluate(() => window.__setFormState('ready', false));
+  await page.getByText('当前设置为只读，无法保存修改。', { exact: true }).waitFor();
+  assert.equal(await pendingGuard.isDisabled(), true);
+  await page.evaluate(() => { window.__setFormState('ready', true); window.__holdSaves = true; window.__saveCalls = []; });
+  await pendingGuard.uncheck();
+  const queuedProtocol = page.getByLabel('API 协议', { exact: true });
+  await queuedProtocol.selectOption('responses');
+  assert.equal(await pendingGuard.isDisabled(), true, 'the first pending field remains locked');
+  assert.equal(await queuedProtocol.isDisabled(), true, 'the queued field is also locked');
+  assert.equal(await pendingGuard.isChecked(), false);
+  assert.equal(await queuedProtocol.inputValue(), 'responses');
+  assert.deepEqual(await page.evaluate(() => window.__saveCalls), ['emptyTurnGuard'], 'writes enter the Host one at a time');
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.waitForFunction(() => window.__config.emptyTurnGuard === false && window.__config.apiProtocol === 'responses');
+  assert.deepEqual(await page.evaluate(() => window.__saveCalls), ['emptyTurnGuard', 'apiProtocol']);
+  await pendingGuard.check();
+  await queuedProtocol.selectOption('chat-completions');
+  await page.waitForFunction(() => window.__config.apiProtocol === 'chat-completions');
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await pendingGuard.uncheck();
+  await queuedProtocol.selectOption('responses');
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.waitForFunction(() => window.__config.apiProtocol === 'responses');
+  await page.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
+  assert.equal(await pendingGuard.isChecked(), true, 'a later successful write must not conceal an earlier rejection');
+  await queuedProtocol.selectOption('chat-completions');
+  await page.evaluate(() => { window.__holdQuota = false; window.__releaseQuota(); });
+  await page.getByRole('tab', { name: '概览', exact: true }).click();
   await page.getByText('US$80.00', { exact: true }).waitFor();
   assert.equal(await page.getByRole('tab').count(), 4);
   for (const label of ['订阅账期结束', '下次额度恢复', '下次自动刷新']) {
@@ -190,6 +266,14 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
 
   // Models: switches, whole-map persistence, parameters, reset, stale-status ordering and discovery.
   await page.getByRole('tab', { name: '模型', exact: true }).click();
+  assert.equal(await page.locator('.odc-model-item').count(), 12, 'each group starts with six models');
+  await page.getByLabel('搜索付费 Provider', { exact: true }).fill('qwen');
+  await page.locator('.odc-model-item', { hasText: 'qwen3.7-max' }).waitFor();
+  await page.getByLabel('搜索付费 Provider', { exact: true }).fill('');
+  for (const group of await page.locator('.odc-model-groups > section').all()) {
+    const expand = group.getByRole('button', { name: /^显示全部/u });
+    if (await expand.count()) await expand.click();
+  }
   assert.equal(await page.locator('.odc-model-item').count(), fixtureModels.length);
   const luna = page.locator('.odc-model-item', { hasText: 'gpt-6-luna' });
   const lunaSwitch = luna.locator('input[type=checkbox]');
@@ -226,6 +310,12 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await contextWindow.fill('200000');
   await contextWindow.blur();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextWindow === 200000);
+  await contextWindow.fill('4096');
+  await contextWindow.blur();
+  await luna.getByText('最大输出必须小于上下文预算；请先增大上下文预算或减小最大输出。', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.__config.modelSettings['gpt-6-luna'].contextWindow), 200000);
+  await contextWindow.fill('200000');
+  await contextWindow.blur();
   await effort.selectOption('high');
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.reasoningEffort === 'high');
   assert.deepEqual(await modelSettings(), {
@@ -239,6 +329,10 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await temperature.blur();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.temperature === 0.7);
   await page.screenshot({ path: 'docs/previews/models.png', fullPage: true });
+  for (const group of await page.locator('.odc-model-groups > section').all()) {
+    const expand = group.getByRole('button', { name: /^显示全部/u });
+    if (await expand.count()) await expand.click();
+  }
   // Discovery success: source, timestamp and the new row become visible.
   await page.getByRole('button', { name: '从 OpenAI 刷新模型', exact: true }).click();
   await page.waitForFunction(() => window.__refreshModelsCalls === 1);

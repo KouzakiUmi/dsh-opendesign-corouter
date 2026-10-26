@@ -107,7 +107,7 @@ function renderModels(nextStatus: Status = status, nextSnapshot: FormSnapshot = 
     status: nextStatus,
     formSnapshot: nextSnapshot,
     setFormField: async () => true,
-    pendingField: null,
+    pendingField: [],
     onRefreshModels: () => {},
     refreshingModels: false,
     notice: null,
@@ -119,7 +119,7 @@ function renderAdvanced(nextStatus: Status = status, nextSnapshot: FormSnapshot 
     status: nextStatus,
     formSnapshot: nextSnapshot,
     setFormField: async () => true,
-    pendingField: null,
+    pendingField: [],
   }));
 }
 
@@ -296,7 +296,7 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
   });
   assert.equal((html.match(/type="checkbox"/g) ?? []).length, 3);
   assert.equal((html.match(/type="checkbox" checked=""/g) ?? []).length, 2);
-  assert.equal((html.match(/<summary[^>]*>参数设置<\/summary>/g) ?? []).length, 3);
+  assert.equal((html.match(/<summary[^>]*>参数设置 · (?:已自定义|使用默认值)<\/summary>/g) ?? []).length, 3);
   for (const label of ['温度', 'Top P', '最大输出（tokens）', '上下文预算（tokens）', '默认思考深度']) {
     assert.match(html, new RegExp(`<label for="[^"]+">${label}</label>`));
   }
@@ -364,6 +364,23 @@ test('advanced offers three protocols, a read-only gateway and real timeout fiel
   assert.match(html, /启用空轮监控/u);
   assert.match(html, /本次运行已拦截 2 轮/u);
   assert.match(html, /type="checkbox" checked=""/u);
+});
+
+test('unavailable writable forms cannot expose editable controls', () => {
+  const unavailable: FormSnapshot = { status: 'unavailable', writable: true, value: undefined };
+  const html = renderAdvanced(status, unavailable);
+  assert.match(html, /type="checkbox" disabled=""/u);
+  const modelHtml = renderModels(status, unavailable);
+  assert.equal((modelHtml.match(/type="checkbox" disabled=""/g) ?? []).length, models.length);
+});
+
+test('all concurrently pending fields stay disabled', () => {
+  const html = renderToStaticMarkup(h(Advanced, {
+    status, formSnapshot: snapshot, setFormField: async () => true,
+    pendingField: ['emptyTurnGuard', 'apiProtocol'],
+  }));
+  assert.match(html, /type="checkbox" disabled=""/u);
+  assert.match(html, /<select[^>]*id="odc-api-protocol"[^>]*disabled=""/u);
 });
 
 test('advanced shows the selected protocol path from the form snapshot', () => {

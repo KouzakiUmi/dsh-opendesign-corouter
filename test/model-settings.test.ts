@@ -70,6 +70,24 @@ test('reasoningEffort accepts only the catalog vocabulary', () => {
   for (const reasoningEffort of ['HIGH', 'maximal', 'ultra-high', '', ' ', 1, null]) assert.throws(() => parseModelSettingsMap({ 'glm-5.2': { reasoningEffort } }), /reasoningEffort 不在允许的取值内/u);
 });
 
+test('explicit output capacity must be smaller than explicit context capacity', () => {
+  for (const maxTokens of [8192, 8193]) {
+    assert.throws(() => parseModelSettingsMap({ 'fixture-secret': { maxTokens, contextWindow: 8192 } }), error => {
+      assert.match(String(error), /maxTokens 必须小于 contextWindow/u);
+      assert.doesNotMatch(String(error), /fixture-secret/u);
+      return true;
+    });
+  }
+  assert.deepEqual(parseModelSettingsMap({ model: { maxTokens: 8191, contextWindow: 8192 } }), { model: { maxTokens: 8191, contextWindow: 8192 } });
+  // A single explicit capacity inherits its counterpart from the catalog at invocation.
+  assert.deepEqual(parseModelSettingsMap({ model: { maxTokens: 8192 } }), { model: { maxTokens: 8192 } });
+  assert.deepEqual(parseModelSettingsMap({ model: { contextWindow: 8192 } }), { model: { contextWindow: 8192 } });
+  const row = findModel('glm-5.2');
+  assert.ok(row);
+  // Applying a row preserves the adapter's existing INVALID_REQUEST error boundary.
+  assert.deepEqual(applyModelSettings(row, { maxTokens: 8192, contextWindow: 8192 }), { ...row, maxOutputTokens: 8192, contextWindow: 8192 });
+});
+
 test('applyModelSettings overrides capacity on a copy and never mutates the catalog row', () => {
   const row = findModel('deepseek-v4.1-flash');
   assert.ok(row);
