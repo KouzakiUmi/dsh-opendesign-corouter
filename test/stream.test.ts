@@ -45,6 +45,7 @@ test('idle and abort close the upstream reader', async () => {
 test('token accounting omits invalid cache counts; failure taxonomy is stable', () => {
   assert.deepEqual(tokenUsage({ prompt_tokens: 5, completion_tokens: 3, prompt_cache_hit_tokens: 9 }), { inputTokens: 5, outputTokens: 3, totalTokens: 8 });
   assert.equal(gatewayError(429, {}).code, 'RATE_LIMIT');
-  assert.equal(gatewayError(403, {}).code, 'INVALID_CREDENTIAL');
-  assert.equal(gatewayError(402, { error: { message: 'insufficient balance' } }).code, 'ACCOUNT_QUOTA');
+  // Permission denial does not prove an invalid key; wallet depletion is distinct from a plan quota.
+  assert.equal(gatewayError(403, {}).code, 'PERMISSION');
+  assert.equal(gatewayError(402, { error: { message: 'insufficient balance' } }).code, 'QUOTA');
 });

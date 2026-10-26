@@ -32,7 +32,7 @@ dsh plugin --profile web add dsh-opendesign-corouter
 也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
-dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.1.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.2.tgz
 ```
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。
@@ -48,14 +48,16 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.1.tgz
 
 ## 功能预览
 
-### 两个 Provider，目录分开
+### 两个 Provider，逐模型配置
 
 | Provider | 模型数 | 用途 |
 | --- | ---: | --- |
 | `opendesign-corouter-plan` | 12 | 官网 Design Plan 套餐赠送模型 |
 | `opendesign-corouter-paid` | 21 | 其余公开对话模型 |
 
-模型 ID 来自 [CoRouter 官方目录](https://corouter.open-design.ai/zh/models/)。媒体生成接口不在对话目录中；缺乏可靠证据的能力字段保持未知。
+上表为内置目录。模型页可从 OpenAI `/models` 端口刷新，逐个启用或停用模型，并配置温度、top-p、默认输出上限、上下文预算及思考深度。停用同时影响模型选择器和直接调用；参数会保存并应用到实际请求。媒体生成接口不在对话目录中，未知能力不按名称猜测。
+
+推理协议可选 **OpenAI Chat Completions、OpenAI Responses、Anthropic Messages**。模型发现始终使用 OpenAI 端口，不随推理协议切换。
 
 > **分组不等于计费隔离。** 赠送额度耗尽后是否转扣套餐余额或钱包，由服务端和账号权益决定。选择“套餐赠送”不能保证绝不消耗钱包余额。
 
@@ -66,7 +68,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.1.tgz
 - **充值 / 赠送金额**：钱包中对应池的可用金额。
 - **总额度**：接口报告的总余额，不再与分池数字重复相加。
 
-接口缺失或权限不足时显示未知 / 部分可用，不补成 0。桌面通道权限较窄时可能只读到窗口与总额；独立登录可补充控制台分池读取。额度属于当前登录身份，插件未核对它与推理 Key 的账号 / 工作区是否一致。
+接口缺失或权限不足时显示未知 / 部分可用，不补成 0。窗口重置、订阅账期结束和下次自动刷新分别显示。桌面通道只有部分额度且已有完整独立会话时，会整体切换到独立会话并标明来源，不拼接账号数据。额度身份与推理 Key 的账号 / 工作区仍需保持一致。
 
 ### 桌面优先，也能独立登录
 

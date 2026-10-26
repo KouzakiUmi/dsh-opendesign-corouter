@@ -1,38 +1,24 @@
-# OpenDesign CoRouter 设置 UI 设计
+# OpenDesign CoRouter 设置界面
 
-## 目标与结构
+## 四个页面
 
-设置区只保留一个 `OpenDesign CoRouter` 入口，最大内容宽度 860px，使用四个页签避免把全部控件堆在一页：
+1. **概览**：分别显示 Design Plan 窗口、套餐模型余额、充值余额与总额度。窗口重置时间、订阅账期结束、下次自动刷新和最近更新时间分别标注；未知金额不补零。
+2. **模型**：套餐赠送与付费模型分组展示，支持搜索、独立启停、展开参数编辑和恢复默认。从 OpenAI `/models` 刷新目录，并显示目录来源、更新时间与失败提示。
+3. **连接与登录**：桌面优先、独立登录、API Key。已有完整独立会话可整体接替不完整的桌面读数；不把两份账号数据相加。
+4. **高级**：在 Chat Completions、Responses、Messages 中选择实际推理协议；查看当前地址，设置凭据引用名、请求超时、流空闲超时、额度刷新间隔与空轮监控。
 
-1. **概览**：套餐赠送窗口、套餐余额、充值 / 赠送金额、总额度。窗口和钱包分开表达，不用余额推算窗口。缺失值显示 `—`，真实的 `0` 正常显示；无窗口时不补 `0%`。显示更新时间与安全来源标签；`partial` 等异常状态下的 Host `note` 提供恢复指引。
-2. **模型**：套餐赠送 Provider、付费 Provider 两张独立卡片，各自维护搜索词。只展示模型 `name`、`id` 与归属，不提供 API、路由或当前会话模型修改控件。
-3. **连接与登录**：桌面登录态优先开关、独立登录、API Key。主按钮明确写为“登录并保存会话”，说明用户必须在官方页面亲自完成登录；进行中可取消。官网链接使用 `noreferrer noopener`。
-4. **高级**：独立空轮监控开关、已拦截轮数、Base URL 和 API Key 引用名。空轮提示明确说明宿主重试会额外消耗额度。
+## 保存与生效
 
-## 数据与保存边界
+模型开关和参数通过同一 `configForms` 配置来源保存，改变实际 Provider 目录、模型元数据与后续请求，而不是仅在网页本地隐藏条目。未填参数继承默认值；保存、失败与只读状态均在控件附近反馈。
 
-- Client 挂载共享 `openDesignCoRouterRemote`，通过 `remote.openDesignCoRouter` 的六个既定方法通信，不访问 Node、真实网页或 Host 内部实现。
-- `status()` 是缓存读取。初次挂载、从其他页签返回概览、手动刷新以及登录成功时，执行 `refreshQuota()` 后读取 `status()`，以同步额度、来源和 revision；忙碌期间防止重复刷新。
-- 登录进行中仅轮询 `loginStatus()`，终态停止。登录成功触发一次额度刷新，不把不同身份或不同分池的数据自动混合。
-- 设置字段使用宿主 `configForms.get('llm-opendesign-corouter')` 的 `getSnapshot()`、`subscribe()` 与 `set()`；React 通过 `useSyncExternalStore` 读取快照。没有自造 `saveSettings` RPC 或网页持久化。
-- API Key 只存在于密码输入组件的短暂 state，并通过 `saveApiKey` 发送。保存结束后清空且永不回填；不写入 URL、日志或 LocalStorage。界面只回显 `apiKeyConfigured` 布尔状态。
-- RPC 服务通过 `ctx.inject(['remote.openDesignCoRouter'])` 跟踪生命周期，不就绪轮询；可用性最多等待 4 秒，单次调用最多等待 25 秒。卸载时 `AbortController` 清理就绪等待和超时计时器；异步结果另有 mounted 与版本检查，忽略过期响应。
+`refreshModels()` 是独立的模型发现操作，固定使用 OpenAI 模型接口。切换推理协议不会切换模型发现协议。`status()` 返回缓存与配置；`refreshQuota()` 合并在途读取并遵守缓存间隔；手动操作使用 `refreshQuotaNow()` 绕过缓存。界面按 `nextRefreshAt` 安排后续刷新；连续失败六次后显示暂停提示，手动刷新恢复。额度来源或刷新间隔保存后立即取数。卸载后停止计时与应用异步结果。
 
-## 视觉与响应式
+API Key 保存后清空且不回填，不进入普通设置、URL 或网页存储。登录进行中轮询任务状态，终态后停止；敏感写操作继续检查 Host revision。
 
-样式由插件卸载时移除的局部 `<style>` 提供，全部类名使用 `odc-` 前缀。颜色、边框、背景和焦点使用 DSH `--dsw-alias-*` 语义令牌，随宿主浅色、深色及强制颜色模式工作；没有远程字体、图标或其他资源。
+## 主题与可访问性
 
-桌面钱包额度为三列，窄屏降为两列或一列；模型双栏在窄屏改为单栏。卡片只保留必要标题、短说明与一个主要动作，状态放在对应操作附近。
+沿用 DSH `--dsw-alias-*` 语义令牌，覆盖浅色、深色、强制颜色和窄屏。页签具有完整的 tab 语义及方向键、Home/End 操作；表单控件提供 label，展开按钮提供展开状态，错误与异步反馈分别使用 alert/status。
 
-## 可访问性
+## 验证
 
-- 页签使用 `tablist` / `tab` / `tabpanel`、`aria-selected`、`aria-controls` 和 `aria-labelledby`。
-- 支持 Left / Right / Up / Down 循环切换，以及 Home / End；采用 roving `tabIndex`，键盘切换后聚焦新页签。
-- 异步状态使用 `role="status"`，操作错误使用 `role="alert"`；输入均有显式 label，焦点使用高可见度令牌描边。
-- 错误文案为安全的通用提示，不回显 RPC 上游错误。安全的 `quota.note` 按状态展示；错误指引使用 `role="alert"`。错误前景色与主文字令牌混合，保证官方亮暗主题下小字可读。
-
-## 验证范围
-
-[组件测试](../test/client-ui.test.ts) 覆盖四页签语义、未知额度、真实零值、Host 指引与键盘页签计算。[离线浏览器测试](../scripts/ui-smoke.mjs) 使用官方主题夹具，覆盖亮→暗→亮切换、四页签、按钮悬停、占位文字、焦点、错误提示、移动布局和 Chromium 强制颜色模式。普通可用文字与占位文字按 WCAG sRGB 算法检查至少 4.5:1；大字至少 3:1。禁用控件不计入文字对比度断言，这不是完整可访问性认证。
-
-主按钮采用官方按钮填充 / 前景色令牌，不用系统 Canvas 猜文字颜色。输入框占位文字显式使用次要文字令牌。截图和 [测量报告](previews/theme-contrast.json) 均为模拟数据，不是生产 GUI 或真实账号验收。
+[组件测试](../test/client-ui.test.ts) 与[离线浏览器测试](../scripts/ui-smoke.mjs)覆盖设置操作、模型开关与参数保存、协议选择、额度时间、主题和移动布局。预览使用模拟数据，不能代替真实账号或已安装宿主的验收。

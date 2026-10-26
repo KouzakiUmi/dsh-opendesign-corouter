@@ -11,14 +11,18 @@ const StartLoginRequestCodec={mode:'strict' as const,typeSymbol:"dsh-opendesign-
 const CancelLoginRequestCodec={mode:'strict' as const,typeSymbol:"dsh-opendesign-corouter#CancelLoginRequest",create:()=>z.unknown().transform(value=>parseCancelLoginRequest(value))};
 const SaveApiKeyRequestCodec={mode:'strict' as const,typeSymbol:"dsh-opendesign-corouter#SaveApiKeyRequest",create:()=>z.unknown().transform(value=>parseSaveApiKeyRequest(value))};
 export type CoRouterRemote={status:()=>Promise<RemoteResult<Status>>;
+refreshModels:()=>Promise<RemoteResult<Status>>;
 refreshQuota:()=>Promise<RemoteResult<QuotaSnapshot>>;
+refreshQuotaNow:()=>Promise<RemoteResult<QuotaSnapshot>>;
 startLogin:(input:StartLoginRequest)=>Promise<RemoteResult<LoginState>>;
 loginStatus:()=>Promise<RemoteResult<LoginState>>;
 cancelLogin:(input:CancelLoginRequest)=>Promise<RemoteResult<LoginState>>;
 saveApiKey:(input:SaveApiKeyRequest)=>Promise<RemoteResult<Status>>;};
 declare module '@deepseek-ai/dsh-typert-protocol' { interface TypertRemoteNamespaceMap { openDesignCoRouter:CoRouterRemote } }
 export const TYPERT_REMOTE=createTypertRemoteInfo({package:"dsh-opendesign-corouter",methods:{"openDesignCoRouter/status":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[],result:StatusCodec},
+"openDesignCoRouter/refreshModels":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[],result:StatusCodec},
 "openDesignCoRouter/refreshQuota":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[],result:QuotaSnapshotCodec},
+"openDesignCoRouter/refreshQuotaNow":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[],result:QuotaSnapshotCodec},
 "openDesignCoRouter/startLogin":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[{name:"input",source:'json' as const,codec:StartLoginRequestCodec,strictCodec:StartLoginRequestCodec}],result:LoginStateCodec},
 "openDesignCoRouter/loginStatus":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[],result:LoginStateCodec},
 "openDesignCoRouter/cancelLogin":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[{name:"input",source:'json' as const,codec:CancelLoginRequestCodec,strictCodec:CancelLoginRequestCodec}],result:LoginStateCodec},

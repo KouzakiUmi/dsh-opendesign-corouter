@@ -1,19 +1,19 @@
-// Chat Completions projection follows dsh-opendesign-go; see THIRD_PARTY_NOTICES.md.
+/**
+ * Chat Completions 的流式投影与共享错误分类。
+ *
+ * 分帧已抽到 `protocols/sse.ts`（三种协议共用同一套取消/空闲/大小边界），这里只保留
+ * Chat Completions 的事件语义；`gatewayError` 也从 `protocols/errors.ts` 统一提供，
+ * 以保持既有 `import { gatewayError } from './stream.js'` 的调用点不变。
+ */
+
 import { LlmError, ToolCallId, type StreamChunk, type TokenUsage, type FinishReason } from '@deepseek-ai/dsh-llm';
 import { record, finite } from './util.js';
+import { gatewayError } from './protocols/errors.js';
+import { sseFrames } from './protocols/sse.js';
 
-export function gatewayError(status: number | undefined, body: unknown): LlmError {
-  const error = record(body) && record(body.error) ? body.error : record(body) ? body : {};
-  const detail = [error.code, error.type, error.message].filter(x => typeof x === 'string').join(' ').toLowerCase();
-  const options = status === undefined ? {} : { status };
-  if (/context.{0,30}(exceed|length|window)|too many tokens|max.*context/u.test(detail)) return new LlmError('OpenDesign：请求超过上下文限制', 'CONTEXT_WINDOW_EXCEEDED', options);
-  if (/quota|insufficient.{0,20}(credit|balance)|credit.{0,20}exhaust|balance.{0,20}insufficient/u.test(detail)) return new LlmError('OpenDesign：当前计费池额度不足', 'ACCOUNT_QUOTA', options);
-  if (status === 401 || status === 403 || /invalid_api_key|missing_api_key/u.test(detail)) return new LlmError('OpenDesign：认证失败，请重新登录或检查凭据', 'INVALID_CREDENTIAL', options);
-  if (status === 429) return new LlmError('OpenDesign：请求过于频繁，请稍后重试', 'RATE_LIMIT', options);
-  if (status === 408 || status === 504) return new LlmError('OpenDesign：请求超时', 'TIMEOUT', options);
-  return new LlmError(`OpenDesign：${status !== undefined && status >= 500 ? '服务暂不可用' : '请求被拒绝'}${status === undefined ? '' : `（HTTP ${status}）`}`, status !== undefined && status >= 500 ? 'SERVER' : 'INVALID_REQUEST', options);
-}
+export { gatewayError } from './protocols/errors.js';
 
+/** Chat Completions 的 `usage` 折算（`prompt_tokens` 含缓存，按不相交口径减出）。 */
 export function tokenUsage(value: Record<string, unknown>): TokenUsage | undefined {
   const prompt = finite(value.prompt_tokens), output = finite(value.completion_tokens);
   if (prompt === undefined || output === undefined || prompt < 0 || output < 0) return;
@@ -36,11 +36,10 @@ export function tokenUsage(value: Record<string, unknown>): TokenUsage | undefin
 interface OpenText { index: number; text: string }
 interface OpenTool { index: number; id: string; name: string; arguments: string; started: boolean }
 
-/** Bounded SSE framing; a broken/truncated response is never reported as success. */
+/** Bounded SSE projection for Chat Completions; a broken/truncated response is never reported as success. */
 export async function* consumeSse(body: ReadableStream<Uint8Array>, signal: AbortSignal, idleMs: number): AsyncGenerator<StreamChunk> {
-  const reader = body.getReader(), decoder = new TextDecoder();
-  let buffer = '', data: string[] = [], dataSize = 0, done = false;
-  let nextIndex = 0, count = 0, sawTool = false, text: OpenText | undefined, reasoning: OpenText | undefined;
+  let nextIndex = 0, count = 0, sawTool = false, done = false;
+  let text: OpenText | undefined, reasoning: OpenText | undefined;
   const tools = new Map<number, OpenTool>();
   let finish: FinishReason | undefined, usage: TokenUsage | undefined;
   function close(): StreamChunk[] {
@@ -54,8 +53,7 @@ export async function* consumeSse(body: ReadableStream<Uint8Array>, signal: Abor
     text = reasoning = undefined; tools.clear();
     return out.sort((a, b) => ('index' in a ? a.index : 0) - ('index' in b ? b.index : 0));
   }
-  function event(): StreamChunk[] {
-    const payload = data.join('\n'); data = []; dataSize = 0;
+  function event(payload: string): StreamChunk[] {
     if (!payload) return [];
     if (payload.trim() === '[DONE]') { done = true; return []; }
     let value: unknown;
@@ -111,58 +109,16 @@ export async function* consumeSse(body: ReadableStream<Uint8Array>, signal: Abor
     }
     return out;
   }
-  function line(value: string): StreamChunk[] {
-    if (!value) return event();
-    if (value.startsWith('data:')) {
-      const part = value.slice(5).replace(/^ /u, ''); dataSize += part.length;
-      if (dataSize > 4 * 1024 * 1024) throw new LlmError('OpenDesign：流式事件超过大小限制', 'INVALID_RESPONSE');
-      data.push(part);
-    }
-    return [];
+
+  for await (const frame of sseFrames(body, signal, idleMs)) {
+    for (const chunk of event(frame.data)) yield chunk;
+    if (done) break;
   }
-  async function read(): Promise<ReadableStreamReadResult<Uint8Array>> {
-    signal.throwIfAborted();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let abort: () => void = () => {};
-    try {
-      return await Promise.race([
-        reader.read(),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new LlmError('OpenDesign：流式响应长时间没有数据', 'TIMEOUT')), idleMs);
-          abort = () => reject(signal.reason);
-          signal.addEventListener('abort', abort, { once: true });
-          if (signal.aborted) abort();
-        }),
-      ]);
-    } finally { clearTimeout(timer); signal.removeEventListener('abort', abort); }
-  }
-  try {
-    while (!done) {
-      const result = await read();
-      buffer += result.done ? decoder.decode() : decoder.decode(result.value, { stream: true });
-      // CRLF may be split between transport chunks; leave a trailing CR buffered.
-      let match: RegExpExecArray | null;
-      while ((match = /\r\n|\n|\r(?!$)/u.exec(buffer))) {
-        const at = match.index, value = buffer.slice(0, at);
-        buffer = buffer.slice(at + match[0].length);
-        for (const chunk of line(value)) yield chunk;
-        if (done) break;
-      }
-      if (buffer.length > 4 * 1024 * 1024) throw new LlmError('OpenDesign：流式行超过大小限制', 'INVALID_RESPONSE');
-      if (result.done) {
-        if (buffer && !done) for (const chunk of line(buffer.replace(/\r$/u, ''))) yield chunk;
-        if (!done) for (const chunk of event()) yield chunk;
-        break;
-      }
-    }
-    signal.throwIfAborted();
-    if (!finish) throw new LlmError('OpenDesign：响应流提前中断，未收到结束原因', 'INVALID_RESPONSE');
-    if (!count) throw new LlmError('OpenDesign：模型返回空响应', 'EMPTY_RESPONSE');
-    if (finish.kind === 'tool-calls' && !sawTool) throw new LlmError('OpenDesign：响应声明工具调用，但未返回任何工具块', 'INVALID_RESPONSE');
-    if (usage) yield { type: 'usage', usage };
-    yield { type: 'finish', reason: finish };
-  } finally {
-    await reader.cancel().catch(() => undefined); // cleanup failure must not replace the original provider error
-    reader.releaseLock();
-  }
+
+  signal.throwIfAborted();
+  if (!finish) throw new LlmError('OpenDesign：响应流提前中断，未收到结束原因', 'INVALID_RESPONSE');
+  if (!count) throw new LlmError('OpenDesign：模型返回空响应', 'EMPTY_RESPONSE');
+  if (finish.kind === 'tool-calls' && !sawTool) throw new LlmError('OpenDesign：响应声明工具调用，但未返回任何工具块', 'INVALID_RESPONSE');
+  if (usage) yield { type: 'usage', usage };
+  yield { type: 'finish', reason: finish };
 }

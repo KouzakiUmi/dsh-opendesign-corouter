@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { CoRouterAdapter } from '../src/adapter.js';
 import { PLAN_PROVIDER, PAID_PROVIDER, type RuntimeConfig } from '../src/config.js';
 import { ReasoningEffortId, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm';
+import { AttachmentId, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
 const base: RuntimeConfig = { apiKeyEnv: 'FIXTURE_KEY', baseURL: 'https://amr-link.open-design.ai/v1', useDesktopCredential: false, emptyTurnGuard: true, requestTimeoutMs: 10000, streamIdleTimeoutMs: 1000 };
 const options = (provider = PLAN_PROVIDER, model = 'deepseek-v4.1-flash'): GenerateOptions => ({ provider, model, messages: [{ role: 'user', content: [{ type: 'text', text: 'fixture' }] }] });
 const sse = (text: string) => new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
@@ -54,6 +55,88 @@ test('prepareCall binds metadata and dispatch to a single settings generation', 
   assert.equal(called[0], `${base.baseURL}/chat/completions`);
   assert.equal(call.model.context?.contextWindow, 750000);
 });
+test('model switches hide routes and enforce rejection on direct calls', async () => {
+  const configured: RuntimeConfig = { ...base, modelSettings: { 'deepseek-v4.1-flash': { enabled: false } } };
+  const adapter = new CoRouterAdapter({ config: () => configured, apiKey: async () => 'test-key', fetch: async () => { assert.fail('disabled model must not fetch'); } });
+  assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 11);
+  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 21);
+  assert.throws(() => adapter.stream(options()), { code: 'MODEL_DISABLED' });
+  await assert.rejects(adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash'), { code: 'MODEL_DISABLED' });
+});
+
+test('saved model parameters affect metadata and the actual request while per-call temperature wins', async () => {
+  const configured: RuntimeConfig = { ...base, modelSettings: { 'deepseek-v4.1-flash': { temperature: 0.2, topP: 0.7, maxTokens: 512, contextWindow: 8192, reasoningEffort: 'low' } } };
+  const wires: Record<string, unknown>[] = [];
+  const adapter = new CoRouterAdapter({ config: () => configured, apiKey: async () => 'test-key', fetch: async (_input, init) => { wires.push(JSON.parse(String(init?.body))); return sse('ok'); } });
+  const resolved = await adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash');
+  assert.equal(resolved.context?.contextWindow, 7680);
+  assert.equal(resolved.defaultMaxTokens, 512);
+  assert.equal(resolved.reasoning?.defaultEffort, 'low');
+  await collect(adapter.stream(options()));
+  assert.equal(wires[0]?.temperature, 0.2);
+  assert.equal(wires[0]?.top_p, 0.7);
+  assert.equal(wires[0]?.max_tokens, 512);
+  assert.equal(wires[0]?.reasoning_effort, 'low');
+  await collect(adapter.stream({ ...options(), temperature: 0.6 }));
+  assert.equal(wires[1]?.temperature, 0.6);
+});
+
+test('an explicit output limit is not reduced to the automatic quarter-window default', async () => {
+  const configured: RuntimeConfig = { ...base, modelSettings: { 'deepseek-v4.1-flash': { maxTokens: 4096, contextWindow: 8192 } } };
+  const adapter = new CoRouterAdapter({ config: () => configured, apiKey: async () => 'test-key', fetch: async (_url, init) => {
+    assert.equal(JSON.parse(String(init?.body)).max_tokens, 4096);
+    return sse('ok');
+  } });
+  assert.equal((await adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash')).defaultMaxTokens, 4096);
+  await collect(adapter.stream(options()));
+  configured.modelSettings = { 'deepseek-v4.1-flash': { maxTokens: 8192, contextWindow: 8192 } };
+  assert.throws(() => adapter.stream(options()), { code: 'INVALID_REQUEST' });
+});
+
+test('all three selected protocols change the actual request path', async () => {
+  for (const [apiProtocol, suffix] of [['chat-completions', '/chat/completions'], ['responses', '/responses'], ['messages', '/messages']] as const) {
+    const adapter = new CoRouterAdapter({ config: () => ({ ...base, apiProtocol }), apiKey: async () => 'test-key', fetch: async (url, init) => {
+      assert.equal(String(url), `${base.baseURL}${suffix}`);
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer test-key');
+      return new Response('{}', { status: 401 });
+    } });
+    await assert.rejects(collect(adapter.stream(options())));
+  }
+});
+
+test('unreadable images become named placeholders without failing the request or retrying the read', async () => {
+  const image: ImageAttachmentRef = { attachmentId: AttachmentId('a'.repeat(64)), mediaType: 'image/png', bytes: 10, width: 2, height: 2, name: 'missing-image.png' };
+  let reads = 0, request = '';
+  const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'test-key', imageDataUrl: async () => { reads++; throw new Error('PRIVATE_READ_FAILURE'); }, fetch: async (_url, init) => {
+    request = String(init?.body);
+    return sse('ok');
+  } });
+  const result = await collect(adapter.stream({ ...options(), messages: [{ role: 'user', content: [{ type: 'image', attachment: image }, { type: 'image', attachment: image }] }] }));
+  assert.equal(reads, 1);
+  assert.match(request, /missing-image/u);
+  assert.equal(request.includes('PRIVATE_READ_FAILURE'), false);
+  assert.equal(request.includes('image_url'), false);
+  assert.equal(request.includes('model accepts text only'), false);
+  assert.equal(result.at(-1)?.type, 'finish');
+});
+
+test('cancellation during image loading is never turned into a placeholder request', async () => {
+  const controller = new AbortController();
+  const image: ImageAttachmentRef = { attachmentId: AttachmentId('b'.repeat(64)), mediaType: 'image/png', bytes: 10, width: 2, height: 2, name: 'cancelled.png' };
+  const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'test-key', imageDataUrl: async () => {
+    controller.abort(new DOMException('cancelled', 'AbortError'));
+    throw new Error('read cancelled');
+  }, fetch: async () => { assert.fail('cancelled request must not be sent'); } });
+  await assert.rejects(collect(adapter.stream({ ...options(), signal: controller.signal, messages: [{ role: 'user', content: [{ type: 'image', attachment: image }] }] })), { name: 'AbortError' });
+});
+
+test('retryable model failures are delegated to the host rather than repeated inside the adapter', async () => {
+  let calls = 0;
+  const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'test-key', fetch: async () => { calls++; return new Response('{}', { status: 503 }); } });
+  await assert.rejects(collect(adapter.stream(options())), { code: 'SERVER' });
+  assert.equal(calls, 1);
+});
+
 test('HTTP errors never echo credential or untrusted body; missing key does not fetch', async () => {
   const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'test-key', fetch: async () => Response.json({ error: { message: 'test-key PRIVATE_BODY', code: 'invalid_api_key' } }, { status: 401 }) });
   await assert.rejects(collect(adapter.stream(options())), (error: Error) => !error.message.includes('test-key') && !error.message.includes('PRIVATE_BODY'));

@@ -25,7 +25,9 @@ const ENTRY_ID = 'llm-opendesign-corouter';
 
 const ENDPOINTS = [
   `${REMOTE_SERVICE}/status`,
+  `${REMOTE_SERVICE}/refreshModels`,
   `${REMOTE_SERVICE}/refreshQuota`,
+  `${REMOTE_SERVICE}/refreshQuotaNow`,
   `${REMOTE_SERVICE}/startLogin`,
   `${REMOTE_SERVICE}/loginStatus`,
   `${REMOTE_SERVICE}/cancelLogin`,
@@ -51,10 +53,10 @@ async function eventually(loader: Loader, ready: () => boolean): Promise<void> {
   throw new Error('composition did not settle');
 }
 
-const entry = () => ({ id: ENTRY_ID, name: REMOTE_PACKAGE, config: {} });
+const entry = (config: Record<string, unknown> = {}) => ({ id: ENTRY_ID, name: REMOTE_PACKAGE, config });
 const providerIds = (ctx: Context) => ctx.llm.listProviders().map(row => row.id).sort();
 
-test('official Loader mounts the built package, typert-loader auto-registers its six RPC, and reload is conflict-free', async () => {
+test('official Loader mounts the built package, typert-loader auto-registers its eight RPC, and reload is conflict-free', async () => {
   const ctx = new Context();
   ctx.baseUrl = ANCHOR;
   const llm = await ctx.plugin(LlmRuntime);
@@ -71,6 +73,22 @@ test('official Loader mounts the built package, typert-loader auto-registers its
     assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 21);
     // Discovery alone registers nothing: that is typert-loader's job.
     assert.equal(ctx.typert.getPackage(REMOTE_PACKAGE, 'host'), undefined);
+
+    let updates = 0;
+    const stopUpdates = ctx.on('llm/adapters-updated', () => { updates++; });
+    try {
+      await loader.root.update([entry({ apiProtocol: 'responses', modelSettings: { 'deepseek-v4.1-flash': { enabled: false }, 'gpt-6-luna': { contextWindow: 8192, maxTokens: 1024 } } })]);
+      await loader.await();
+      assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 11);
+      await assert.rejects(ctx.llm.resolveModelInfo(PLAN_PROVIDER, 'deepseek-v4.1-flash'), { code: 'MODEL_DISABLED' });
+      const configured = await ctx.llm.resolveModelInfo(PLAN_PROVIDER, 'gpt-6-luna');
+      assert.equal(configured.defaultMaxTokens, 1024);
+      assert.equal(configured.context?.contextWindow, 7168);
+      assert.ok(updates > 0, 'configuration change must refresh host model selectors');
+      await loader.root.update([entry()]);
+      await loader.await();
+      assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 12);
+    } finally { stopUpdates(); }
 
     // 2. Activate typert-loader once the entry exists; its activation pass covers it.
     typertFiber = await ctx.plugin(typertLoader);

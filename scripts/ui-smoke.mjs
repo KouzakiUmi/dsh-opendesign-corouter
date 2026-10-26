@@ -26,24 +26,118 @@ try {
     window.__ModuleLoader__ = { load(bundle) { window.__plugin = bundle.factory(name => { if (name === 'react') return window.__React; throw new Error('Unexpected external: ' + name); }); } };
   });
   await page.addScriptTag({ content: client });
-  await page.evaluate(models => {
-    let quota = { state: 'ok', source: 'login', updatedAt: '2026-10-26T08:00:00Z', tier: 'Pro', eligible: true,
-      windows: [{ durationSeconds: 18000, used: 120, limit: 500, remaining: 380, percent: 24, resetsAt: '2026-10-26T12:00:00Z' }, { durationSeconds: 604800, used: 400, limit: 2000, remaining: 1600, percent: 20, resetsAt: '2026-10-29T08:00:00Z' }],
-      balances: { subscriptionUsd: 60, rechargeUsd: 20, totalUsd: 80 } };
+const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTokens, reasoningEfforts }) => ({
+  id, name, group,
+  ...(contextWindow === undefined ? {} : { contextWindow }),
+  ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+  ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
+}));
+  await page.evaluate(rawModels => {
+    const resetAt = new Date(Date.now() + 86_400_000).toISOString();
+    const initialQuota = () => ({
+      state: 'ok', source: 'login', updatedAt: new Date().toISOString(), tier: 'Pro', eligible: true,
+      subscriptionPeriodStart: '2026-10-01T00:00:00Z', subscriptionPeriodEnd: '2026-11-01T00:00:00Z',
+      nextRefreshAt: new Date(Date.now() + 3_600_000).toISOString(),
+      windows: [
+        { durationSeconds: 18000, used: 120, limit: 500, remaining: 380, percent: 24, resetsAt: resetAt, windowStart: new Date(Date.now() - 3_600_000).toISOString(), resetMode: 'activity_triggered' },
+        { durationSeconds: 604800, used: 400, limit: 2000, remaining: 1600, percent: 20, resetsAt: new Date(Date.now() + 172_800_000).toISOString() },
+      ],
+      balances: { subscriptionUsd: 60, rechargeUsd: 20, totalUsd: 80 },
+    });
+    let quota = initialQuota();
     let login = { jobId: null, state: 'idle' };
-    let config = { emptyTurnGuard: true, useDesktopCredential: true, baseURL: 'https://amr-link.open-design.ai/v1', apiKeyEnv: 'COROUTER_API_KEY' };
+    let config = {
+      emptyTurnGuard: true, useDesktopCredential: true, baseURL: 'https://amr-link.open-design.ai/v1', apiKeyEnv: 'COROUTER_API_KEY',
+      apiProtocol: 'chat-completions', modelSettings: {}, quotaRefreshSeconds: 60, requestTimeoutMs: 1800000, streamIdleTimeoutMs: 300000,
+    };
+    let models = rawModels.map(model => ({ ...model, enabled: true }));
+    let modelsSource = 'builtin';
+    let modelsUpdatedAt;
+    let modelsError;
     let snapshot = { status: 'ready', writable: true, value: config };
     const listeners = new Set(), disposers = [];
-    window.__setQuotaState = (state, note) => { quota = { ...quota, state, note }; };
-    const status = () => ({ revision: 'fixture-revision', apiKeyConfigured: true, sessionSource: 'login', quota, login, config, guardedTurns: 2, models });
+    window.__refreshQuotaCalls = 0;
+    window.__forceRefreshCalls = 0;
+    window.__refreshModelsCalls = 0;
+    window.__modelsFail = false;
+    window.__autoRefreshBump = false;
+    window.__config = config;
+    const syncConfig = () => { window.__config = config; };
+    const status = () => {
+      const value = {
+        revision: 'fixture-revision', apiKeyConfigured: true, sessionSource: 'login', quota, login, config, guardedTurns: 2,
+        models: models.map(model => ({ ...model, enabled: config.modelSettings?.[model.id]?.enabled ?? model.enabled ?? true })),
+        modelsSource,
+        ...(modelsUpdatedAt === undefined ? {} : { modelsUpdatedAt }),
+        ...(modelsError === undefined ? {} : { modelsError }),
+      };
+      window.__lastStatus = value;
+      return value;
+    };
+    window.__setQuotaState = (state, note) => { quota = { ...quota, state, ...(note === undefined ? { note: undefined } : { note }) }; };
+    window.__armAutoRefresh = () => {
+      quota = { ...quota, nextRefreshAt: new Date(Date.now() + 3_000).toISOString() };
+      window.__refreshQuotaCalls = 0;
+      window.__autoRefreshBump = true;
+    };
+    window.__setQuotaUnknown = () => {
+      quota = { state: 'partial', updatedAt: new Date().toISOString(), windows: [], balances: {}, note: '模拟额度数据不可用。' };
+    };
+    window.__setQuotaNoPlan = () => {
+      quota = { state: 'partial', updatedAt: new Date().toISOString(), eligible: false, windows: [], balances: {} };
+    };
+    window.__restoreQuota = () => { quota = initialQuota(); };
     const api = {
-      status: async (...args) => { if (args.length) throw new Error('status requires zero arguments'); return { ok: true, value: status() }; }, refreshQuota: async (...args) => { if (args.length) throw new Error('refreshQuota requires zero arguments'); return { ok: true, value: quota }; },
+      status: async (...args) => { if (args.length) throw new Error('status requires zero arguments'); return { ok: true, value: status() }; },
+      refreshModels: async (...args) => {
+        if (args.length) throw new Error('refreshModels requires zero arguments');
+        window.__refreshModelsCalls += 1;
+        if (window.__modelsFail) {
+          // The Host keeps the previous catalog and reports a safe, fixed discovery error.
+          modelsError = '模型发现请求超过 20 秒时限';
+          return { ok: true, value: status() };
+        }
+        modelsSource = 'openai';
+        modelsUpdatedAt = new Date().toISOString();
+        modelsError = undefined;
+        if (!models.some(model => model.id === 'gpt-6.1-sol-remote')) {
+          models = [...models, { id: 'gpt-6.1-sol-remote', name: 'GPT-6.1 Sol Remote', group: 'paid', contextWindow: 200000, maxOutputTokens: 8192, reasoningEfforts: ['low', 'medium', 'high'], enabled: true }];
+        }
+        return { ok: true, value: status() };
+      },
+      refreshQuota: async (...args) => {
+        if (args.length) throw new Error('refreshQuota requires zero arguments');
+        window.__refreshQuotaCalls += 1;
+        if (window.__autoRefreshBump && window.__refreshQuotaCalls >= 2) {
+          quota = { ...quota, nextRefreshAt: new Date(Date.now() + 3_600_000).toISOString(), updatedAt: new Date().toISOString() };
+          window.__autoRefreshBump = false;
+        }
+        return { ok: true, value: quota };
+      },
       startLogin: async () => { login = { jobId: 'fixture-job', state: 'waiting', message: '模拟登录等待，不会打开浏览器' }; return { ok: true, value: login }; },
-      loginStatus: async (...args) => { if (args.length) throw new Error('loginStatus requires zero arguments'); return { ok: true, value: login }; }, cancelLogin: async () => { login = { jobId: 'fixture-job', state: 'cancelled' }; return { ok: true, value: login }; },
+      loginStatus: async (...args) => { if (args.length) throw new Error('loginStatus requires zero arguments'); return { ok: true, value: login }; },
+      cancelLogin: async () => { login = { jobId: 'fixture-job', state: 'cancelled' }; return { ok: true, value: login }; },
       saveApiKey: async request => { if (request.value !== 'fixture-api-key') throw new Error('Unexpected fixture key'); return { ok: true, value: status() }; },
     };
-    const form = { getSnapshot: () => snapshot, subscribe: cb => { listeners.add(cb); return () => listeners.delete(cb); },
-      set: async (field, value) => { config = { ...config, [field]: value }; snapshot = { ...snapshot, value: config }; for (const cb of listeners) cb(); return true; } };
+    api.refreshQuotaNow = async (...args) => {
+      if (args.length) throw new Error('refreshQuotaNow requires zero arguments');
+      window.__forceRefreshCalls += 1;
+      if (quota.autoRefreshPaused) quota = initialQuota();
+      return api.refreshQuota();
+    };
+    window.__setQuotaPaused = () => { quota = { ...quota, state: 'partial', autoRefreshPaused: true, refreshFailures: 6, nextRefreshAt: undefined }; };
+    window.__setModelsFail = value => { window.__modelsFail = value; };
+    const form = {
+      getSnapshot: () => snapshot,
+      subscribe: cb => { listeners.add(cb); return () => listeners.delete(cb); },
+      set: async (field, value) => {
+        config = { ...config, [field]: value };
+        syncConfig();
+        snapshot = { ...snapshot, value: config };
+        for (const cb of listeners) cb();
+        return true;
+      },
+    };
     const ctx = {
       remote: { openDesignCoRouter: api, $mount: async () => () => { window.__remoteDisposed = true; } },
       get: key => key === 'remote.openDesignCoRouter' ? api : undefined,
@@ -53,25 +147,165 @@ try {
     };
     window.__cleanup = async () => { window.__root.unmount(); for (const off of disposers.reverse()) await off(); };
     window.__plugin.apply(ctx);
-  }, MODELS.map(({ id, name, group }) => ({ id, name, group })));
+  }, fixtureModels);
+  const config = () => page.evaluate(() => window.__config);
+  const modelSettings = () => page.evaluate(() => window.__config.modelSettings ?? {});
   await page.getByRole('heading', { name: '额度概览', exact: true }).waitFor();
   await page.getByText('US$80.00', { exact: true }).waitFor();
   assert.equal(await page.getByRole('tab').count(), 4);
+  for (const label of ['订阅账期结束', '下次额度恢复', '下次自动刷新']) {
+    const metric = page.locator('.odc-metric', { hasText: label });
+    assert.match(await metric.locator('.odc-metric-text').innerText(), /\d{4}\//, `${label} must show a concrete timestamp`);
+  }
+  await page.getByText('套餐赠送窗口', { exact: true }).waitFor();
   await mkdir('docs/previews', { recursive: true });
   await page.screenshot({ path: 'docs/previews/overview.png', fullPage: true });
+
+  // Auto refresh follows the Host's planned read when it is earlier than the configured interval.
+  await page.evaluate(() => window.__armAutoRefresh());
+  await page.getByRole('button', { name: '刷新额度', exact: true }).click();
+  await page.waitForFunction(() => window.__refreshQuotaCalls >= 2, null, { timeout: 15_000 });
+  assert.equal(await page.evaluate(() => window.__autoRefreshBump), false);
+  assert.ok(await page.evaluate(() => window.__forceRefreshCalls > 0), 'manual refresh must use the cache-bypassing endpoint');
+  await page.evaluate(() => window.__setQuotaPaused());
   await page.getByRole('tab', { name: '模型', exact: true }).click();
-  assert.equal(await page.locator('.odc-model-item').count(), 33);
+  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await page.getByText('连续失败，自动重试已暂停；点击刷新额度重试', { exact: true }).waitFor();
+  const manualBefore = await page.evaluate(() => window.__forceRefreshCalls);
+  await page.getByRole('button', { name: '刷新额度', exact: true }).click();
+  await page.waitForFunction(before => window.__forceRefreshCalls > before, manualBefore);
+  await page.getByText('US$80.00', { exact: true }).waitFor();
+
+  // Unknown quota must stay unknown, never zero; no Design Plan must say so.
+  await page.evaluate(() => window.__setQuotaUnknown());
+  await page.getByRole('button', { name: '刷新额度', exact: true }).click();
+  await page.locator('.odc-metric', { hasText: '订阅账期结束' }).locator('.odc-metric-text').filter({ hasText: '—' }).waitFor();
+  assert.doesNotMatch(await page.locator('.odc-settings').innerText(), /\$0\.00/u);
+  await page.evaluate(() => window.__setQuotaNoPlan());
+  await page.getByRole('button', { name: '刷新额度', exact: true }).click();
+  await page.getByText('当前账号未开通 Design Plan，没有赠送额度窗口。', { exact: true }).waitFor();
+  await page.evaluate(() => window.__restoreQuota());
+  await page.getByRole('button', { name: '刷新额度', exact: true }).click();
+  await page.getByText('US$80.00', { exact: true }).waitFor();
+
+  // Models: switches, whole-map persistence, parameters, reset, stale-status ordering and discovery.
+  await page.getByRole('tab', { name: '模型', exact: true }).click();
+  assert.equal(await page.locator('.odc-model-item').count(), fixtureModels.length);
+  const luna = page.locator('.odc-model-item', { hasText: 'gpt-6-luna' });
+  const lunaSwitch = luna.locator('input[type=checkbox]');
+  assert.equal(await lunaSwitch.isChecked(), true);
+  await lunaSwitch.uncheck();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.enabled === false);
+  await luna.getByText('已禁用', { exact: true }).waitFor();
+  // Force a Host status refresh while disabled, so Status.models still claims `enabled: false`.
+  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await page.getByRole('tab', { name: '模型', exact: true }).click();
+  assert.equal(await page.evaluate(() => window.__lastStatus.models.find(model => model.id === 'gpt-6-luna').enabled), false);
+  // Reset deletes the whole map entry; the ready form must win over the now-stale catalog flag.
+  await luna.getByRole('button', { name: '重置', exact: true }).click();
+  await page.waitForFunction(() => !('gpt-6-luna' in (window.__config.modelSettings ?? {})));
+  assert.equal(await lunaSwitch.isChecked(), true);
+  assert.equal(await luna.getByText('已禁用', { exact: true }).count(), 0);
+  // Expand and edit every parameter; blanks inherit, invalid input never persists.
+  await luna.locator('summary').click();
+  assert.equal(await luna.locator('details').evaluate(element => element.open), true);
+  const temperature = luna.getByLabel('温度', { exact: true });
+  const topP = luna.getByLabel('Top P', { exact: true });
+  const maxTokens = luna.getByLabel('最大输出（tokens）', { exact: true });
+  const contextWindow = luna.getByLabel('上下文预算（tokens）', { exact: true });
+  const effort = luna.getByLabel('默认思考深度', { exact: true });
+  await temperature.fill('0.7');
+  await temperature.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.temperature === 0.7);
+  await topP.fill('0.9');
+  await topP.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.topP === 0.9);
+  await maxTokens.fill('4096');
+  await maxTokens.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.maxTokens === 4096);
+  await contextWindow.fill('200000');
+  await contextWindow.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextWindow === 200000);
+  await effort.selectOption('high');
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.reasoningEffort === 'high');
+  assert.deepEqual(await modelSettings(), {
+    'gpt-6-luna': { temperature: 0.7, topP: 0.9, maxTokens: 4096, contextWindow: 200000, reasoningEffort: 'high' },
+  });
+  await temperature.fill('3');
+  await temperature.blur();
+  await luna.locator('.odc-field-error').first().waitFor();
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.temperature), 0.7);
+  await temperature.fill('0.7');
+  await temperature.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.temperature === 0.7);
+  await page.screenshot({ path: 'docs/previews/models.png', fullPage: true });
+  // Discovery success: source, timestamp and the new row become visible.
+  await page.getByRole('button', { name: '从 OpenAI 刷新模型', exact: true }).click();
+  await page.waitForFunction(() => window.__refreshModelsCalls === 1);
+  await page.getByText(/来源：OpenAI \/models 发现 · 更新于/u).waitFor();
+  await page.getByText('已从 OpenAI 刷新模型列表', { exact: false }).waitFor();
+  assert.equal(await page.locator('.odc-model-item').count(), fixtureModels.length + 1);
+  await page.locator('.odc-model-item', { hasText: 'gpt-6.1-sol-remote' }).waitFor();
+  // Discovery failure keeps the previous catalog and must not claim success.
+  await page.evaluate(() => window.__setModelsFail(true));
+  await page.getByRole('button', { name: '从 OpenAI 刷新模型', exact: true }).click();
+  await page.waitForFunction(() => window.__refreshModelsCalls === 2);
+  await page.getByText('模型发现请求超过 20 秒时限', { exact: true }).waitFor();
+  assert.equal(await page.getByText(/已从 OpenAI 刷新模型列表/u).count(), 0);
+  await page.evaluate(() => window.__setModelsFail(false));
+
   await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
   await page.screenshot({ path: 'docs/previews/connection.png', fullPage: true });
   const password = page.locator('input[type=password]');
   await password.fill('fixture-api-key');
   await page.getByRole('button', { name: /保存.*Key/u }).click();
   await page.waitForFunction(() => document.querySelector('input[type=password]')?.value === '');
+
+  // Advanced: protocol select, read-only gateway, credential reference and real timeouts.
   await page.getByRole('tab', { name: '高级', exact: true }).click();
   const guard = page.getByRole('checkbox', { name: /启用空轮监控/u });
   assert.equal(await guard.isChecked(), true);
+  await page.getByText('本次运行已拦截 2 轮。', { exact: false }).waitFor();
   await guard.uncheck();
-  assert.equal(await guard.isChecked(), false);
+  await page.waitForFunction(() => window.__config.emptyTurnGuard === false);
+  await guard.check();
+  await page.waitForFunction(() => window.__config.emptyTurnGuard === true);
+  const protocol = page.getByLabel('API 协议', { exact: true });
+  assert.equal(await protocol.inputValue(), 'chat-completions');
+  assert.equal(await page.getByRole('option').count(), 3);
+  assert.equal(await page.locator('input[type=url]').count(), 0);
+  assert.equal(await page.getByRole('button', { name: '保存 Base URL', exact: true }).count(), 0);
+  await page.getByText('https://amr-link.open-design.ai/v1/chat/completions', { exact: true }).waitFor();
+  await protocol.selectOption('responses');
+  await page.waitForFunction(() => window.__config.apiProtocol === 'responses');
+  await page.getByText('https://amr-link.open-design.ai/v1/responses', { exact: true }).waitFor();
+  await protocol.selectOption('messages');
+  await page.waitForFunction(() => window.__config.apiProtocol === 'messages');
+  await page.getByText('https://amr-link.open-design.ai/v1/messages', { exact: true }).waitFor();
+  const reference = page.getByLabel('API Key 环境变量 / 凭据引用名', { exact: true });
+  await reference.fill('COROUTER_FIXTURE_REF');
+  await page.getByRole('button', { name: '保存引用名', exact: true }).click();
+  await page.waitForFunction(() => window.__config.apiKeyEnv === 'COROUTER_FIXTURE_REF');
+  const requestTimeout = page.getByLabel('请求总超时（毫秒）', { exact: true });
+  const idleTimeout = page.getByLabel('流式空闲超时（毫秒）', { exact: true });
+  const refreshSeconds = page.getByLabel('额度自动刷新间隔（秒）', { exact: true });
+  await requestTimeout.fill('900000');
+  await requestTimeout.blur();
+  await page.waitForFunction(() => window.__config.requestTimeoutMs === 900000);
+  await idleTimeout.fill('120000');
+  await idleTimeout.blur();
+  await page.waitForFunction(() => window.__config.streamIdleTimeoutMs === 120000);
+  await refreshSeconds.fill('30');
+  await refreshSeconds.blur();
+  await page.waitForFunction(() => window.__config.quotaRefreshSeconds === 30);
+  await refreshSeconds.fill('4');
+  await refreshSeconds.blur();
+  await page.locator('.odc-field-error').first().waitFor();
+  assert.equal(await page.evaluate(() => window.__config.quotaRefreshSeconds), 30);
+  await refreshSeconds.fill('30');
+  await refreshSeconds.blur();
+  await page.locator('.odc-field-error').waitFor({ state: 'detached' });
+  await page.screenshot({ path: 'docs/previews/advanced.png', fullPage: true });
   await page.getByRole('tab', { name: '高级', exact: true }).press('Home');
   assert.equal(await page.getByRole('tab', { name: '概览', exact: true }).getAttribute('aria-selected'), 'true');
   const reports = [];
@@ -108,7 +342,7 @@ try {
     await page.getByRole('button', { name: '刷新额度', exact: true }).click();
     await page.locator('.odc-notice[data-kind=error]').waitFor();
     reports.push(await auditTheme(page, `${index + 1}-${mode}-error`));
-    await page.evaluate(() => window.__setQuotaState('ok', undefined));
+    await page.evaluate(() => window.__setQuotaState('ok'));
     await page.getByRole('button', { name: '刷新额度', exact: true }).click();
     await page.locator('.odc-notice[data-kind=error]').waitFor({ state: 'detached' });
   }
@@ -127,5 +361,5 @@ try {
   assert.equal(await page.locator('style[data-opendesign-corouter]').count(), 0);
   assert.equal(await page.evaluate(() => window.__remoteDisposed), true);
   assert.deepEqual(errors, []);
-  console.log(`Offline UI smoke passed: 4 tabs, 33 models, credential input, guard switch, keyboard navigation, disposal; ${reports.length} official light/dark/forced-color audits, minimum measured text contrast ${Math.min(...reports.map(report => report.minimum))}:1.`);
+  console.log(`Offline UI smoke passed: 4 tabs, ${fixtureModels.length} models, model enable/edit/reset persistence, protocol selection, quota timing and auto-refresh scheduling, 8 RPCs, credential input, guard switch, keyboard navigation, disposal; ${reports.length} official light/dark/forced-color audits, minimum measured text contrast ${Math.min(...reports.map(report => report.minimum))}:1.`);
 } finally { await browser.close(); }

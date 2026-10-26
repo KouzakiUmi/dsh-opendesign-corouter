@@ -45,10 +45,10 @@ function through(method: string, value: unknown): unknown {
   return descriptor.result.create().parse(value);
 }
 
-test('six descriptors state every wire fact typert validates', () => {
+test('eight descriptors state every wire fact typert validates', () => {
   const descriptors = openDesignCoRouterRemote.descriptors;
   assert.equal(openDesignCoRouterRemote.package, REMOTE_PACKAGE);
-  assert.deepEqual(descriptors.map(d => d.method), ['status', 'refreshQuota', 'startLogin', 'loginStatus', 'cancelLogin', 'saveApiKey']);
+  assert.deepEqual(descriptors.map(d => d.method), ['status', 'refreshModels', 'refreshQuota', 'refreshQuotaNow', 'startLogin', 'loginStatus', 'cancelLogin', 'saveApiKey']);
   for (const descriptor of descriptors) {
     // typert rejects an empty/#-bearing id, a foreign service, and any non-RPC segment.
     assert.equal(descriptor.id, `${REMOTE_PACKAGE}#${REMOTE_SERVICE}/${descriptor.method}`);
@@ -122,6 +122,23 @@ test('quota keeps its four layers and drops unknown fields', () => {
   assert.throws(() => parseQuotaSnapshot({ ...status.quota, updatedAt: 'yesterday' }), /额度更新时间/u);
   assert.throws(() => parseQuotaSnapshot({ ...status.quota, windows: 'many' }), /额度窗口/u);
   assert.throws(() => parseQuotaSnapshot({ ...status.quota, windows: [{ durationSeconds: 0, used: 1, limit: 1, percent: 1 }] }), /时长/u);
+});
+
+test('quota periods, local refresh plans and model settings survive the actual RPC codec', () => {
+  const extended: Status = {
+    ...status,
+    quota: {
+      ...status.quota,
+      subscriptionPeriodStart: '2026-10-01T00:00:00Z', subscriptionPeriodEnd: '2026-11-01T00:00:00Z',
+      nextRefreshAt: '2026-10-26T08:01:00Z', stale: true, refreshFailures: 2, autoRefreshPaused: false,
+      windows: [{ ...status.quota.windows[0]!, windowStart: '2026-10-22T12:00:00Z', resetMode: 'anchored_recurring' }],
+    },
+    config: { ...status.config, apiProtocol: 'messages', modelSettings: { 'gpt-6-astra': { enabled: false, maxTokens: 8192 } }, requestTimeoutMs: 10000, streamIdleTimeoutMs: 3000, quotaRefreshSeconds: 60 },
+    models: [{ ...status.models[0]!, enabled: false, contextWindow: 100000, maxOutputTokens: 8192, reasoningEfforts: ['low', 'high'] }],
+    modelsSource: 'openai', modelsUpdatedAt: '2026-10-26T08:00:00Z',
+  };
+  assert.deepEqual(through('status', extended), extended);
+  assert.deepEqual(through('refreshQuota', extended.quota), extended.quota);
 });
 
 test('login state never carries the session it is proving', () => {

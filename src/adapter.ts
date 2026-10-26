@@ -1,17 +1,21 @@
 import {
-  LlmAdapter, LlmError, ReasoningEffortId, attributionHeaders, assertUsableApiKey,
+  LlmAdapter, LlmError, ReasoningEffortId, assertUsableApiKey,
   type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo, type PreparedAdapterCall, type StreamChunk,
 } from '@deepseek-ai/dsh-llm';
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
-import { modelsFor, findModel, type CatalogModel } from './catalog.js';
+import { MODELS, type CatalogModel } from './catalog.js';
 import { PLAN_PROVIDER, PAID_PROVIDER, type RuntimeConfig } from './config.js';
 import { chatMessages, chatTools, estimateTokens } from './conversion.js';
-import { consumeSse, gatewayError } from './stream.js';
+import { gatewayError } from './stream.js';
 import { combinedSignal } from './util.js';
 import { EmptyTurnTracker } from './empty-turn.js';
+import { applyModelSettings, isModelEnabled, type ModelSettings } from './model-settings.js';
+import { protocolFor } from './protocols/index.js';
+import type { ApiProtocol } from './protocol-options.js';
 
 export interface AdapterOptions {
   config(): RuntimeConfig;
+  models?(): readonly CatalogModel[];
   apiKey(ref: string): Promise<string | undefined>;
   imageDataUrl?(image: ImageAttachmentRef, signal: AbortSignal): Promise<string | undefined>;
   onEmptyTurn?(): void;
@@ -22,22 +26,23 @@ function group(provider: string): 'plan' | 'paid' {
   if (provider === PAID_PROVIDER) return 'paid';
   throw new LlmError('未知的 CoRouter Provider', 'INVALID_REQUEST');
 }
-function modelOf(provider: string, id: string): CatalogModel {
-  const model = findModel(id);
-  if (!model || model.group !== group(provider)) throw new LlmError('该模型不属于当前 CoRouter Provider；请在模型选择器中选择对应通道', 'INVALID_REQUEST');
-  return model;
+function outputReserve(model: CatalogModel, protocol: ApiProtocol): number | undefined {
+  const limit = model.maxOutputTokens ?? (protocol === 'messages' ? 4096 : undefined);
+  return limit === undefined ? undefined : model.contextWindow === undefined ? limit : Math.min(limit, Math.floor(model.contextWindow / 4));
 }
-function outputReserve(model: CatalogModel): number | undefined {
-  return model.maxOutputTokens === undefined ? undefined : model.contextWindow === undefined ? model.maxOutputTokens : Math.min(model.maxOutputTokens, Math.floor(model.contextWindow / 4));
-}
-function metadata(provider: string, row: CatalogModel): LlmResolvedModelInfo {
-  const reserve = outputReserve(row);
+function metadata(provider: string, row: CatalogModel, config: RuntimeConfig): LlmResolvedModelInfo {
+  const setting = config.modelSettings?.[row.id];
+  const reserve = setting?.maxTokens ?? outputReserve(row, config.apiProtocol ?? 'chat-completions');
+  const efforts = row.reasoningEfforts ?? (setting?.reasoningEffort ? [setting.reasoningEffort] : undefined);
   return {
     provider, id: row.id, name: row.name,
     ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
     ...(row.contextWindow === undefined ? {} : { context: { contextWindow: row.contextWindow - (reserve ?? 0) } }),
     ...(reserve === undefined ? {} : { defaultMaxTokens: reserve }),
-    ...(row.reasoningEfforts?.length ? { reasoning: { efforts: row.reasoningEfforts.map(id => ({ id: ReasoningEffortId(id), name: ({ none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '较高', ultra: '极高', max: '最高' } as Record<string, string>)[id] ?? id })) } } : {}),
+    ...(efforts?.length ? { reasoning: {
+      efforts: efforts.map(id => ({ id: ReasoningEffortId(id), name: ({ none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '较高', ultra: '极高', max: '最高' } as Record<string, string>)[id] ?? id })),
+      ...(setting?.reasoningEffort ? { defaultEffort: ReasoningEffortId(setting.reasoningEffort) } : {}),
+    } } : {}),
   };
 }
 export class CoRouterAdapter extends LlmAdapter {
@@ -47,20 +52,33 @@ export class CoRouterAdapter extends LlmAdapter {
   override providerInfo(provider: string) {
     return { id: provider, name: group(provider) === 'plan' ? 'OpenDesign CoRouter · 套餐赠送' : 'OpenDesign CoRouter · 付费模型' };
   }
+  private modelOf(provider: string, id: string, config: RuntimeConfig): CatalogModel {
+    const row = (this.options.models?.() ?? MODELS).find(candidate => candidate.id === id);
+    if (!row || row.group !== group(provider)) throw new LlmError('该模型不属于当前 CoRouter Provider；请刷新模型列表并选择对应通道', 'INVALID_REQUEST');
+    if (!isModelEnabled(id, config.modelSettings)) throw new LlmError('该模型已在 CoRouter 设置中停用', 'MODEL_DISABLED');
+    const configured = applyModelSettings(row, config.modelSettings?.[id]);
+    const output = config.modelSettings?.[id]?.maxTokens;
+    if (output !== undefined && configured.contextWindow !== undefined && output >= configured.contextWindow) throw new LlmError('模型最大输出必须小于上下文预算，请调整模型参数', 'INVALID_REQUEST');
+    return configured;
+  }
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    return modelsFor(group(provider)).map(row => ({ provider, id: row.id, name: row.name, ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}) }));
+    const config = this.options.config(), selectedGroup = group(provider);
+    return (this.options.models?.() ?? MODELS).filter(row => row.group === selectedGroup && isModelEnabled(row.id, config.modelSettings))
+      .map(row => ({ provider, id: row.id, name: row.name, ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}) }));
   }
   override async resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     signal?.throwIfAborted();
-    return metadata(provider, modelOf(provider, model));
+    const config = this.options.config();
+    return metadata(provider, this.modelOf(provider, model, config), config);
   }
   override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
     signal?.throwIfAborted();
-    const config = this.options.config(), row = modelOf(provider, model);
-    return { model: metadata(provider, row), stream: options => this.#stream(options, config, row) };
+    const config = this.options.config(), row = this.modelOf(provider, model, config);
+    return { model: metadata(provider, row, config), stream: options => this.#stream(options, config, row) };
   }
   override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    return this.#stream(options, this.options.config(), modelOf(options.provider, options.model));
+    const config = this.options.config();
+    return this.#stream(options, config, this.modelOf(options.provider, options.model, config));
   }
   async *#stream(options: GenerateOptions, config: RuntimeConfig, row: CatalogModel): AsyncGenerator<StreamChunk> {
     const signal = AbortSignal.any([combinedSignal(options.signal, config.requestTimeoutMs), this.#lifetime.signal]);
@@ -68,40 +86,64 @@ export class CoRouterAdapter extends LlmAdapter {
     const raw = await this.options.apiKey(config.apiKeyEnv);
     if (!raw) throw new LlmError('未配置 CoRouter API Key；请在插件设置中保存或设置对应环境变量', 'MISSING_CREDENTIAL');
     const key = assertUsableApiKey(raw, 'dsh-opendesign-corouter', config.apiKeyEnv);
+    const setting: ModelSettings = config.modelSettings?.[row.id] ?? {};
+    const protocolId = config.apiProtocol ?? 'chat-completions';
     const images = new Map<string, string>();
-    if (row.inputModalities?.includes('image') && this.options.imageDataUrl) for (const message of options.messages.filter(row => row.role === 'user' || row.role === 'tool')) for (const block of message.content) {
-      if (block.type !== 'image' || block.offloaded || images.has(block.attachment.attachmentId)) continue;
-      const url = await this.options.imageDataUrl(block.attachment, signal);
-      if (url) images.set(block.attachment.attachmentId, url);
+    const attemptedImages = new Set<string>();
+    const unreadableImages = new Set<string>();
+    if (row.inputModalities?.includes('image') && this.options.imageDataUrl) for (const message of options.messages.filter(item => item.role === 'user' || item.role === 'tool')) for (const block of message.content) {
+      if (block.type !== 'image' || block.offloaded || attemptedImages.has(block.attachment.attachmentId)) continue;
+      attemptedImages.add(block.attachment.attachmentId);
+      try {
+        const url = await this.options.imageDataUrl(block.attachment, signal);
+        signal.throwIfAborted();
+        if (url) images.set(block.attachment.attachmentId, url);
+        else unreadableImages.add(block.attachment.attachmentId);
+      } catch {
+        // A missing image becomes the named placeholder; cancellation must still stop the call.
+        signal.throwIfAborted();
+        unreadableImages.add(block.attachment.attachmentId);
+      }
     }
-    const messages = chatMessages(options, ref => images.get(ref.attachmentId), row.id.startsWith('deepseek-') || row.id.startsWith('kimi-'));
+    const projectedOptions: GenerateOptions = unreadableImages.size === 0 ? options : {
+      ...options,
+      messages: options.messages.map(message => message.role !== 'user' && message.role !== 'tool' ? message : {
+        ...message,
+        content: message.content.map(block => block.type === 'image' && !block.offloaded && unreadableImages.has(block.attachment.attachmentId)
+          ? { type: 'text' as const, text: `[Image ${JSON.stringify(block.attachment.name ?? 'attachment')} could not be read; attachment ${block.attachment.attachmentId}. The model's image capability has not changed.]` }
+          : block),
+      }),
+    };
+    const messages = chatMessages(projectedOptions, ref => images.get(ref.attachmentId), row.id.startsWith('deepseek-') || row.id.startsWith('kimi-'));
     const tools = chatTools(options);
-    const body: Record<string, unknown> = { model: row.id, messages, stream: true, stream_options: { include_usage: true }, ...(tools ? { tools } : {}) };
-    if (options.temperature !== undefined) body.temperature = options.temperature;
-    const requested = options.maxTokens ?? outputReserve(row);
-    if (requested !== undefined) {
-      if (!Number.isInteger(requested) || requested <= 0) throw new LlmError('maxTokens 必须是正整数', 'INVALID_REQUEST');
-      const capped = Math.min(requested, row.maxOutputTokens ?? requested);
+    let maxTokens = options.maxTokens ?? setting.maxTokens ?? outputReserve(row, protocolId);
+    if (maxTokens !== undefined) {
+      if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0) throw new LlmError('maxTokens 必须是正整数', 'INVALID_REQUEST');
+      const capped = Math.min(maxTokens, row.maxOutputTokens ?? maxTokens);
       const room = row.contextWindow === undefined ? capped : row.contextWindow - estimateTokens({ messages, tools });
       if (room < 1) throw new LlmError('当前输入没有为输出留下上下文空间', 'CONTEXT_WINDOW_EXCEEDED');
-      body.max_tokens = Math.min(capped, Math.floor(room));
+      maxTokens = Math.min(capped, Math.floor(room));
     }
-    if (options.reasoningEffort !== undefined) {
-      if (row.reasoningEfforts && !row.reasoningEfforts.includes(options.reasoningEffort)) throw new LlmError('该模型不支持所选思考深度', 'UNSUPPORTED_OPTION');
-      body.reasoning_effort = options.reasoningEffort;
-    }
-    if (options.stop?.length) body.stop = options.stop;
+    const effort = options.reasoningEffort ?? (setting.reasoningEffort ? ReasoningEffortId(setting.reasoningEffort) : undefined);
+    if (effort !== undefined && row.reasoningEfforts && !row.reasoningEfforts.includes(effort)) throw new LlmError('该模型不支持所选思考深度', 'UNSUPPORTED_OPTION');
+    const effective: GenerateOptions = {
+      ...projectedOptions,
+      ...((options.temperature ?? setting.temperature) === undefined ? {} : { temperature: options.temperature ?? setting.temperature }),
+      ...(maxTokens === undefined ? {} : { maxTokens }),
+      ...(effort === undefined ? {} : { reasoningEffort: effort }),
+    };
+    const protocol = protocolFor(protocolId);
+    const request = protocol.build({ baseURL: config.baseURL, apiKey: key, model: row, options: effective, images, ...(setting.topP === undefined ? {} : { topP: setting.topP }) });
     let response: Response;
     try {
-      response = await (this.options.fetch ?? fetch)(`${config.baseURL}/chat/completions`, {
-        method: 'POST', headers: { ...attributionHeaders(), authorization: `Bearer ${key}`, 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(body), signal, redirect: 'error',
+      response = await (this.options.fetch ?? fetch)(request.url, {
+        method: 'POST', headers: request.headers, body: JSON.stringify(request.body), signal, redirect: 'error',
       });
     } catch {
       if (options.signal?.aborted || this.#lifetime.signal.aborted) signal.throwIfAborted();
       throw new LlmError(signal.aborted ? 'CoRouter 请求超过总超时' : '无法连接 CoRouter 推理服务', signal.aborted ? 'TIMEOUT' : 'SERVER');
     }
     if (!response.ok) {
-      // Only parse bounded JSON for taxonomy; no upstream text enters logs/errors.
       let error: unknown = {};
       const reader = response.body?.getReader();
       if (reader) {
@@ -116,7 +158,7 @@ export class CoRouterAdapter extends LlmAdapter {
             raw += decoder.decode(chunk.value, { stream: true });
           }
           if (raw) error = JSON.parse(raw + decoder.decode());
-        } catch { /* Non-JSON/error bodies are deliberately not projected. */ }
+        } catch { /* Untrusted non-JSON errors are not projected. */ }
         finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
       }
       throw gatewayError(response.status, error);
@@ -124,12 +166,10 @@ export class CoRouterAdapter extends LlmAdapter {
     if (!response.body) throw new LlmError('CoRouter 返回空响应', 'EMPTY_RESPONSE');
     const tracker = new EmptyTurnTracker({ enabled: row.group === 'plan' && config.emptyTurnGuard && Boolean(options.tools?.length), onEmptyTurn: () => this.options.onEmptyTurn?.() });
     try {
-      for await (const chunk of consumeSse(response.body, signal, config.streamIdleTimeoutMs)) {
+      for await (const chunk of protocol.stream(response.body, signal, config.streamIdleTimeoutMs)) {
         tracker.observe(chunk);
-        if (chunk.type === 'finish' && row.group === 'plan' && config.emptyTurnGuard) {
-          const reason = tracker.resolve(chunk.reason);
-          yield { ...chunk, reason };
-        } else yield chunk;
+        if (chunk.type === 'finish' && row.group === 'plan' && config.emptyTurnGuard) yield { ...chunk, reason: tracker.resolve(chunk.reason) };
+        else yield chunk;
       }
     } catch (error) {
       if (options.signal?.aborted || this.#lifetime.signal.aborted) signal.throwIfAborted();

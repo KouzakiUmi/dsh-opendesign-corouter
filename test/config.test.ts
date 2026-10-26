@@ -6,7 +6,16 @@ test('configuration rejects unsafe URLs before persistence and exposes live defa
   assert.equal(config.emptyTurnGuard, true);
   assert.equal(config.useDesktopCredential, true);
   assert.equal(config.baseURL, 'https://amr-link.open-design.ai/v1');
+  assert.equal(config.apiProtocol, 'chat-completions');
+  assert.deepEqual(config.modelSettings, {});
+  assert.equal(config.quotaRefreshSeconds, 60);
   assert.equal(assertBaseURL('https://example.com/v1/'), 'https://example.com/v1');
   for (const baseURL of ['https://user:password@example.com/v1', 'https://example.com/v1?secret=fixture', 'https://example.com/v1#fragment', 'http://example.com/v1', 'not a URL']) assert.throws(() => Config({ baseURL }));
   assert.equal(readConfig(Config({ baseURL: 'http://127.0.0.1:8080/v1' })).baseURL, 'http://127.0.0.1:8080/v1');
+  const customized = readConfig(Config({ apiProtocol: 'messages', modelSettings: { 'gpt-6-luna': { enabled: false, temperature: 0.3, maxTokens: 4096 } } }));
+  assert.equal(customized.apiProtocol, 'messages');
+  assert.equal(customized.modelSettings?.['gpt-6-luna']?.enabled, false);
+  assert.throws(() => Reflect.apply(Config, undefined, [{ apiProtocol: 'not-a-protocol' }]));
+  assert.throws(() => Config({ modelSettings: { 'gpt-6-luna': { apiKey: 'must-not-persist' } } }));
+  assert.throws(() => Config({ quotaRefreshSeconds: 0 }));
 });

@@ -2,6 +2,8 @@
 
 import type { QuotaSnapshot, QuotaWindow, SessionSource } from './quota.js';
 import { record } from './util.js';
+import { API_PROTOCOL_IDS, type ApiProtocol } from './protocol-options.js';
+import { parseModelSettingsMap, type ModelSettingsMap } from './model-settings.js';
 
 // Type-only: browser imports must not pull in quota.ts runtime dependencies.
 export type { QuotaSnapshot, QuotaWindow, SessionSource } from './quota.js';
@@ -25,7 +27,7 @@ const MAX_WINDOWS = 64;
 const MAX_API_KEY = 16_384;
 const HTTP_ASCII = /^[\x21-\x7e]+$/u;
 const ENV_REF = /^[A-Za-z_][A-Za-z0-9_]*$/u;
-const MODEL_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
+const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/u;
 
 /** Live switches of this plugin, mirrored for a settings page that only has this RPC. */
 export interface StatusConfig {
@@ -34,6 +36,11 @@ export interface StatusConfig {
   baseURL: string;
   /** Credential reference name (an env var or a DSH credential ref), never the value. */
   apiKeyEnv: string;
+  apiProtocol?: ApiProtocol;
+  modelSettings?: ModelSettingsMap;
+  requestTimeoutMs?: number;
+  streamIdleTimeoutMs?: number;
+  quotaRefreshSeconds?: number;
 }
 
 /** One selectable model; `group` selects which of the two Providers owns it. */
@@ -41,6 +48,10 @@ export interface StatusModel {
   id: string;
   name: string;
   group: 'plan' | 'paid';
+  enabled?: boolean;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  reasoningEfforts?: readonly string[];
 }
 
 /** Terminal-or-in-flight phases a login job may report. */
@@ -67,6 +78,9 @@ export interface Status {
   /** Turns the empty-turn guard actually intercepted since process start. */
   guardedTurns: number;
   models: readonly StatusModel[];
+  modelsSource?: 'builtin' | 'openai';
+  modelsUpdatedAt?: string;
+  modelsError?: string;
 }
 
 export interface StartLoginRequest {
@@ -114,6 +128,15 @@ function amount(value: unknown, label: string, negative = false): number {
   return value;
 }
 
+function positiveInteger(value: unknown, label: string, max: number): number {
+  const result = count(value, label);
+  if (result === 0 || result > max) throw new Error(`${label} 超出范围`);
+  return result;
+}
+function parseEfforts(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 16) throw new Error('模型思考档位格式无效');
+  return value.map(item => text(item, '思考档位', 32));
+}
 function member<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
   const hit = allowed.find(candidate => candidate === value);
   if (hit === undefined) throw new Error(`${label} 不在允许的取值内`);
@@ -133,6 +156,8 @@ function parseQuotaWindow(value: unknown): QuotaWindow {
     ...(value.remaining === undefined ? {} : { remaining: amount(value.remaining, '剩余额度') }),
     percent: Math.min(100, Math.max(0, amount(value.percent, '已用百分比'))),
     ...(value.resetsAt === undefined ? {} : { resetsAt: isoTime(value.resetsAt, '额度重置时间') }),
+    ...(value.windowStart === undefined ? {} : { windowStart: isoTime(value.windowStart, '额度窗口开始时间') }),
+    ...(value.resetMode === undefined ? {} : { resetMode: text(value.resetMode, '额度刷新方式', 128) }),
   };
 }
 
@@ -147,6 +172,12 @@ export function parseQuotaSnapshot(value: unknown): QuotaSnapshot {
     state: member(value.state, QUOTA_STATES, '额度状态'),
     ...(value.source === undefined ? {} : { source: member(value.source, SESSION_SOURCES, '额度来源') }),
     updatedAt: isoTime(value.updatedAt, '额度更新时间'),
+    ...(value.subscriptionPeriodStart === undefined ? {} : { subscriptionPeriodStart: isoTime(value.subscriptionPeriodStart, '订阅周期开始时间') }),
+    ...(value.subscriptionPeriodEnd === undefined ? {} : { subscriptionPeriodEnd: isoTime(value.subscriptionPeriodEnd, '订阅周期结束时间') }),
+    ...(value.nextRefreshAt === undefined ? {} : { nextRefreshAt: isoTime(value.nextRefreshAt, '下次自动刷新时间') }),
+    ...(value.stale === undefined ? {} : { stale: flag(value.stale, '历史额度读数') }),
+    ...(value.refreshFailures === undefined ? {} : { refreshFailures: count(value.refreshFailures, '连续刷新失败次数') }),
+    ...(value.autoRefreshPaused === undefined ? {} : { autoRefreshPaused: flag(value.autoRefreshPaused, '自动刷新暂停状态') }),
     ...(value.tier === undefined ? {} : { tier: text(value.tier, '套餐名', MAX_TIER) }),
     ...(value.eligible === undefined ? {} : { eligible: flag(value.eligible, '套餐资格') }),
     windows: windows.map(parseQuotaWindow),
@@ -181,6 +212,10 @@ function parseStatusModel(value: unknown): StatusModel {
     id,
     name: text(value.name, '模型名', 128),
     group: member(value.group, MODEL_GROUPS, '模型分组'),
+    ...(value.enabled === undefined ? {} : { enabled: flag(value.enabled, '模型启用状态') }),
+    ...(value.contextWindow === undefined ? {} : { contextWindow: positiveInteger(value.contextWindow, '上下文预算', 100_000_000) }),
+    ...(value.maxOutputTokens === undefined ? {} : { maxOutputTokens: positiveInteger(value.maxOutputTokens, '最大输出', 10_000_000) }),
+    ...(value.reasoningEfforts === undefined ? {} : { reasoningEfforts: parseEfforts(value.reasoningEfforts) }),
   };
 }
 
@@ -193,6 +228,11 @@ function parseStatusConfig(value: unknown): StatusConfig {
     useDesktopCredential: flag(value.useDesktopCredential, '桌面登录态开关'),
     baseURL: text(value.baseURL, '推理地址', MAX_BASE_URL),
     apiKeyEnv,
+    ...(value.apiProtocol === undefined ? {} : { apiProtocol: member(value.apiProtocol, API_PROTOCOL_IDS, '推理协议') }),
+    ...(value.modelSettings === undefined ? {} : { modelSettings: parseModelSettingsMap(value.modelSettings) }),
+    ...(value.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: positiveInteger(value.requestTimeoutMs, '请求超时', 3_600_000) }),
+    ...(value.streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs: positiveInteger(value.streamIdleTimeoutMs, '流空闲超时', 1_800_000) }),
+    ...(value.quotaRefreshSeconds === undefined ? {} : { quotaRefreshSeconds: positiveInteger(value.quotaRefreshSeconds, '自动刷新间隔', 3600) }),
   };
 }
 
@@ -216,6 +256,9 @@ export function parseStatus(value: unknown): Status {
     config: parseStatusConfig(value.config),
     guardedTurns: count(value.guardedTurns, '已拦截空轮数'),
     models: parsed,
+    ...(value.modelsSource === undefined ? {} : { modelsSource: member(value.modelsSource, ['builtin', 'openai'] as const, '模型目录来源') }),
+    ...(value.modelsUpdatedAt === undefined ? {} : { modelsUpdatedAt: isoTime(value.modelsUpdatedAt, '模型更新时间') }),
+    ...(value.modelsError === undefined ? {} : { modelsError: text(value.modelsError, '模型更新提示', MAX_MESSAGE) }),
   };
 }
 
