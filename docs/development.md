@@ -21,7 +21,7 @@ npm run test:ui
 [工作流](../.github/workflows/ci.yml) 在 main 推送、PR 或手动触发时执行：
 
 1. Windows 与 Ubuntu 并行执行锁文件安装、构建、类型检查、隔离测试和包入口验证。
-2. 两个平台通过后，Ubuntu 安装测试用 Chrome / 字体，执行 UI 和主题检查。
+2. 两个平台通过后，Ubuntu 优先复用 runner 预装的 Chrome / CJK 字体，仅缺失时安装，并为准备步骤设置超时；随后执行相同的 UI 和主题检查。
 3. 打包 `.tgz`，验证包身份、公开导出与文件清单，生成 SHA-256。
 4. 上传 `dsh-opendesign-corouter-build`（安装包与校验文件）及 `ui-previews`（模拟截图与报告），保留 14 天。
 

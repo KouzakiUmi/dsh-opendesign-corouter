@@ -52,10 +52,20 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Build and verify publication entries
         run: npm run build && npm run verify:package
-      - name: Install the browser and CJK font for offline UI tests
+      - name: Prepare the browser and CJK font for offline UI tests
+        timeout-minutes: 8
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          node node_modules/playwright-core/cli.js install --with-deps chrome
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          else
+            timeout 180s node node_modules/playwright-core/cli.js install --with-deps chrome
+          fi
+          if [[ "$(dpkg-query -W -f='${Status}' fonts-noto-cjk 2>/dev/null)" != 'install ok installed' ]]; then
+            timeout 120s sudo apt-get update
+            timeout 180s sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fi
       - name: Offline browser and official-theme checks
         run: npm run test:ui
       - name: Pack and inspect the distributable
