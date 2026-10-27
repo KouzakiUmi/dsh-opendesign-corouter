@@ -10,16 +10,14 @@
  * - `reasoningEffort` 按现代 Messages 标准投影为 `thinking: {type:'adaptive'}` +
  *   `output_config.effort`；`none` 投影为 `thinking: {type:'disabled'}`；`minimal`/`ultra`
  *   等没有对应 effort 的档位抛 UNSUPPORTED_OPTION；
- * - `temperature`/`top_p` 等采样参数原样透传，其取值限制（只针对特定 Claude 代际）与
- *   「仅接受 enabled + budget_tokens 的 legacy 模型」能否使用，都由上游按实际模型判定，
- *   本模块不做本地推断，而是把上游拒绝分类上报；
- * - 历史 assistant 的 reasoning 块没有 Anthropic 签名，**不回放**（伪造签名会污染上下文），
- *   只把本轮 `thinking_delta` 映射成 reasoning 输出块。
+ * - 已确认的八个 Claude 模型先校验 Messages 采样默认值与 128000 输出上限；
+ *   其余模型的采样限制及 legacy thinking 兼容性由上游按实际模型判定；
+ * - 签名与密态仅保存在 adapter-private replay metadata；历史无签名 reasoning 不回放。
  */
 
 import {
   LlmError, ToolCallId,
-  type FinishReason, type StreamChunk, type TokenUsage,
+  type FinishReason, type ReplayEnvelope, type RequestMessage, type StreamChunk, type TokenUsage,
 } from '@deepseek-ai/dsh-llm';
 import { record } from '../util.js';
 import { anthropicError, PrematureEndError } from './errors.js';
@@ -29,7 +27,8 @@ import { protocolAcceptsEffort } from '../reasoning.js';
 import { projectContent } from './parts.js';
 import { sseFrames } from './sse.js';
 import { anthropicUsage } from './usage.js';
-import type { Protocol, ProtocolContext, WireRequest } from './types.js';
+import { validateClaudeOutput, validateClaudeSampling } from '../claude-parameters.js';
+import type { Protocol, ProtocolContext, ProtocolStreamContext, WireRequest } from './types.js';
 
 /** 未显式给出 `max_tokens` 时的保守默认值（与适配器元数据一致）。 */
 export const MESSAGES_DEFAULT_MAX_TOKENS = 4096;
@@ -38,6 +37,56 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const DATA_URL = /^data:([^;,]+);base64,(.*)$/su;
 
 type ContentPart = Record<string, unknown>;
+
+const REPLAY_FORMAT = 'opendesign.anthropic-messages';
+const MAX_REPLAY_CHARS = 8 * 1024 * 1024;
+const MAX_BLOCKS = 4096;
+type ReplayBlock =
+  | { type: 'text' | 'reasoning'; text: string }
+  | { type: 'tool-call'; id: string; name: string; arguments: string }
+  | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'redacted_thinking'; data: string };
+
+/** The whole alignment is checked before any private block is sent. */
+function replayBlocks(message: RequestMessage, ctx: ProtocolContext): readonly ReplayBlock[] | undefined {
+  if (message.role !== 'assistant' || message.source.provider !== ctx.options.provider || message.source.model !== ctx.options.model) return;
+  const envelope = message.source.replayState;
+  if (!record(envelope) || !record(envelope.response) || !Array.isArray(envelope.blocks)) return;
+  const response = envelope.response;
+  if (response.format !== REPLAY_FORMAT || response.version !== 1 || response.protocol !== 'messages'
+    || response.provider !== ctx.options.provider || response.model !== ctx.options.model
+    || envelope.blocks.length !== message.content.length) return;
+  let size = 0;
+  const entries: ReplayBlock[] = [];
+  for (const [index, block] of message.content.entries()) {
+    const entry: unknown = envelope.blocks[index];
+    if (!record(entry)) return;
+    if ((entry.type === 'text' || entry.type === 'reasoning') && block.type === entry.type
+      && typeof entry.text === 'string' && entry.text === block.text) {
+      entries.push({ type: entry.type, text: entry.text }); size += entry.text.length;
+    } else if (entry.type === 'tool-call' && block.type === 'tool-call'
+      && entry.id === block.id && entry.name === block.name && entry.arguments === block.arguments) {
+      entries.push({ type: 'tool-call', id: block.id, name: block.name, arguments: block.arguments });
+      size += block.id.length + block.name.length + block.arguments.length;
+    } else if (entry.type === 'thinking' && block.type === 'reasoning'
+      && typeof entry.thinking === 'string' && entry.thinking === block.text
+      && typeof entry.signature === 'string' && entry.signature.length > 0) {
+      entries.push({ type: 'thinking', thinking: entry.thinking, signature: entry.signature });
+      size += entry.thinking.length + entry.signature.length;
+    } else if (entry.type === 'redacted_thinking' && block.type === 'reasoning' && block.text === ''
+      && typeof entry.data === 'string' && entry.data.length > 0) {
+      entries.push({ type: 'redacted_thinking', data: entry.data }); size += entry.data.length;
+    } else return;
+    if (size > MAX_REPLAY_CHARS || entries.length > MAX_BLOCKS) return;
+  }
+  if (entries.some(entry => entry.type === 'thinking' || entry.type === 'redacted_thinking')
+    && (response.origin !== new URL(ctx.baseURL).origin
+      || typeof ctx.credentialIdentity !== 'string' || ctx.credentialIdentity.length === 0
+      || response.credentialIdentity !== ctx.credentialIdentity)) {
+    throw new LlmError('无法验证历史 Claude 思考数据属于当前凭据。请恢复原凭据及回放绑定记录后重试；若仅使用内存绑定且已重启，请新建会话，或先压缩移除旧思考及其工具续接历史。', 'INVALID_REQUEST');
+  }
+  return entries;
+}
 
 /** 网关根或 `/v1` Base 都补成 `/v1/messages`。 */
 export function messagesURL(baseURL: string): string {
@@ -72,7 +121,9 @@ function toolInput(argumentsText: string): Record<string, unknown> {
 /** 构造 Messages 请求。 */
 export function buildMessagesRequest(ctx: ProtocolContext): WireRequest {
   const { options, model } = ctx;
+  validateClaudeSampling(model.id, options.temperature, ctx.topP);
   const maxTokens = options.maxTokens ?? MESSAGES_DEFAULT_MAX_TOKENS;
+  validateClaudeOutput(model.id, maxTokens);
   if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0) throw new LlmError('maxTokens 必须是正整数', 'INVALID_REQUEST');
 
   const system: string[] = [];
@@ -117,9 +168,17 @@ export function buildMessagesRequest(ctx: ProtocolContext): WireRequest {
       }
       case 'assistant': {
         const content: ContentPart[] = [];
-        if (projected.text) content.push({ type: 'text', text: projected.text });
-        for (const block of message.content) {
-          if (block.type === 'tool-call') content.push({ type: 'tool_use', id: block.id, name: block.name, input: toolInput(block.arguments) });
+        const replay = replayBlocks(message, ctx);
+        for (const [index, block] of message.content.entries()) {
+          const entry = replay?.[index];
+          if (entry?.type === 'thinking') content.push({ type: 'thinking', thinking: entry.thinking, signature: entry.signature });
+          else if (entry?.type === 'redacted_thinking') content.push({ type: 'redacted_thinking', data: entry.data });
+          else if (block.type === 'text' && block.text !== '') content.push({ type: 'text', text: block.text });
+          else if (block.type === 'tool-call') content.push({ type: 'tool_use', id: block.id, name: block.name, input: toolInput(block.arguments) });
+          else if (block.type === 'image') {
+            const placeholder = projectContent([block]).text;
+            if (placeholder) content.push({ type: 'text', text: placeholder });
+          }
         }
         if (content.length) messages.push({ role: 'assistant', content });
         break;
@@ -153,22 +212,25 @@ export function buildMessagesRequest(ctx: ProtocolContext): WireRequest {
       body.output_config = { effort };
     } else throw new LlmError(`Anthropic Messages 协议不接受思考深度「${effort}」`, 'UNSUPPORTED_OPTION');
   }
-  // 采样参数（temperature / top_p / stop_sequences）一律按调用方给定值透传：官方参数页把这些
-  // 取值限制限定在「Claude Opus 4.6 之后」的具体模型上，而 CoRouter 是跨模型网关；
-  // 采样兼容性与「仅支持 enabled + budget_tokens 的 legacy 模型」是否可用，一并由上游按实际
-  // 模型判定并返回，本模块不在本地推断，也从不发送 top_k。
+  // 已确认 Claude 模型的采样与输出限制已在入口校验，通过后保留调用方参数；
+  // 其他模型及 legacy thinking 的兼容性仍由上游判定，不发送 top_k。
   return { url: messagesURL(ctx.baseURL), headers: streamHeaders(ctx.apiKey, { 'anthropic-version': ANTHROPIC_VERSION }), body };
 }
 
 interface BlockState {
   /** DSH 块索引；首次产出时分配，保证 block-start 严格按索引递增。 */
   index: number;
-  kind: 'text' | 'reasoning' | 'tool' | 'skip';
+  kind: 'text' | 'reasoning' | 'redacted' | 'tool' | 'skip';
   text: string;
   id: string;
   name: string;
   args: string;
   started: boolean;
+  ended: boolean;
+  signature: string;
+  data: string;
+  initialInput: string;
+  hasArgsDelta: boolean;
 }
 
 function num(value: unknown): number | undefined {
@@ -180,6 +242,7 @@ export async function* streamMessages(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   idleMs: number,
+  context?: ProtocolStreamContext,
 ): AsyncGenerator<StreamChunk> {
   let nextIndex = 0;
   let count = 0;
@@ -190,6 +253,11 @@ export async function* streamMessages(
   const raw = { input: undefined as number | undefined, output: undefined as number | undefined,
     cacheRead: undefined as number | undefined, cacheWrite: undefined as number | undefined };
   let usage: TokenUsage | undefined;
+  let replayChars = 0;
+  function account(text: string): void {
+    replayChars += text.length;
+    if (replayChars > MAX_REPLAY_CHARS) throw new LlmError('OpenDesign：响应内容超过大小限制', 'INVALID_RESPONSE');
+  }
 
   function stateAt(index: unknown): BlockState {
     const state = typeof index === 'number' ? blocks.get(index) : undefined;
@@ -204,18 +272,36 @@ export async function* streamMessages(
     }
   }
 
-  function close(): StreamChunk[] {
+  function close(only?: BlockState): StreamChunk[] {
     const out: StreamChunk[] = [];
     for (const state of blocks.values()) {
-      if (!state.started) continue;
+      if (!state.started || state.ended || (only !== undefined && state !== only)) continue;
+      state.ended = true;
       if (state.kind === 'text') out.push({ type: 'block-end', index: state.index, block: { type: 'text', text: state.text } });
-      else if (state.kind === 'reasoning') out.push({ type: 'block-end', index: state.index, block: { type: 'reasoning', text: state.text } });
+      else if (state.kind === 'reasoning' || state.kind === 'redacted') out.push({ type: 'block-end', index: state.index, block: { type: 'reasoning', text: state.text } });
       else if (state.kind === 'tool') {
         if (!state.id || !state.name) throw new LlmError('OpenDesign：工具调用缺少标识或名称', 'INVALID_RESPONSE');
-        out.push({ type: 'block-end', index: state.index, block: { type: 'tool-call', id: ToolCallId(state.id), name: state.name, arguments: state.args } });
+        const args = state.hasArgsDelta ? state.args : state.initialInput;
+        out.push({ type: 'block-end', index: state.index, block: { type: 'tool-call', id: ToolCallId(state.id), name: state.name, arguments: args } });
       }
     }
     return out.sort((a, b) => ('index' in a ? a.index : 0) - ('index' in b ? b.index : 0));
+  }
+
+  function replay(): ReplayEnvelope | undefined {
+    if (!context?.credentialIdentity || ![...blocks.values()].some(state => state.signature !== '' || state.kind === 'redacted')) return;
+    const entries: ReplayBlock[] = [];
+    for (const state of blocks.values()) {
+      if (!state.started) continue;
+      if (state.kind === 'text') entries.push({ type: 'text', text: state.text });
+      else if (state.kind === 'reasoning') entries.push(state.signature
+        ? { type: 'thinking', thinking: state.text, signature: state.signature }
+        : { type: 'reasoning', text: state.text });
+      else if (state.kind === 'redacted') entries.push({ type: 'redacted_thinking', data: state.data });
+      else if (state.kind === 'tool') entries.push({ type: 'tool-call', id: state.id, name: state.name, arguments: state.hasArgsDelta ? state.args : state.initialInput });
+    }
+    return { response: { format: REPLAY_FORMAT, version: 1, protocol: 'messages', provider: context.provider,
+      model: context.model, origin: new URL(context.baseURL).origin, credentialIdentity: context.credentialIdentity }, blocks: entries };
   }
 
   function reasonFromStop(stop: string | undefined): FinishReason {
@@ -239,6 +325,7 @@ export async function* streamMessages(
   }
 
   for await (const frame of sseFrames(body, signal, idleMs)) {
+    signal.throwIfAborted();
     let value: unknown;
     try {
       value = JSON.parse(frame.data);
@@ -265,17 +352,30 @@ export async function* streamMessages(
         if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0) throw new LlmError('OpenDesign：流式内容块索引无效', 'INVALID_RESPONSE');
         const block = record(value.content_block) ? value.content_block : {};
         const kind = typeof block.type === 'string' ? block.type : '';
-        const state: BlockState = { index: -1, kind: 'skip', text: '', id: '', name: '', args: '', started: false };
+        if (blocks.has(index) || blocks.size >= MAX_BLOCKS) throw new LlmError('OpenDesign：内容块重复或超过数量限制', 'INVALID_RESPONSE');
+        const state: BlockState = { index: -1, kind: 'skip', text: '', id: '', name: '', args: '', started: false,
+          ended: false, signature: '', data: '', initialInput: '{}', hasArgsDelta: false };
         if (kind === 'text') state.kind = 'text';
         else if (kind === 'thinking') state.kind = 'reasoning';
+        else if (kind === 'redacted_thinking') state.kind = 'redacted';
         else if (kind === 'tool_use') state.kind = 'tool';
         if (state.kind === 'tool') {
           state.id = typeof block.id === 'string' ? block.id : '';
           state.name = typeof block.name === 'string' ? block.name : '';
           sawTool = true;
+          if (block.input !== undefined) {
+            if (!record(block.input)) throw new LlmError('OpenDesign：工具初始参数不是对象', 'INVALID_RESPONSE');
+            state.initialInput = JSON.stringify(block.input);
+          }
         }
         if (state.kind === 'text' && typeof block.text === 'string' && block.text !== '') state.text = block.text;
         if (state.kind === 'reasoning' && typeof block.thinking === 'string' && block.thinking !== '') state.text = block.thinking;
+        if (state.kind === 'reasoning' && typeof block.signature === 'string') state.signature = block.signature;
+        if (state.kind === 'redacted') {
+          if (typeof block.data !== 'string' || block.data === '') throw new LlmError('OpenDesign：密态思考块缺少数据', 'INVALID_RESPONSE');
+          state.data = block.data;
+        }
+        account(state.text + state.signature + state.data + state.id + state.name + state.initialInput);
         blocks.set(index, state);
         // 工具块一开始就有 id/name，先发 block-start 与空增量，后续只追加参数分片。
         if (state.kind === 'tool') {
@@ -283,13 +383,13 @@ export async function* streamMessages(
           state.started = true;
           out.push({ type: 'block-start', index: state.index, blockType: 'tool-call' });
           if (state.id) out.push({ type: 'tool-call-delta', index: state.index, id: ToolCallId(state.id), ...(state.name ? { name: state.name } : {}), argumentsDelta: '' });
-        } else if ((state.kind === 'text' || state.kind === 'reasoning') && state.text !== '') {
+        } else if (state.kind === 'text' || state.kind === 'reasoning' || state.kind === 'redacted') {
           // 少数网关把首段内容直接放进 content_block_start，后续没有 delta：
           // 这里立即开块并发出首段增量，避免“有内容却按空响应处理”。
           assign(state);
           state.started = true;
           out.push({ type: 'block-start', index: state.index, blockType: state.kind === 'text' ? 'text' : 'reasoning' });
-          out.push(state.kind === 'text'
+          if (state.text !== '') out.push(state.kind === 'text'
             ? { type: 'text-delta', index: state.index, text: state.text }
             : { type: 'reasoning-delta', index: state.index, text: state.text });
         }
@@ -297,9 +397,11 @@ export async function* streamMessages(
       }
       case 'content_block_delta': {
         const state = stateAt(value.index);
+        if (state.ended) throw new LlmError('OpenDesign：内容块结束后仍收到分片', 'INVALID_RESPONSE');
         const delta = record(value.delta) ? value.delta : {};
         const deltaType = typeof delta.type === 'string' ? delta.type : '';
         if (deltaType === 'text_delta') {
+          if (state.kind !== 'text') throw new LlmError('OpenDesign：文本分片落在非文本块上', 'INVALID_RESPONSE');
           const text = typeof delta.text === 'string' ? delta.text : '';
           if (!text) break;
           assign(state);
@@ -308,10 +410,12 @@ export async function* streamMessages(
             out.push({ type: 'block-start', index: state.index, blockType: 'text' });
           }
           state.text += text;
+          account(text);
           out.push({ type: 'text-delta', index: state.index, text });
           break;
         }
         if (deltaType === 'thinking_delta') {
+          if (state.kind !== 'reasoning') throw new LlmError('OpenDesign：思考分片落在非思考块上', 'INVALID_RESPONSE');
           const text = typeof delta.thinking === 'string' ? delta.thinking : '';
           if (!text) break;
           assign(state);
@@ -320,17 +424,33 @@ export async function* streamMessages(
             out.push({ type: 'block-start', index: state.index, blockType: 'reasoning' });
           }
           state.text += text;
+          account(text);
           out.push({ type: 'reasoning-delta', index: state.index, text });
           break;
         }
         if (deltaType === 'input_json_delta') {
           if (state.kind !== 'tool') throw new LlmError('OpenDesign：工具参数分片落在非工具块上', 'INVALID_RESPONSE');
           const part = typeof delta.partial_json === 'string' ? delta.partial_json : '';
+          if (state.initialInput !== '{}') throw new LlmError('OpenDesign：工具参数同时包含初始对象和分片', 'INVALID_RESPONSE');
+          state.hasArgsDelta = true;
           state.args += part;
+          account(part);
           if (state.id) out.push({ type: 'tool-call-delta', index: state.index, id: ToolCallId(state.id), ...(state.name ? { name: state.name } : {}), argumentsDelta: part });
           break;
         }
-        // signature_delta / citations_delta 不进入 DSH 块：签名不可回放，引用块无对应内容类型。
+        if (deltaType === 'signature_delta') {
+          if (state.kind !== 'reasoning' || typeof delta.signature !== 'string') throw new LlmError('OpenDesign：思考签名分片无效', 'INVALID_RESPONSE');
+          state.signature += delta.signature;
+          account(delta.signature);
+        }
+        // Citations have no corresponding DSH content type.
+        break;
+      }
+      case 'content_block_stop': {
+        const state = stateAt(value.index);
+        if (state.ended) throw new LlmError('OpenDesign：内容块重复结束', 'INVALID_RESPONSE');
+        out.push(...close(state));
+        state.ended = true;
         break;
       }
       case 'message_delta': {
@@ -348,12 +468,17 @@ export async function* streamMessages(
         // 所有有效性检查都必须在 finish 之前：消费者看到 finish 往往立即 return，
         // 放在循环之后的校验永远不会执行，空响应/缺工具块就会被当成成功。
         if (reason.kind === 'tool-calls' && !sawTool) throw new LlmError('OpenDesign：响应声明工具调用，但未返回任何工具块', 'INVALID_RESPONSE');
-        if (!count) throw new LlmError('OpenDesign：模型返回空响应', 'EMPTY_RESPONSE');
+        if (reason.kind !== 'max-tokens') for (const state of blocks.values()) {
+          if (state.kind === 'tool') toolInput(state.hasArgsDelta ? state.args : state.initialInput);
+        }
+        if (!count || ![...blocks.values()].some(state => state.kind === 'tool' || state.text !== '' || state.signature !== '' || state.data !== '')) throw new LlmError('OpenDesign：模型返回空响应', 'EMPTY_RESPONSE');
+        signal.throwIfAborted();
         usage = anthropicUsage(raw) ?? usage;
         out.push(...close());
         if (usage) out.push({ type: 'usage', usage });
         finish = reason;
-        out.push({ type: 'finish', reason });
+        const replayState = replay();
+        out.push({ type: 'finish', reason, ...(replayState === undefined ? {} : { replayState }) });
         break;
       }
       case 'error':
@@ -363,7 +488,10 @@ export async function* streamMessages(
         break;
     }
 
-    for (const chunk of out) yield chunk;
+    for (const chunk of out) {
+      signal.throwIfAborted();
+      yield chunk;
+    }
     if (finish) break;
   }
 

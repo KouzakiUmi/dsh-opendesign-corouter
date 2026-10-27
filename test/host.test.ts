@@ -46,6 +46,20 @@ test('expired desktop credentials fall back to a single console identity, and qu
     assert.equal((await service.status()).sessionSource, 'login');
   } finally { await fiber.dispose(); await credentials.dispose(); }
 });
+test('status preserves catalog modality evidence separately from the saved override', async () => {
+  const ctx = new Context();
+  const credentials = await ctx.plugin(MemoryCredentials);
+  const current: RuntimeConfig = { ...config, modelSettings: { 'gpt-6.1-sol': { imageInput: false }, 'muse-wonder': { imageInput: true } } };
+  const fiber = await ctx.plugin(scope => { new OpenDesignCoRouterService(scope, () => current, dependencies([])); });
+  try {
+    const result = await ctx.openDesignCoRouter.status();
+    assert.deepEqual(result.models.find(model => model.id === 'gpt-6.1-sol')?.inputModalities, ['text', 'image']);
+    assert.equal(result.models.find(model => model.id === 'muse-wonder')?.inputModalities, undefined);
+    assert.equal(result.config.modelSettings?.['gpt-6.1-sol']?.imageInput, false);
+    assert.equal(result.config.modelSettings?.['muse-wonder']?.imageInput, true);
+  } finally { await fiber.dispose(); await credentials.dispose(); }
+});
+
 test('manual refresh bypasses a healthy cache while ordinary reads remain cached', async () => {
   const ctx = new Context();
   const credentials = await ctx.plugin(MemoryCredentials);

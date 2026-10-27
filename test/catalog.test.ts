@@ -2,8 +2,8 @@
 // 目录事实来自公开页面（https://corouter.open-design.ai/zh/ 套餐卡 + /zh/models/<slug>/ data-model JSON，2026-10-26）。
 //
 // 两类能力来源分开断言：
-// - 容量/输出/模态：plan 12 款沿用 Go dsh-opendesign-go 0.1.9 的 MODEL_DEFAULTS（同 amr-link endpoint
-//   部署资料），属于部署参考，尚无官网独立佐证；其余型号保持缺省。
+// - 容量/输出：plan 12 款沿用 Go dsh-opendesign-go 0.1.9 的部署参考；
+//   图片输入依据厂商与网关资料单独核验，见 docs/model-capabilities.md。
 // - 思考档位：按各厂商官方型号文档逐型号取证（见 docs/reasoning-evidence.md）：
 //   OpenAI https://developers.openai.com/api/docs/models/<model>.md 与
 //   https://developers.openai.com/api/docs/guides/latest-model.md ；
@@ -67,13 +67,13 @@ const PAID_IDS = [
 const GO_CAPACITY = new Map<string, {
   contextWindow: number;
   maxOutputTokens: number;
-  inputModalities: readonly ('text' | 'image')[];
+  inputModalities?: readonly ('text' | 'image')[];
 }>([
   ['claude-haiku-5.5', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'] }],
   ['deepseek-v4.1-flash', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'] }],
   ['deepseek-v4-flash', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'] }],
   ['deepseek-v4-flash-vision-exp', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'] }],
-  ['deepseek-v4-pro', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text'] }],
+  ['deepseek-v4-pro', { contextWindow: 1_000_000, maxOutputTokens: 384_000 }],
   ['glm-5.3-flash', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'] }],
   ['glm-5.3-flashx', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'] }],
   ['gpt-6-luna', { contextWindow: 1_050_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'] }],
@@ -180,7 +180,7 @@ test('媒体专用模型不进对话目录', () => {
   }
 });
 
-test('plan 12 款的容量/输出/模态与 Go 0.1.9 MODEL_DEFAULTS 逐项一致', () => {
+test('plan 12 款的容量/输出保留 Go 参考，模态采用当前证据', () => {
   assert.equal(GO_CAPACITY.size, PLAN_IDS.length - 1);
   for (const model of modelsFor('plan').filter(model => model.id !== 'minimax-m3.1-flash')) {
     const expected = GO_CAPACITY.get(model.id);
@@ -198,7 +198,6 @@ test('付费组及新附赠 M3.1 Flash 的容量字段保持缺省，唯 GPT-6.1
   for (const model of [...modelsFor('paid').filter(model => model.id !== 'gpt-6.1-terra'), minimax]) {
     assert.equal(model.contextWindow, undefined, `${model.id} 不应携带 contextWindow`);
     assert.equal(model.maxOutputTokens, undefined, `${model.id} 不应携带 maxOutputTokens`);
-    assert.equal(model.inputModalities, undefined, `${model.id} 不应推断 inputModalities`);
   }
   // GPT-6.1 Terra 的容量与模态取自厂商型号文档，网关侧未实测。
   const terra = findModel('gpt-6.1-terra');
@@ -207,6 +206,22 @@ test('付费组及新附赠 M3.1 Flash 的容量字段保持缺省，唯 GPT-6.1
   assert.equal(terra.contextWindow, 1_050_000);
   assert.equal(terra.maxOutputTokens, 128_000);
   assert.deepEqual(terra.inputModalities, ['text', 'image']);
+});
+
+test('图片输入能力采用逐型号证据，未确认模型保持未知', () => {
+  const image = [
+    'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra',
+    'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-opus-4.8', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-haiku-5.5',
+    'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flashx', 'glm-5.3-flash',
+    'kimi-k2.7-code', 'kimi-k3', 'kimi-k3.1-pro', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash',
+    'grok-4.7', 'grok-4.6', 'grok-4.5', 'mimo-v2.6-pro', 'mimo-v2.6-flash', 'minimax-m3.1-flash', 'muse-spark-1.3',
+  ];
+  const text = ['glm-5.2', 'qwen3.7-max', 'hy4-preview'];
+  const unknown = ['deepseek-v4-pro', 'muse-wonder'];
+  assert.deepEqual([...image, ...text, ...unknown].sort(), MODELS.map(model => model.id).sort());
+  for (const id of image) assert.deepEqual(findModel(id)?.inputModalities, ['text', 'image'], id);
+  for (const id of text) assert.deepEqual(findModel(id)?.inputModalities, ['text'], id);
+  for (const id of unknown) assert.equal(findModel(id)?.inputModalities, undefined, id);
 });
 
 test('全 39 型号的思考档位矩阵按厂商官方文档逐型号固定', () => {

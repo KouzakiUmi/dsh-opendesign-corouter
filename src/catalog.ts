@@ -6,9 +6,9 @@
  *   详情页内联 `data-model="{...}"` JSON（公开页面，2026-10-26）。
  * - group：官网首页套餐卡 `https://corouter.open-design.ai/zh/` 的
  *   `data-model-module="design-plan"` 12 款归 `plan`；其余在售对话模型归 `paid`。
- * - `plan` 原有 12 款的 contextWindow / maxOutputTokens / inputModalities
+ * - `plan` 原有 12 款的 contextWindow / maxOutputTokens 与原模态
  *   来自 Go 侧 `dsh-opendesign-go` 0.1.9 的 MODEL_DEFAULTS（同一 `amr-link` endpoint 部署资料），
- *   作为部署参考，尚无官网能力数值的独立佐证；只用于对应的原有 12 款模型。
+ *   作为部署参考，尚无官网能力数值的独立佐证；图片模态按最新证据单独核验。
  * - `gpt-6.1-terra` 的 contextWindow / maxOutputTokens / inputModalities 取自
  *   厂商型号文档（1,050,000 / 128,000 / text+image，与 `gpt-6-luna` 同口径）；
  *   CoRouter 网关侧未实测该型号的有效预算。
@@ -32,7 +32,8 @@
  *   走 `/api/v1/media/*`，不应出现在对话模型列表里，避免选中后 chat 请求必败。
  *
  * 思考档位按厂商型号资料记录，来源见 docs/reasoning-evidence.md；网关逐路由行为未实测。
- * 其余容量与模态字段仍按已有来源保留，未知值保持缺省。
+ * 图片输入能力按精确型号的厂商资料补充，证据与网关限制见 docs/model-capabilities.md；
+ * 不可确认的模态与容量保持缺省。
  */
 export interface CatalogModel {
   id: string;
@@ -63,7 +64,7 @@ const EFFORTS_MUSE = ['minimal', ...EFFORTS_REASONING] as const;
  */
 export const MODELS: readonly CatalogModel[] = [
   // ── OpenAI（8） ─────────────────────────────────────────────
-  { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
+  { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
   {
     id: 'gpt-6.1-terra',
     name: 'GPT-6.1 Terra',
@@ -73,7 +74,7 @@ export const MODELS: readonly CatalogModel[] = [
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_OPENAI,
   },
-  { id: 'gpt-6-astra', name: 'GPT-6 Astra', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
+  { id: 'gpt-6-astra', name: 'GPT-6 Astra', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
   {
     id: 'gpt-6-luna',
     name: 'GPT-6 Luna',
@@ -83,19 +84,19 @@ export const MODELS: readonly CatalogModel[] = [
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_OPENAI,
   },
-  { id: 'gpt-6-sol', name: 'GPT-6 Sol', group: 'paid', reasoningEfforts: EFFORTS_OPENAI },
-  { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', group: 'paid', reasoningEfforts: EFFORTS_OPENAI },
-  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', group: 'paid', reasoningEfforts: EFFORTS_OPENAI },
-  { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', group: 'paid', reasoningEfforts: EFFORTS_OPENAI },
+  { id: 'gpt-6-sol', name: 'GPT-6 Sol', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI },
+  { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI },
+  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI },
+  { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI },
 
   // ── Anthropic（8） ──────────────────────────────────────────
-  { id: 'claude-fable-5.1', name: 'Claude Fable 5.1', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-fable-5', name: 'Claude Fable 5', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-opus-5', name: 'Claude Opus 5', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-opus-4.8', name: 'Claude Opus 4.8', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-sonnet-5.5', name: 'Claude Sonnet 5.5', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
+  { id: 'claude-fable-5.1', name: 'Claude Fable 5.1', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
+  { id: 'claude-fable-5', name: 'Claude Fable 5', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
+  { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
+  { id: 'claude-opus-5', name: 'Claude Opus 5', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
+  { id: 'claude-opus-4.8', name: 'Claude Opus 4.8', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
+  { id: 'claude-sonnet-5.5', name: 'Claude Sonnet 5.5', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
+  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
   {
     id: 'claude-haiku-5.5',
     name: 'Claude Haiku 5.5',
@@ -122,7 +123,6 @@ export const MODELS: readonly CatalogModel[] = [
     group: 'plan',
     contextWindow: 1_000_000,
     maxOutputTokens: 384_000,
-    inputModalities: TEXT_ONLY,
     reasoningEfforts: EFFORTS_LOW_HIGH,
   },
   {
@@ -163,7 +163,7 @@ export const MODELS: readonly CatalogModel[] = [
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_LOW_HIGH,
   },
-  { id: 'glm-5.2', name: 'GLM-5.2', group: 'paid', reasoningEfforts: EFFORTS_GLM52 },
+  { id: 'glm-5.2', name: 'GLM-5.2', group: 'paid', inputModalities: TEXT_ONLY, reasoningEfforts: EFFORTS_GLM52 },
 
   // ── Moonshot（3） ───────────────────────────────────────────
   {
@@ -175,18 +175,18 @@ export const MODELS: readonly CatalogModel[] = [
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: [],
   },
-  { id: 'kimi-k3', name: 'Kimi K3', group: 'paid', reasoningEfforts: EFFORTS_LOW_HIGH },
-  { id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro', group: 'paid', reasoningEfforts: EFFORTS_LOW_HIGH },
+  { id: 'kimi-k3', name: 'Kimi K3', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LOW_HIGH },
+  { id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LOW_HIGH },
 
   // ── Google（3） ─────────────────────────────────────────────
-  { id: 'gemini-4-argon', name: 'Gemini 4 Argon', group: 'paid', reasoningEfforts: EFFORTS_LEVELS },
-  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', group: 'paid', reasoningEfforts: EFFORTS_LEVELS },
-  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', group: 'paid', reasoningEfforts: EFFORTS_LEVELS },
+  { id: 'gemini-4-argon', name: 'Gemini 4 Argon', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS },
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS },
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS },
 
   // ── xAI（3） ────────────────────────────────────────────────
-  { id: 'grok-4.7', name: 'Grok 4.7', group: 'paid', reasoningEfforts: EFFORTS_GROK },
-  { id: 'grok-4.6', name: 'Grok 4.6', group: 'paid', reasoningEfforts: EFFORTS_GROK },
-  { id: 'grok-4.5', name: 'Grok 4.5', group: 'paid', reasoningEfforts: EFFORTS_LEVELS },
+  { id: 'grok-4.7', name: 'Grok 4.7', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_GROK },
+  { id: 'grok-4.6', name: 'Grok 4.6', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_GROK },
+  { id: 'grok-4.5', name: 'Grok 4.5', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS },
 
   // ── Xiaomi（2） ─────────────────────────────────────────────
   {
@@ -220,11 +220,11 @@ export const MODELS: readonly CatalogModel[] = [
   },
 
   // ── Alibaba（1） ────────────────────────────────────────────
-  { id: 'qwen3.7-max', name: 'Qwen3.7 Max', group: 'paid', reasoningEfforts: [] },
+  { id: 'qwen3.7-max', name: 'Qwen3.7 Max', group: 'paid', inputModalities: TEXT_ONLY, reasoningEfforts: [] },
 
   // Official API additions; display labels for undocumented entries are local formatting.
-  { id: 'minimax-m3.1-flash', name: 'MiniMax M3.1 Flash', group: 'plan', reasoningEfforts: EFFORTS_REASONING },
-  { id: 'muse-spark-1.3', name: 'Muse Spark 1.3', group: 'paid', reasoningEfforts: EFFORTS_MUSE },
+  { id: 'minimax-m3.1-flash', name: 'MiniMax M3.1 Flash', group: 'plan', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
+  { id: 'muse-spark-1.3', name: 'Muse Spark 1.3', group: 'paid', inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_MUSE },
   { id: 'muse-wonder', name: 'Muse Wonder', group: 'paid' },
 ];
 

@@ -31,8 +31,9 @@ try {
     window.__ModuleLoader__ = { load(bundle) { window.__plugin = bundle.factory(name => { if (name === 'react') return window.__React; throw new Error('Unexpected external: ' + name); }); } };
   });
   await page.addScriptTag({ content: client });
-const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTokens, reasoningEfforts }) => ({
+const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWindow, maxOutputTokens, reasoningEfforts }) => ({
   id, name, group,
+  ...(inputModalities === undefined ? {} : { inputModalities }),
   ...(contextWindow === undefined ? {} : { contextWindow }),
   ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
   ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
@@ -375,7 +376,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await page.evaluate(() => { window.__pricesFail = false; });
   await page.getByRole('button', { name: '更新价格', exact: true }).click();
   await page.waitForFunction(() => window.__refreshPricesCalls === 3);
-  const lunaSwitch = luna.locator('input[type=checkbox]');
+  const lunaSwitch = luna.locator('.odc-model-switch input[type=checkbox]');
   assert.equal(await lunaSwitch.isChecked(), true);
   await lunaSwitch.uncheck();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.enabled === false);
@@ -389,6 +390,30 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await page.waitForFunction(() => !('gpt-6-luna' in (window.__config.modelSettings ?? {})));
   assert.equal(await lunaSwitch.isChecked(), true);
   assert.equal(await luna.getByText('已禁用', { exact: true }).count(), 0);
+  // Image input stays outside the collapsed parameter editor and saves as a whole-map override.
+  const imageInput = luna.getByRole('checkbox', { name: 'GPT-6 Luna 图片输入', exact: true });
+  const restoreImage = luna.getByRole('button', { name: 'GPT-6 Luna 恢复图片输入自动', exact: true });
+  assert.equal(await imageInput.isChecked(), true, 'catalog text+image defaults to automatic image delivery');
+  assert.equal(await restoreImage.count(), 0, 'automatic mode has no redundant restore action');
+  assert.equal(await luna.locator('details').evaluate(element => element.open), false, 'advanced model parameters start collapsed');
+  assert.equal(await luna.getByText('自动 · 支持图片', { exact: true }).isVisible(), true, 'the source remains visible without expanding parameters');
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await imageInput.uncheck();
+  assert.equal(await imageInput.isChecked(), false, 'a pending image override is visible immediately');
+  assert.equal(await imageInput.isDisabled(), true, 'the image switch locks while its map save is pending');
+  assert.equal(await restoreImage.isDisabled(), true, 'restore-auto also locks during the same save');
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
+  assert.equal(await imageInput.isChecked(), true, 'a rejected image save restores the accepted automatic value');
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.imageInput), undefined);
+  await page.evaluate(() => { window.__holdSaves = true; });
+  await imageInput.uncheck();
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.imageInput === false);
+  await luna.getByText('手动 · 关闭', { exact: true }).waitFor();
+  await imageInput.check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.imageInput === true);
+  await luna.getByText('手动 · 开启', { exact: true }).waitFor();
   // Expand and edit every parameter; blanks inherit, invalid input never persists.
   await luna.locator('summary').click();
   assert.equal(await luna.locator('details').evaluate(element => element.open), true);
@@ -417,9 +442,14 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await contextWindow.blur();
   await effort.selectOption('high');
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.reasoningEffort === 'high');
+  await restoreImage.click();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.imageInput === undefined);
+  assert.equal(await imageInput.isChecked(), true, 'restoring automatic returns to the catalog default');
+  await luna.getByText('自动 · 支持图片', { exact: true }).waitFor();
+  assert.equal(await restoreImage.count(), 0);
   assert.deepEqual(await modelSettings(), {
     'gpt-6-luna': { temperature: 0.7, topP: 0.9, maxTokens: 4096, contextWindow: 200000, reasoningEffort: 'high' },
-  });
+  }, 'restore-auto removes only imageInput and preserves every other setting');
   await temperature.fill('3');
   await temperature.blur();
   await luna.locator('.odc-field-error').first().waitFor();
@@ -561,12 +591,33 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   assert.equal(await page.locator('input[type=url]').count(), 0);
   assert.equal(await page.getByRole('button', { name: '保存 Base URL', exact: true }).count(), 0);
   await page.getByText('https://amr-link.open-design.ai/v1/chat/completions', { exact: true }).waitFor();
+  // An old sampling override is valid in the existing gateway mode and must remain clearable after switching protocols.
+  await page.getByRole('tab', { name: '模型', exact: true }).click();
+  const haiku = page.locator('.odc-model-item').filter({ hasText: 'claude-haiku-5.5' });
+  await haiku.locator('summary').click();
+  await haiku.getByLabel('温度', { exact: true }).fill('0.4');
+  await haiku.getByLabel('温度', { exact: true }).blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['claude-haiku-5.5']?.temperature === 0.4);
+  await page.getByRole('tab', { name: '高级', exact: true }).click();
   await protocol.selectOption('responses');
   await page.waitForFunction(() => window.__config.apiProtocol === 'responses');
   await page.getByText('https://amr-link.open-design.ai/v1/responses', { exact: true }).waitFor();
   await protocol.selectOption('messages');
   await page.waitForFunction(() => window.__config.apiProtocol === 'messages');
   await page.getByText('https://amr-link.open-design.ai/v1/messages', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: '模型', exact: true }).click();
+  await haiku.locator('summary').click();
+  const claudeTemperature = haiku.getByLabel('温度', { exact: true });
+  assert.equal(await claudeTemperature.getAttribute('aria-invalid'), 'true');
+  assert.equal(await claudeTemperature.isEnabled(), true, 'an incompatible old value can still be cleared');
+  await claudeTemperature.fill('');
+  await claudeTemperature.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['claude-haiku-5.5']?.temperature === undefined);
+  await claudeTemperature.fill('0.4');
+  await claudeTemperature.blur();
+  await haiku.getByText(/仅接受默认温度 1/u).waitFor();
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['claude-haiku-5.5']?.temperature), undefined);
+  await page.getByRole('tab', { name: '高级', exact: true }).click();
   const reference = page.getByLabel('API Key 环境变量 / 凭据引用名', { exact: true });
   await reference.fill('COROUTER_FIXTURE_REF');
   await page.getByRole('button', { name: '保存引用名', exact: true }).click();

@@ -14,6 +14,7 @@ import { inferenceEndpoint, API_PROTOCOL_OPTIONS, type ApiProtocol } from './pro
 import type { ModelSettings, ModelSettingsMap } from './model-settings.js';
 import { validateActivationUrl } from './device-auth.js';
 import { modelReasoningEfforts } from './reasoning.js';
+import { CLAUDE_MESSAGES_MAX_OUTPUT, claudeOutputError, claudeSamplingError, hasRestrictedClaudeSampling } from './claude-capabilities.js';
 
 const h = React.createElement;
 const SETTINGS_NS = 'llm-opendesign-corouter';
@@ -138,6 +139,7 @@ function installStyles(): () => void {
 .odc-notice{padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);font-size:12px;line-height:1.6}.odc-notice[data-kind=error]{color:var(--dsw-alias-state-error-primary,inherit);color:color-mix(in srgb,var(--dsw-alias-state-error-primary,CanvasText) 85%,var(--dsw-alias-label-primary,CanvasText))}
 .odc-model-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}.odc-model-list{display:grid;gap:6px;margin:10px 0 0;padding:0;list-style:none}.odc-model-item{padding:9px 10px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);min-width:0}.odc-model-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap}.odc-model-switch{min-width:0;flex:1 1 190px}.odc-model-item strong,.odc-model-item code{display:block;overflow-wrap:anywhere}.odc-model-item strong{font-size:12px;font-weight:600}.odc-model-item code{margin-top:2px;color:var(--dsw-alias-label-secondary,inherit);font-size:11px}.odc-model-meta{margin-top:6px!important;color:var(--dsw-alias-label-secondary,inherit);font-size:11px;overflow-wrap:anywhere}.odc-model-count{color:var(--dsw-alias-label-secondary,inherit);font-size:11px;font-weight:400}.odc-chip{display:inline-flex;align-items:center;padding:1px 7px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:999px;color:var(--dsw-alias-label-secondary,inherit);font-size:10px;line-height:1.6}
 .odc-model-details{margin-top:8px}.odc-model-details>summary{cursor:pointer;color:var(--dsw-alias-label-secondary,inherit);font-size:11px;line-height:1.7}.odc-model-editor{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 10px;margin-top:8px}
+.odc-model-image{display:flex;align-items:center;gap:4px 10px;flex-wrap:wrap;margin-top:6px;padding:4px 0;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-model-image .odc-switch{flex:1 1 210px;min-width:0;min-height:34px;padding:2px 0}.odc-model-image .odc-switch>span{display:flex;align-items:baseline;gap:4px 8px;flex-wrap:wrap}.odc-model-image .odc-button{flex:none}
 .odc-field{display:grid;gap:6px;margin-top:14px}.odc-field-compact{margin-top:8px}.odc-field label,.odc-switch-text{font-size:12px;font-weight:550}.odc-input{width:100%;min-width:0;min-height:34px;padding:7px 9px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:12px}.odc-field-compact .odc-input{min-height:30px;padding:5px 8px;font-size:11px}.odc-input::placeholder{color:var(--dsw-alias-label-secondary,inherit);opacity:1}.odc-input:disabled{opacity:.55}
 .odc-input option{background:var(--dsw-alias-bg-layer-2,Canvas);color:var(--dsw-alias-label-primary,CanvasText)}
 .odc-input,.odc-button:not(.odc-button-primary),.odc-tab[aria-selected=true]{border-color:var(--dsw-alias-border-l3,CanvasText);border-color:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 55%,var(--dsw-alias-bg-layer-2,Canvas))}
@@ -475,6 +477,7 @@ export function writeModelSettings(map: ModelSettingsMap | undefined, id: string
   }
   const entry: ModelSettings = {};
   if (next.enabled !== undefined) entry.enabled = next.enabled;
+  if (next.imageInput !== undefined) entry.imageInput = next.imageInput;
   if (next.temperature !== undefined) entry.temperature = next.temperature;
   if (next.topP !== undefined) entry.topP = next.topP;
   if (next.maxTokens !== undefined) entry.maxTokens = next.maxTokens;
@@ -499,6 +502,20 @@ export function modelEnabled(model: StatusModel, settings: ModelSettings | undef
   if (settings?.enabled !== undefined) return settings.enabled;
   if (authoritative) return true;
   return model.enabled !== false;
+}
+
+/** Manual image policy wins; automatic mode only treats an explicit catalog image modality as confirmed. */
+export function modelImageInput(model: StatusModel, settings: ModelSettings | undefined): boolean {
+  if (settings?.imageInput !== undefined) return settings.imageInput;
+  return model.inputModalities === undefined ? true : model.inputModalities.includes('image');
+}
+
+function imageInputSource(model: StatusModel, settings: ModelSettings): string {
+  if (settings.imageInput !== undefined) return settings.imageInput ? '手动 · 开启' : '手动 · 关闭';
+  if (model.inputModalities === undefined) return '自动 · 未知，尝试发送';
+  return model.inputModalities.includes('image')
+    ? '自动 · 支持图片'
+    : '自动 · 仅文本';
 }
 
 export interface NumberInputSpec {
@@ -595,11 +612,14 @@ const NUMERIC_FIELDS: Record<NumericKey, NumericSpec> = {
 };
 const NUMERIC_ORDER: readonly NumericKey[] = ['temperature', 'topP', 'maxTokens', 'contextWindow'];
 
-function OptionalNumberField({ id, field, value, disabled, resetToken, onSave }: {
+function OptionalNumberField({ id, field, value, disabled, restricted = false, invalid = false, maxOutputLimit, resetToken, onSave }: {
   id: string;
   field: NumericKey;
   value: number | undefined;
   disabled: boolean;
+  restricted?: boolean;
+  invalid?: boolean;
+  maxOutputLimit?: number | undefined;
   resetToken: number;
   onSave: (value: number | undefined) => Promise<boolean>;
 }) {
@@ -639,9 +659,9 @@ function OptionalNumberField({ id, field, value, disabled, resetToken, onSave }:
   return h('div', { className: 'odc-field odc-field-compact' },
     h('label', { htmlFor: id }, spec.label),
     h('input', {
-      id, className: 'odc-input', type: 'number', inputMode: 'decimal', min: spec.min, max: spec.max,
-      step: spec.integer === true ? 1 : 0.1, value: draft ?? (value === undefined ? '' : String(value)), disabled,
-      'aria-invalid': error !== undefined,
+      id, className: 'odc-input', type: 'number', inputMode: 'decimal', min: spec.min, max: maxOutputLimit ?? spec.max,
+      step: spec.integer === true ? 1 : field === 'topP' ? 0.01 : 0.1, value: draft ?? (value === undefined ? '' : String(value)), disabled,
+      'aria-invalid': error !== undefined || invalid,
       'aria-describedby': `${id}-hint`,
       onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft(event.target.value),
       onBlur: () => { void commit(); },
@@ -650,7 +670,7 @@ function OptionalNumberField({ id, field, value, disabled, resetToken, onSave }:
       className: error === undefined ? 'odc-hint' : 'odc-hint odc-field-error',
       id: `${id}-hint`,
       ...(error === undefined ? {} : { role: 'alert' as const }),
-    }, error ?? spec.hint));
+    }, error ?? (restricted ? field === 'temperature' ? 'Messages 仅接受 1；建议留空，且勿同时设置 Top P。' : 'Messages 仅接受 0.99；建议留空，且勿同时设置温度。' : maxOutputLimit !== undefined ? `Messages 最大输出 ${maxOutputLimit}；留空继承默认。` : spec.hint)));
 }
 
 function EffortField({ id, model, value, disabled, onChange }: {
@@ -712,17 +732,23 @@ export interface ModelRowProps {
   authoritative: boolean;
   writable: boolean;
   pending: boolean;
+  protocol?: ApiProtocol;
   price?: PriceCatalog['models'][number] | undefined;
   priceKnown?: boolean | undefined;
   onCommit: (next: ModelSettings | undefined) => Promise<boolean>;
 }
 
-export function ModelRow({ model, settings, authoritative, writable, pending, price, priceKnown = false, onCommit }: ModelRowProps) {
+export function ModelRow({ model, settings, authoritative, writable, pending, protocol = 'chat-completions', price, priceKnown = false, onCommit }: ModelRowProps) {
   const id = React.useId();
   const mounted = useMounted();
   const [error, setError] = React.useState<string | undefined>(undefined);
   const [resetToken, setResetToken] = React.useState(0);
   const enabled = modelEnabled(model, settings, authoritative);
+  const imageInput = modelImageInput(model, settings);
+  const imageInputManual = settings.imageInput !== undefined;
+  const samplingRestricted = hasRestrictedClaudeSampling(model.id, protocol);
+  const samplingError = claudeSamplingError(model.id, protocol, settings.temperature, settings.topP);
+  const outputError = claudeOutputError(model.id, protocol, settings.maxTokens);
   const hasOverrides = Object.keys(settings).length > 0;
   const commit = async (next: ModelSettings | undefined): Promise<boolean> => {
     const saved = await onCommit(next);
@@ -733,6 +759,14 @@ export function ModelRow({ model, settings, authoritative, writable, pending, pr
     const next: ModelSettings = { ...settings };
     if (value === undefined) delete next[key];
     else next[key] = value;
+    if ((key === 'temperature' || key === 'topP') && value !== undefined) {
+      const reason = claudeSamplingError(model.id, protocol, next.temperature, next.topP);
+      if (reason !== undefined) { setError(reason); return false; }
+    }
+    if (key === 'maxTokens' && value !== undefined) {
+      const reason = claudeOutputError(model.id, protocol, value);
+      if (reason !== undefined) { setError(reason); return false; }
+    }
     const output = next.maxTokens ?? model.maxOutputTokens;
     const context = next.contextWindow ?? model.contextWindow;
     if (output !== undefined && context !== undefined && output >= context) {
@@ -747,6 +781,14 @@ export function ModelRow({ model, settings, authoritative, writable, pending, pr
     setResetToken(token => token + 1);
     await commit(undefined);
   };
+  const restoreImageInput = async (): Promise<void> => {
+    if (!imageInputManual) return;
+    const next: ModelSettings = { ...settings };
+    delete next.imageInput;
+    setError(undefined);
+    await commit(next);
+  };
+  const imageDisabledReason = pending ? ' · 正在保存' : !writable ? ' · 配置不可写' : '';
   const facts = [
     `上下文 ${formatTokens(model.contextWindow)}`,
     `最大输出 ${formatTokens(model.maxOutputTokens)}`,
@@ -767,15 +809,36 @@ export function ModelRow({ model, settings, authoritative, writable, pending, pr
         h('button', { className: 'odc-button odc-button-small', type: 'button', disabled: !writable || pending || !hasOverrides, onClick: () => { void reset(); } }, '重置'))),
     price !== undefined ? h('p', { className: 'odc-price-summary' }, `官网参考 · ${price.tiers[0]!.label} · 输入 ${priceAmount(price.tiers[0]!.input, price.tiers[0]!.currency)} / 输出 ${priceAmount(price.tiers[0]!.output, price.tiers[0]!.currency)} · ${priceUnit(price.tiers[0]!)}${price.tiers.length > 1 ? ` · 共 ${price.tiers.length} 档` : ''}`)
       : priceKnown ? h('p', { className: 'odc-price-summary' }, '官网暂未列出此模型价格') : null,
+    h('div', { className: 'odc-model-image' },
+      h(Switch, {
+        checked: imageInput,
+        disabled: !writable || pending,
+        label: '图片输入',
+        ariaLabel: `${model.name} 图片输入`,
+        hint: imageInputSource(model, settings) + imageDisabledReason,
+        onChange: checked => { setError(undefined); void commit({ ...settings, imageInput: checked }); },
+      }),
+      imageInputManual ? h('button', {
+        className: 'odc-button odc-button-small', type: 'button',
+        disabled: !writable || pending,
+        'aria-label': `${model.name} 恢复图片输入自动`,
+        title: '仅移除图片输入手动覆盖，保留其他模型设置',
+        onClick: () => { void restoreImageInput(); },
+      }, '恢复自动') : null),
     h('details', { className: 'odc-model-details' },
       h('summary', { 'aria-label': `${model.name} 参数设置${price === undefined ? '' : '与价格'}` }, `${price === undefined ? '参数设置' : '参数与价格'} · ${hasOverrides ? '已自定义' : '使用默认值'}`),
       h('p', { className: 'odc-model-meta' }, facts),
+      samplingRestricted && model.id === 'claude-opus-4.8' ? h('p', { className: 'odc-hint' }, '厂商默认关闭思考，选择思考深度可启用自适应思考；网关实际行为可能不同。') : null,
+      samplingRestricted && model.maxOutputTokens === undefined && settings.maxTokens === undefined ? h('p', { className: 'odc-hint' }, 'Messages 默认最大输出 4096；较高思考深度可能需要增大。') : null,
       price === undefined ? null : h(PriceDetails, { tiers: price.tiers }),
       h('p', { className: 'odc-hint' }, '数值离开输入框后保存，留空继承默认。'),
       h('div', { className: 'odc-model-editor' },
         NUMERIC_ORDER.map(key => h(OptionalNumberField, {
           key, id: `${id}-${key}`, field: key, value: settings[key],
-          disabled: !writable || pending, resetToken,
+          disabled: !writable || pending,
+          restricted: samplingRestricted && (key === 'temperature' || key === 'topP'),
+          invalid: (samplingError !== undefined && settings[key] !== undefined && (key === 'temperature' || key === 'topP')) || (key === 'maxTokens' && outputError !== undefined),
+          maxOutputLimit: samplingRestricted && key === 'maxTokens' ? CLAUDE_MESSAGES_MAX_OUTPUT : undefined, resetToken,
           onSave: value => saveField(key, value),
         })),
         h(EffortField, {
@@ -791,7 +854,7 @@ export function ModelRow({ model, settings, authoritative, writable, pending, pr
     error !== undefined ? h('p', { className: 'odc-hint odc-field-error', role: 'alert' }, error) : null);
 }
 
-function ModelGroup({ title, group, models, settingsMap, authoritative, writable, pending, onCommit, prices }: {
+function ModelGroup({ title, group, models, settingsMap, authoritative, writable, pending, protocol, onCommit, prices }: {
   title: string;
   group: StatusModel['group'];
   models: readonly StatusModel[];
@@ -799,6 +862,7 @@ function ModelGroup({ title, group, models, settingsMap, authoritative, writable
   authoritative: boolean;
   writable: boolean;
   pending: boolean;
+  protocol: ApiProtocol;
   prices?: PriceCatalog | undefined;
   onCommit: (id: string, next: ModelSettings | undefined) => Promise<boolean>;
 }) {
@@ -824,7 +888,7 @@ function ModelGroup({ title, group, models, settingsMap, authoritative, writable
       h('ul', { id: `${id}-list`, className: 'odc-model-list' }, visible.map(model =>
         h(ModelRow, {
           key: model.id, model, settings: modelSettingsEntry(settingsMap, model.id), authoritative,
-          writable, pending, price: prices?.models.find(entry => entry.id === model.id), priceKnown: prices !== undefined && (prices.state !== 'error' || prices.stale),
+          writable, pending, protocol, price: prices?.models.find(entry => entry.id === model.id), priceKnown: prices !== undefined && (prices.state !== 'error' || prices.stale),
           onCommit: next => onCommit(model.id, next),
         }))),
     normalized === '' && filtered.length > 6 ? h('button', {
@@ -898,8 +962,8 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
       h('p', { className: 'odc-hint' }, '官网分档价格仅供参考；实际费用以账户账单为准。', ' ', h('a', { className: 'odc-link', href: PRICE_SITE, target: '_blank', rel: 'noreferrer noopener' }, '查看官网价格'))),
     models.length === 0 ? h('p', { className: 'odc-hint', role: 'status' }, '暂无可用模型；可刷新模型列表后重试。') :
       h('div', { className: 'odc-model-groups' },
-        h(ModelGroup, { title: '套餐赠送模型', group: 'plan', models, settingsMap, authoritative, writable, pending, onCommit: commit, prices }),
-        h(ModelGroup, { title: '付费模型', group: 'paid', models, settingsMap, authoritative, writable, pending, onCommit: commit, prices })));
+        h(ModelGroup, { title: '套餐赠送模型', group: 'plan', models, settingsMap, authoritative, writable, pending, protocol, onCommit: commit, prices }),
+        h(ModelGroup, { title: '付费模型', group: 'paid', models, settingsMap, authoritative, writable, pending, protocol, onCommit: commit, prices })));
 }
 
 export interface AdvancedProps {
@@ -1056,12 +1120,13 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
       })));
 }
 
-function Switch({ checked, disabled, label, hint, onChange }: {
-  checked: boolean; disabled: boolean; label: string; hint: string; onChange: (checked: boolean) => void;
+function Switch({ checked, disabled, label, ariaLabel, hint, onChange }: {
+  checked: boolean; disabled: boolean; label: string; ariaLabel?: string; hint: string; onChange: (checked: boolean) => void;
 }) {
+  const hintId = React.useId();
   return h('label', { className: 'odc-switch' },
-    h('input', { type: 'checkbox', checked, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => onChange(event.target.checked) }),
-    h('span', null, h('span', { className: 'odc-switch-text' }, label), h('small', { className: 'odc-hint' }, hint)));
+    h('input', { type: 'checkbox', checked, disabled, 'aria-label': ariaLabel, 'aria-describedby': hintId, onChange: (event: React.ChangeEvent<HTMLInputElement>) => onChange(event.target.checked) }),
+    h('span', null, h('span', { className: 'odc-switch-text' }, label), h('small', { className: 'odc-hint', id: hintId }, hint)));
 }
 
 function loginInFlight(state: LoginState['state']): boolean {

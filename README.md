@@ -32,7 +32,7 @@ dsh plugin --profile web add dsh-opendesign-corouter
 也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
-dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.11.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.12.tgz
 ```
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。
@@ -55,7 +55,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.11.tg
 | `opendesign-corouter-plan` | 13 | Core / Design Plan 附赠通道，含预检确认覆盖的 MiniMax M3.1 Flash |
 | `opendesign-corouter-paid` | 26 | Plan 套餐模型及其他钱包付费模型 |
 
-上表为内置目录。模型页可通过当前配置网关的 OpenAI 兼容 `/models` 接口刷新目录，逐个启用或停用模型，并配置温度、top-p、默认输出上限、上下文预算及思考深度。停用同时影响模型选择器和直接调用；参数会保存并应用到实际请求。媒体生成接口不在对话目录中，未知能力不按名称猜测。
+上表为内置目录。模型页可通过当前配置网关的 OpenAI 兼容 `/models` 接口刷新目录，逐个启用或停用模型、控制图片输入，并配置温度、top-p、默认输出上限、上下文预算及思考深度。高级参数默认折叠，图片输入可手动覆盖或恢复自动。未知模态保持未知并尝试发送图片；实际支持情况由网关决定。[图片能力证据](docs/model-capabilities.md)。
 
 推理协议可选 **OpenAI Chat Completions、OpenAI Responses、Anthropic Messages**。模型发现始终使用当前网关的 OpenAI 兼容 `/models` 接口，不随推理协议切换。
 

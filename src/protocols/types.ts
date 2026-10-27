@@ -24,6 +24,8 @@ export interface ProtocolContext {
   images: ReadonlyMap<string, string>;
   /** 每模型可选 `top_p`；未设置时不发送。 */
   topP?: number;
+  /** Keyed credential/origin binding; adapter-private and never sent upstream. */
+  credentialIdentity?: string;
 }
 
 /** 一个可直接 fetch 的请求。 */
@@ -33,11 +35,19 @@ export interface WireRequest {
   body: unknown;
 }
 
+/** Prepared request identity; contains no transport credentials. */
+export interface ProtocolStreamContext {
+  provider: string;
+  model: string;
+  baseURL: string;
+  credentialIdentity?: string;
+}
+
 /** 一种线协议的实现。 */
 export interface Protocol {
   readonly id: ApiProtocol;
   /** 把协议无关调用投影成本协议的请求。 */
   build(ctx: ProtocolContext): WireRequest;
   /** 把上游 SSE 响应体翻译成 DSH 流式块。 */
-  stream(body: ReadableStream<Uint8Array>, signal: AbortSignal, idleMs: number): AsyncIterable<StreamChunk>;
+  stream(body: ReadableStream<Uint8Array>, signal: AbortSignal, idleMs: number, context?: ProtocolStreamContext): AsyncIterable<StreamChunk>;
 }

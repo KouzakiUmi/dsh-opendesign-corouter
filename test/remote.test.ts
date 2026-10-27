@@ -123,6 +123,24 @@ test('credential source is an optional credential-free enum and preserves legacy
   assert.throws(() => parseStatus({ ...status, apiKeySource: 'secret-token-value' }), /推理凭据来源/u);
 });
 
+test('status transports catalog input capabilities and separate user overrides', () => {
+  const input = {
+    ...status,
+    config: { ...status.config, modelSettings: { 'gpt-6-astra': { imageInput: false } } },
+    models: [
+      { id: 'vision', name: 'Vision', group: 'plan', inputModalities: ['text', 'image'] },
+      { id: 'text', name: 'Text', group: 'paid', inputModalities: ['text'] },
+      { id: 'unknown', name: 'Unknown', group: 'paid' },
+    ],
+  };
+  const parsed = through('status', input) as Status;
+  assert.deepEqual(parsed.models, input.models);
+  assert.equal(parsed.config.modelSettings?.['gpt-6-astra']?.imageInput, false);
+  for (const inputModalities of [[], ['image'], ['text', 'text'], ['text', 'audio'], 'image']) {
+    assert.throws(() => parseStatus({ ...status, models: [{ id: 'm', name: 'M', group: 'paid', inputModalities }] }), /模态/u);
+  }
+});
+
 test('remote configuration lower bounds agree with accepted Host settings', () => {
   for (const [field, min] of [['requestTimeoutMs', 1000], ['streamIdleTimeoutMs', 1000], ['quotaRefreshSeconds', 5]] as const) {
     assert.throws(() => parseStatus({ ...status, config: { ...status.config, [field]: min - 1 } }), /超出范围/u);

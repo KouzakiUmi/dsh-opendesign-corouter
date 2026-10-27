@@ -18,6 +18,8 @@ import type { CatalogModel } from './catalog.js';
 export interface ModelSettings {
   /** 是否出现在模型选择器；缺省视为启用。 */
   enabled?: boolean;
+  /** 图片输入的手动覆盖；缺省时沿用目录能力或保持未知。 */
+  imageInput?: boolean;
   /** 采样温度，0–2。 */
   temperature?: number;
   /** 核采样，0–1。 */
@@ -46,7 +48,7 @@ export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('模型设置必须是对象');
   const keys = Object.keys(value);
   if (keys.length > 512) throw new Error('模型设置最多允许 512 个模型');
-  const fields = new Set(['enabled', 'temperature', 'topP', 'maxTokens', 'contextWindow', 'reasoningEffort']);
+  const fields = new Set(['enabled', 'imageInput', 'temperature', 'topP', 'maxTokens', 'contextWindow', 'reasoningEffort']);
   const efforts: readonly unknown[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
   const out: ModelSettingsMap = {};
   for (const id of keys) {
@@ -62,6 +64,10 @@ export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
     if (settings.enabled !== undefined) {
       if (typeof settings.enabled !== 'boolean') throw new Error('模型设置的 enabled 必须是布尔值');
       parsed.enabled = settings.enabled;
+    }
+    if (settings.imageInput !== undefined) {
+      if (typeof settings.imageInput !== 'boolean') throw new Error('模型设置的 imageInput 必须是布尔值');
+      parsed.imageInput = settings.imageInput;
     }
     for (const [field, max] of [['temperature', 2], ['topP', 1]] as const) {
       const item = settings[field];
@@ -86,21 +92,22 @@ export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
 }
 
 /**
- * Copy a catalog row and apply the user's explicit capacity overrides. The input row and
- * its arrays are never mutated; other overrides (sampling, effort) belong to the request,
- * not to the catalog row, so they are not folded in here.
+ * Copy a catalog row and apply explicit capacity and image-input overrides. The input row and
+ * its arrays are never mutated; sampling and effort belong to the request instead.
  */
 export function applyModelSettings(row: CatalogModel, settings?: ModelSettings): CatalogModel {
-  const { contextWindow, maxTokens } = settings ?? {};
-  if (contextWindow === undefined && maxTokens === undefined) return { ...row };
+  const { contextWindow, maxTokens, imageInput } = settings ?? {};
+  if (contextWindow === undefined && maxTokens === undefined && imageInput === undefined) return { ...row };
   // Validate each override independently; the adapter owns effective-capacity errors
   // (including inherited catalog values) and reports them through its LlmError contract.
   if (contextWindow !== undefined) parseModelSettingsMap({ model: { contextWindow } });
   if (maxTokens !== undefined) parseModelSettingsMap({ model: { maxTokens } });
+  if (imageInput !== undefined) parseModelSettingsMap({ model: { imageInput } });
   return {
     ...row,
     ...(contextWindow === undefined ? {} : { contextWindow }),
     ...(maxTokens === undefined ? {} : { maxOutputTokens: maxTokens }),
+    ...(imageInput === undefined ? {} : { inputModalities: imageInput ? ['text', 'image'] : ['text'] }),
   };
 }
 

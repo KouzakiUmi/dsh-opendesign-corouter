@@ -47,6 +47,7 @@ test('GET {base}/models carries Bearer auth, attribution and refuses redirects',
     id: 'glm-5.2',
     name: 'GLM-5.2',
     group: 'paid',
+    inputModalities: ['text'],
     reasoningEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   }]);
   assert.equal(calls.length, 1);
@@ -116,7 +117,7 @@ test('known ids inherit catalog grouping and capabilities; new ids are paid rows
   assert.equal(fresh.reasoningEfforts, undefined);
 });
 
-test('five verified API additions retain their catalog labels without inventing capabilities', async () => {
+test('five verified API additions retain their catalog labels and evidenced capabilities', async () => {
   const ids = ['gemini-4-argon', 'kimi-k3.1-pro', 'minimax-m3.1-flash', 'muse-spark-1.3', 'muse-wonder'];
   /** 各型号的厂商档位；Muse Wonder 精确别名未确认，档位保持缺省。 */
   const efforts: Record<string, readonly string[] | undefined> = {
@@ -135,7 +136,7 @@ test('five verified API additions retain their catalog labels without inventing 
     // 容量类字段仍无可核实取值，不因发现接口返回了这些 id 就补上。
     assert.equal(row.contextWindow, undefined);
     assert.equal(row.maxOutputTokens, undefined);
-    assert.equal(row.inputModalities, undefined);
+    assert.deepEqual(row.inputModalities, row.id === 'muse-wonder' ? undefined : ['text', 'image']);
     assert.deepEqual(row.reasoningEfforts, efforts[row.id], `${row.id} reasoningEfforts`);
   }
 });

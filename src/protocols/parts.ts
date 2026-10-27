@@ -5,7 +5,7 @@
  * 图片 URL，无法解析或已 offload 的图片退化为命名占位文本，原始文件句柄直接拒绝。
  */
 
-import { LlmError, textOnlyImageText, type ContentBlock } from '@deepseek-ai/dsh-llm';
+import { LlmError, offloadedImageText, textOnlyImageText, type ContentBlock } from '@deepseek-ai/dsh-llm';
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
 
 /** 图片附件 → 请求体可用的 URL（通常是 data URL）。 */
@@ -34,7 +34,7 @@ export function projectContent(blocks: readonly ContentBlock[], image?: ImageLoo
       case 'image': {
         const url = block.offloaded ? undefined : image?.(block.attachment);
         if (url) images.push(url);
-        else text += `${text ? '\n' : ''}${textOnlyImageText(block.attachment)}`;
+        else text += `${text ? '\n' : ''}${block.offloaded ? offloadedImageText(block.attachment) : textOnlyImageText(block.attachment)}`;
         break;
       }
       case 'file':

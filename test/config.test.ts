@@ -45,7 +45,7 @@ test('real Host volatile form projection survives repeated JSON hops before brow
   const form = volatileForm(Config);
   assert.ok(form);
   let current = form;
-  const values = readConfig(Config({ emptyTurnGuard: false, useDesktopCredential: false }));
+  const values = readConfig(Config({ emptyTurnGuard: false, useDesktopCredential: false, modelSettings: { model: { imageInput: false } } }));
   for (let hop = 0; hop < 4; hop++) {
     const wire = JSON.stringify(current.toJSON());
     const decoded = rehydrateInFreshVM(wire);
@@ -60,7 +60,7 @@ test('real Host volatile form projection survives repeated JSON hops before brow
 test('JSON-roundtripped settings validate complete checkbox values in a fresh VM', () => {
   const decoded = rehydrateInFreshVM();
   assert.deepEqual(JSON.parse(JSON.stringify(decoded({}))), readConfig(Config({})));
-  const settings = { 'vendor/model:v1': { enabled: false, temperature: 0, topP: 1, maxTokens: 4096, contextWindow: 8192, reasoningEffort: 'high' } };
+  const settings = { 'vendor/model:v1': { enabled: false, imageInput: true, temperature: 0, topP: 1, maxTokens: 4096, contextWindow: 8192, reasoningEffort: 'high' } };
   for (const emptyTurnGuard of [true, false]) {
     for (const useDesktopCredential of [true, false]) {
       const input = {
@@ -86,7 +86,7 @@ test('fresh-VM settings retain URL, model allowlist, bounds and safe errors', ()
     });
   }
   const invalidSettings: unknown[] = [
-    [], true, { model: null }, { model: [] }, { model: { enabled: 'false' } },
+    [], true, { model: null }, { model: [] }, { model: { enabled: 'false' } }, { model: { imageInput: 'false' } },
     { model: { temperature: -1 } }, { model: { temperature: 2.1 } }, { model: { temperature: Number.NaN } },
     { model: { topP: 1.1 } }, { model: { topP: Number.POSITIVE_INFINITY } },
     { model: { maxTokens: 0 } }, { model: { maxTokens: 1.5 } }, { model: { maxTokens: 10_000_001 } },

@@ -50,6 +50,8 @@ export interface StatusModel {
   name: string;
   group: 'plan' | 'paid';
   enabled?: boolean;
+  /** Catalog evidence, independent of any user override; omission means unknown. */
+  inputModalities?: readonly ('text' | 'image')[];
   contextWindow?: number;
   maxOutputTokens?: number;
   reasoningEfforts?: readonly string[];
@@ -166,6 +168,12 @@ function positiveInteger(value: unknown, label: string, max: number, min = 1): n
 function parseEfforts(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 16) throw new Error('模型思考档位格式无效');
   return value.map(item => text(item, '思考档位', 32));
+}
+function parseModalities(value: unknown): ('text' | 'image')[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 2) throw new Error('模型输入模态格式无效');
+  const modes = value.map(item => member(item, ['text', 'image'] as const, '模型输入模态'));
+  if (!modes.includes('text') || new Set(modes).size !== modes.length) throw new Error('模型输入模态格式无效');
+  return modes;
 }
 function member<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
   const hit = allowed.find(candidate => candidate === value);
@@ -287,6 +295,7 @@ function parseStatusModel(value: unknown): StatusModel {
     name: text(value.name, '模型名', 128),
     group: member(value.group, MODEL_GROUPS, '模型分组'),
     ...(value.enabled === undefined ? {} : { enabled: flag(value.enabled, '模型启用状态') }),
+    ...(value.inputModalities === undefined ? {} : { inputModalities: parseModalities(value.inputModalities) }),
     ...(value.contextWindow === undefined ? {} : { contextWindow: positiveInteger(value.contextWindow, '上下文预算', 100_000_000) }),
     ...(value.maxOutputTokens === undefined ? {} : { maxOutputTokens: positiveInteger(value.maxOutputTokens, '最大输出', 10_000_000) }),
     ...(value.reasoningEfforts === undefined ? {} : { reasoningEfforts: parseEfforts(value.reasoningEfforts) }),

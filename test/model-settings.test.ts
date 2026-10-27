@@ -9,7 +9,7 @@ const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', '
 const MAX_ENTRIES = 512;
 
 test('a valid map is copied into fresh objects with only the supported fields', () => {
-  const input = { 'deepseek-v4.1-flash': { enabled: false, temperature: 0.7, topP: 0.9, maxTokens: 32000, contextWindow: 500000, reasoningEffort: 'high' } };
+  const input = { 'deepseek-v4.1-flash': { enabled: false, imageInput: true, temperature: 0.7, topP: 0.9, maxTokens: 32000, contextWindow: 500000, reasoningEffort: 'high' } };
   const map = parseModelSettingsMap(input);
   assert.deepEqual(map, input);
   assert.notEqual(map['deepseek-v4.1-flash'], input['deepseek-v4.1-flash']);
@@ -56,6 +56,22 @@ test('temperature stays in 0..2 and topP in 0..1', () => {
   for (const temperature of [-0.01, 2.01, Number.NaN, Number.POSITIVE_INFINITY, '0.7', null, true]) assert.throws(() => parseModelSettingsMap({ 'glm-5.2': { temperature } }), /temperature 必须是 0 到 2/u);
   for (const topP of [-0.01, 1.01, Number.NaN, '0.5', null]) assert.throws(() => parseModelSettingsMap({ 'glm-5.2': { topP } }), /topP 必须是 0 到 1/u);
   assert.throws(() => parseModelSettingsMap({ 'glm-5.2': { enabled: 'true' } }), /enabled 必须是布尔值/u);
+});
+
+test('image input override is an explicit boolean and never invents a default', () => {
+  for (const imageInput of [true, false]) assert.deepEqual(parseModelSettingsMap({ model: { imageInput } }), { model: { imageInput } });
+  for (const imageInput of ['true', 1, null, [], {}]) assert.throws(() => parseModelSettingsMap({ model: { imageInput } }), /imageInput 必须是布尔值/u);
+  const image = findModel('gpt-6.1-terra')!;
+  const text = findModel('glm-5.2')!;
+  const unknown = findModel('muse-wonder')!;
+  assert.deepEqual(applyModelSettings(image, { imageInput: false }).inputModalities, ['text']);
+  assert.deepEqual(applyModelSettings(text, { imageInput: true }).inputModalities, ['text', 'image']);
+  assert.deepEqual(applyModelSettings(unknown, { imageInput: true }).inputModalities, ['text', 'image']);
+  assert.deepEqual(applyModelSettings(unknown, { imageInput: false }).inputModalities, ['text']);
+  assert.equal(applyModelSettings(unknown).inputModalities, undefined);
+  assert.deepEqual(image.inputModalities, ['text', 'image']);
+  assert.deepEqual(text.inputModalities, ['text']);
+  assert.equal(unknown.inputModalities, undefined);
 });
 
 test('capacity fields are positive integers within their ceilings', () => {

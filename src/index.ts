@@ -9,10 +9,11 @@ import type {} from '@deepseek-ai/dsh-settings';
 import type {} from '@deepseek-ai/cordis-plugin-loader';
 import { LlmError } from '@deepseek-ai/dsh-llm';
 import { CoRouterAdapter } from './adapter.js';
+import { ReplayKeyStore } from './replay-key.js';
 import { installEotRecovery } from './eot-recovery.js';
 import { fetchModelCatalog, ModelDiscoveryError } from './model-discovery.js';
 import { fetchPricingSnapshot } from './pricing.js';
-import { isModelEnabled } from './model-settings.js';
+import { applyModelSettings, isModelEnabled } from './model-settings.js';
 import { modelReasoningEfforts } from './reasoning.js';
 import type { CatalogModel } from './catalog.js';
 import { Config, SETTINGS_NS, PLAN_PROVIDER, PAID_PROVIDER, readConfig, type LiveConfig } from './config.js';
@@ -177,10 +178,11 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       ...(this._quota.source ? { sessionSource: this._quota.source } : {}),
       quota: this._quota, login: this._login.status(), config: state.config, guardedTurns: this.guardedTurns,
       models: this._models.map(row => {
-        const { id, name, group, contextWindow, maxOutputTokens } = row;
+        const { id, name, group, contextWindow, maxOutputTokens, inputModalities } = row;
         const reasoningEfforts = modelReasoningEfforts(row, state.config.apiProtocol ?? 'chat-completions');
         return {
           id, name, group, enabled: isModelEnabled(id, state.config.modelSettings),
+          ...(inputModalities === undefined ? {} : { inputModalities }),
           ...(contextWindow === undefined ? {} : { contextWindow }),
           ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
           ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
@@ -397,8 +399,10 @@ export function apply(ctx: Context, config: LiveConfig): void {
   ctx.inject(['settings'], scope => scope.effect(() => scope.settings.configure({ auto: false }, ctx.fiber)));
   let modelsChanged = () => {};
   const service = new OpenDesignCoRouterService(ctx, current, { resolveSession, readQuota, readDesktopQuota, modelsChanged: () => modelsChanged() });
+  const replayKeys = new ReplayKeyStore(() => ctx.get('credentials'));
   const adapter = new CoRouterAdapter({
     config: current, models: () => service.modelCatalog(), apiKey: (ref, baseURL) => service.resolveApiKey(ref, baseURL), onEmptyTurn: () => { service.guardedTurns++; },
+    replayBindingSecret: signal => replayKeys.get(signal),
     imageDataUrl: async (ref, signal) => {
       const attachments = ctx.get('attachments');
       if (!attachments) return undefined;
@@ -422,11 +426,14 @@ export function apply(ctx: Context, config: LiveConfig): void {
     if (!key) throw new LlmError('请先配置 CoRouter API Key', 'MISSING_CREDENTIAL');
     // Model discovery is always OpenAI-compatible, irrespective of request.api or inference protocol.
     const models = await fetchModelCatalog(config.baseURL, key, signal);
-    return models.map(row => ({ id: row.id, name: row.name, ...(row.contextWindow === undefined ? {} : { contextWindow: row.contextWindow }), ...(row.maxOutputTokens === undefined ? {} : { maxTokens: row.maxOutputTokens }), ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}) }));
+    return models.map(row => {
+      const effective = applyModelSettings(row, config.modelSettings?.[row.id]);
+      return { id: row.id, name: row.name, ...(row.contextWindow === undefined ? {} : { contextWindow: row.contextWindow }), ...(row.maxOutputTokens === undefined ? {} : { maxTokens: row.maxOutputTokens }), ...(effective.inputModalities ? { inputModalities: effective.inputModalities } : {}) };
+    });
   });
   ctx.llm.registerConfigurableProviders([
     { provider: PLAN_PROVIDER, displayName: 'OpenDesign CoRouter · 套餐赠送', settingsNs: SETTINGS_NS, settingsPath: [], defaultBaseURL: current().baseURL },
     { provider: PAID_PROVIDER, displayName: 'OpenDesign CoRouter · 付费模型', settingsNs: SETTINGS_NS, settingsPath: [], defaultBaseURL: current().baseURL },
   ]);
-  ctx.effect(() => () => adapter.dispose());
+  ctx.effect(() => () => { adapter.dispose(); replayKeys.dispose(); });
 }

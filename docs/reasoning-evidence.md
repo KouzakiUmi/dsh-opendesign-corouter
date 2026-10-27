@@ -50,7 +50,7 @@
 
 ### Anthropic（8）
 
-全部型号档位一致，为 low / medium / high / xhigh / max；原生控制为 Messages 协议的 `output_config.effort`。默认档位：Claude Opus 5.5、Claude Haiku 5.5 为 medium，其余为 high。
+全部型号档位一致，为 low / medium / high / xhigh / max；原生控制为 Messages 协议的 `output_config.effort`。默认档位：Claude Opus 5.5、Claude Haiku 5.5 为 medium，其余为 high。Messages 省略思考配置时，Opus 4.8 的厂商默认是关闭，其他七款默认为 adaptive；指定上述档位时插件发送 adaptive。各型号能否关闭思考不同，Sonnet 5.5 的 `between_tools` 不等同于完全关闭，插件不以 `none` 将其伪装为关闭。[思考配置矩阵](https://platform.claude.com/docs/en/build-with-claude/thinking#configuring-thinking)
 
 | 模型 ID | 官方档位 | 官方默认 | 原文要点 |
 | --- | --- | --- | --- |

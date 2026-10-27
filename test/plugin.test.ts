@@ -26,10 +26,13 @@ test('host model discovery always calls the OpenAI models endpoint regardless of
   };
   let fiber: Fiber | undefined;
   try {
-    fiber = await ctx.plugin(isolatedPlugin, { apiProtocol: 'messages', useDesktopCredential: false });
+    fiber = await ctx.plugin(isolatedPlugin, { apiProtocol: 'messages', useDesktopCredential: false, modelSettings: { 'new-discovered': { imageInput: true, contextWindow: 8192, maxTokens: 1024 } } });
     const models = await ctx.llm.discoverModels(SETTINGS_NS, { baseURL: 'https://amr-link.open-design.ai/v1', api: 'anthropic-messages', apiKey: 'discovery-only-fixture' });
     assert.equal(calls, 1);
     assert.equal(models[0]?.id, 'new-discovered');
+    assert.deepEqual(models[0]?.inputModalities, ['text', 'image']);
+    assert.equal(models[0]?.contextWindow, undefined, 'discovery capacity remains gateway/catalog data');
+    assert.equal(models[0]?.maxTokens, undefined);
   } finally {
     await fiber?.dispose();
     globalThis.fetch = originalFetch;

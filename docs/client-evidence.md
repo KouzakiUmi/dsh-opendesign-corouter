@@ -30,7 +30,7 @@ Authorization: Bearer <工作空间 API Key>
 | `minimax-m3.1-flash` | MiniMax M3.1 Flash | 官方 API 确认 ID；桌面预检 `modelCovered: true` / `funding: coding_plan`，归附赠通道。显示名为本地格式。 |
 | `muse-wonder` | Muse Wonder | 官方 API 确认 ID；桌面预检 `modelCovered: false` / `funding: wallet`，归付费通道。显示名为本地格式。 |
 
-[官网公开目录](https://corouter.open-design.ai/models/)目前仍展示 33 个模型。部分未存在的详情路径会返回 HTTP 200 的首页，不能把这种响应当作模型文档。上述五项均不填上下文、输出上限与模态；其中四项的思考档位按厂商型号文档填写，Muse Wonder 的精确别名未确认、档位保持缺省，也不宣称所有推理协议均可用。2026-10-27 当日首次实测的官方 `/models` 原始 43 项、无重复 ID，按既有过滤规则保留 38 项；全部原有 33 项均在响应中。同日稍后的复核多出 1 项，见下节。
+[官网公开目录](https://corouter.open-design.ai/models/)目前仍展示 33 个模型。部分未存在的详情路径会返回 HTTP 200 的首页，不能把这种响应当作模型文档。上述五项的上下文和输出上限保持未知，图片输入能力按[独立的厂商证据](model-capabilities.md)填写；Muse Wonder 的精确别名未确认，图片模态与思考档位保持未知。2026-10-27 当日首次实测的官方 `/models` 原始 43 项、无重复 ID，按既有过滤规则保留 38 项；全部原有 33 项均在响应中。同日稍后的复核多出 1 项，见下节。
 
 ### GPT-6.1 Terra
 
@@ -57,8 +57,8 @@ Authorization: Bearer <工作空间 API Key>
 
 ## 能力元数据
 
-原有 12 个套餐模型的上下文、输出上限和输入模态保留同一推理端点的 [dsh-opendesign-go 0.1.9](https://github.com/EliteOtaku/dsh-opendesign-go) 部署参考；GPT-6.1 Terra 的容量与模态取自厂商型号文档，官网套餐卡与网关侧未实测。思考档位已独立改为[厂商逐型号文档](reasoning-evidence.md)，与容量证据分别维护。
+原有 12 个套餐模型的上下文和输出上限保留同一推理端点的 [dsh-opendesign-go 0.1.9](https://github.com/EliteOtaku/dsh-opendesign-go) 部署参考；GPT-6.1 Terra 的容量取自厂商型号文档，网关侧未实测。图片模态按[型号能力证据](model-capabilities.md)维护，存在来源冲突或型号映射不确定时保持未知。思考档位按[厂商逐型号文档](reasoning-evidence.md)维护，与容量证据分别记录。
 
-除这两处取值外，其余容量和模态保持既有未知状态。思考能力区分离散档位、无离散控制与未知别名；Host 选择器和设置页使用同一协议交集，历史默认值不作为能力来源。目录与元数据由[目录测试](../test/catalog.test.ts)及[宿主档位回归](../test/reasoning.test.ts)约束。
+其余缺乏证据的容量和模态保持未知；图片输入可逐型号手动覆盖，未知模态不应被自动当作仅文本。思考能力区分离散档位、无离散控制与未知别名；Host 选择器和设置页使用同一协议交集，历史默认值不作为能力来源。目录与元数据由[目录测试](../test/catalog.test.ts)、[图片能力回归](../test/image-capabilities.test.ts)及[宿主档位回归](../test/reasoning.test.ts)约束。
 
 当前适配器支持 Chat Completions、Responses 和 Anthropic Messages，模型发现固定使用当前网关的 OpenAI 兼容 `/models` 接口。协议与取消行为有离线合成流回归覆盖；Responses 的完整工具参数会补齐已发送增量，矛盾终项按无效响应处理。未实现媒体生成接口。已使用真实设备授权的运行时令牌验证模型目录读取；尚未进行真实推理调用验收。

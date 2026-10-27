@@ -1,5 +1,5 @@
 // Adapted from dsh-opendesign-go message/image compatibility handling (MIT).
-import { LlmError, textOnlyImageText, type ContentBlock, type GenerateOptions } from '@deepseek-ai/dsh-llm';
+import { LlmError, offloadedImageText, textOnlyImageText, type ContentBlock, type GenerateOptions } from '@deepseek-ai/dsh-llm';
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
 
 export type ImageResolver = (ref: ImageAttachmentRef) => string | undefined;
@@ -20,7 +20,7 @@ function parts(blocks: readonly ContentBlock[], image?: ImageResolver): { text: 
       case 'image': {
         const url = block.offloaded ? undefined : image?.(block.attachment);
         if (url) images.push(url);
-        else text += `${text ? '\n' : ''}${textOnlyImageText(block.attachment)}`;
+        else text += `${text ? '\n' : ''}${block.offloaded ? offloadedImageText(block.attachment) : textOnlyImageText(block.attachment)}`;
         break;
       }
       case 'file': throw new LlmError('原始文件未被宿主投影为文本句柄', 'UNSUPPORTED_OPTION');

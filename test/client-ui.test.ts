@@ -6,6 +6,7 @@ import {
   Advanced,
   Models,
   LoginApproval,
+  ModelRow,
   QuotaView,
   SettingsPage,
   formatRefreshCountdown,
@@ -14,6 +15,7 @@ import {
   formatTime,
   formatUsd,
   modelEnabled,
+  modelImageInput,
   nextWindowResetAt,
   parseNumberInput,
   protocolEndpoint,
@@ -71,9 +73,9 @@ test('device approval offers a Host window button and keeps the official link as
 const models: readonly StatusModel[] = [
   {
     id: 'gpt-6-luna', name: 'GPT-6 Luna', group: 'plan', enabled: true,
-    contextWindow: 1_050_000, maxOutputTokens: 128_000, reasoningEfforts: ['low', 'medium', 'high'],
+    inputModalities: ['text', 'image'], contextWindow: 1_050_000, maxOutputTokens: 128_000, reasoningEfforts: ['low', 'medium', 'high'],
   },
-  { id: 'gpt-6-astra', name: 'GPT-6 Astra', group: 'paid', enabled: false },
+  { id: 'gpt-6-astra', name: 'GPT-6 Astra', group: 'paid', enabled: false, inputModalities: ['text'] },
   { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', group: 'paid', enabled: true, contextWindow: 200_000, maxOutputTokens: 8_192 },
 ];
 
@@ -316,10 +318,10 @@ test('tab keyboard model wraps and supports Home and End', () => {
 
 test('model settings are written as one whole map without mutating the input', () => {
   const original = { 'gpt-6-astra': { enabled: false } };
-  const added = writeModelSettings(original, 'gpt-6-luna', { temperature: 0.7, topP: 0.9, maxTokens: 4096, contextWindow: 200_000, reasoningEffort: 'high' });
+  const added = writeModelSettings(original, 'gpt-6-luna', { imageInput: true, temperature: 0.7, topP: 0.9, maxTokens: 4096, contextWindow: 200_000, reasoningEffort: 'high' });
   assert.deepEqual(original, { 'gpt-6-astra': { enabled: false } });
   assert.equal(added['gpt-6-astra']?.enabled, false);
-  assert.deepEqual(added['gpt-6-luna'], { temperature: 0.7, topP: 0.9, maxTokens: 4096, contextWindow: 200_000, reasoningEffort: 'high' });
+  assert.deepEqual(added['gpt-6-luna'], { imageInput: true, temperature: 0.7, topP: 0.9, maxTokens: 4096, contextWindow: 200_000, reasoningEffort: 'high' });
   const disabled = writeModelSettings(added, 'gpt-6-luna', { ...added['gpt-6-luna'], enabled: false });
   assert.equal(disabled['gpt-6-luna']?.enabled, false);
   assert.equal(disabled['gpt-6-luna']?.temperature, 0.7);
@@ -338,6 +340,71 @@ test('form overrides decide enablement before the host catalog value', () => {
   assert.equal(modelEnabled(models[0]!, { enabled: false }), false);
   assert.equal(modelEnabled(models[0]!, { temperature: 0.2 }), true);
   assert.equal(modelEnabled(models[2]!, undefined, false), true);
+});
+
+test('image input distinguishes manual overrides, catalog facts and unknown-attempt automatic mode', () => {
+  assert.equal(modelImageInput(models[0]!, {}), true);
+  assert.equal(modelImageInput(models[0]!, { imageInput: false }), false);
+  assert.equal(modelImageInput(models[1]!, {}), false);
+  assert.equal(modelImageInput(models[1]!, { imageInput: true }), true);
+  assert.equal(modelImageInput(models[2]!, {}), true, 'unknown attempts image delivery without claiming support');
+  assert.equal(modelImageInput(models[2]!, { imageInput: false }), false);
+
+  const row = (model: StatusModel, settings: Parameters<typeof ModelRow>[0]['settings'], pending = false, writable = true) => renderToStaticMarkup(h(ModelRow, {
+    model, settings, authoritative: true, writable, pending, onCommit: async () => true,
+  }));
+  const unknown = row(models[2]!, {});
+  assert.match(unknown, /自动 · 未知，尝试发送/u);
+  assert.doesNotMatch(unknown, /自动 · 支持图片/u);
+  assert.ok(unknown.indexOf('图片输入') < unknown.indexOf('<details'), 'image policy stays outside advanced parameters');
+  assert.match(unknown, /<details class="odc-model-details">/u, 'advanced parameters start collapsed');
+  assert.doesNotMatch(unknown, />恢复自动<\/button>/u, 'unchanged defaults do not add a disabled action');
+
+  const textOnly = row(models[1]!, {});
+  const textImageControl = textOnly.match(/<div class="odc-model-image">([\s\S]*?)<\/div>/u)?.[1] ?? '';
+  assert.match(textOnly, /自动 · 仅文本/u);
+  assert.doesNotMatch(textImageControl, /type="checkbox" checked/u);
+  assert.doesNotMatch(textImageControl, />恢复自动<\/button>/u, 'no manual override needs no restore action');
+  const manualText = row(models[1]!, { imageInput: true, temperature: 0.4 });
+  assert.match(manualText, /手动 · 开启/u);
+  assert.match(manualText, /title="仅移除图片输入手动覆盖，保留其他模型设置"/u);
+  assert.match(manualText, /aria-label="GPT-6 Astra 恢复图片输入自动"/u);
+  assert.doesNotMatch(manualText.match(/<button[^>]*>恢复自动<\/button>/u)?.[0] ?? '', /disabled/u);
+
+  const pending = row(models[0]!, { imageInput: false }, true);
+  const pendingImageControl = pending.match(/<div class="odc-model-image">([\s\S]*?)<\/div>/u)?.[1] ?? '';
+  assert.match(pending, /手动 · 关闭 · 正在保存/u);
+  assert.match(pendingImageControl, /type="checkbox" disabled=""/u);
+  assert.match(pendingImageControl, /<button[^>]*disabled=""[^>]*>恢复自动<\/button>/u);
+  const readOnly = row(models[0]!, {}, false, false);
+  assert.match(readOnly, /配置不可写/u);
+});
+
+test('Claude Messages sampling shows compatible values and marks stale values clearable', () => {
+  const model: StatusModel = { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', group: 'paid' };
+  const render = (settings: Parameters<typeof ModelRow>[0]['settings'], protocol: 'messages' | 'chat-completions') => renderToStaticMarkup(h(ModelRow, {
+    model, settings, authoritative: true, writable: true, pending: false, protocol, onCommit: async () => true,
+  }));
+  const empty = render({}, 'messages');
+  assert.match(empty, /Messages 仅接受 1；建议留空/u);
+  assert.match(empty, /Messages 仅接受 0\.99；建议留空/u);
+  const stale = render({ temperature: 0.4, topP: 0.5, maxTokens: 128_001 }, 'messages');
+  const temperature = stale.match(/<input[^>]*id="[^"]+-temperature"[^>]*>/u)?.[0] ?? '';
+  const topP = stale.match(/<input[^>]*id="[^"]+-topP"[^>]*>/u)?.[0] ?? '';
+  assert.match(temperature, /aria-invalid="true"/u);
+  assert.match(topP, /aria-invalid="true"/u);
+  assert.doesNotMatch(temperature, /disabled/u, 'saved temperature remains clearable');
+  assert.doesNotMatch(topP, /disabled/u, 'saved top P remains clearable');
+  const output = stale.match(/<input[^>]*id="[^"]+-maxTokens"[^>]*>/u)?.[0] ?? '';
+  assert.match(output, /aria-invalid="true"/u);
+  assert.match(output, /max="128000"/u);
+  assert.doesNotMatch(output, /disabled/u, 'saved output limit remains clearable');
+  assert.doesNotMatch(render({ temperature: 0.4 }, 'chat-completions'), /Messages 仅接受/u);
+  const opus = renderToStaticMarkup(h(ModelRow, {
+    model: { id: 'claude-opus-4.8', name: 'Claude Opus 4.8', group: 'paid' }, settings: {}, authoritative: true, writable: true, pending: false, protocol: 'messages', onCommit: async () => true,
+  }));
+  assert.match(opus, /厂商默认关闭思考，选择思考深度可启用/u);
+  assert.match(opus, /默认最大输出 4096/u);
 });
 
 test('numeric settings accept inherit, bounds and integers only', () => {
@@ -403,8 +470,8 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
     ...snapshot,
     value: { ...snapshot.value, modelSettings: { 'gpt-6-astra': { enabled: false } } },
   });
-  assert.equal((html.match(/type="checkbox"/g) ?? []).length, 3);
-  assert.equal((html.match(/type="checkbox" checked=""/g) ?? []).length, 2);
+  assert.equal((html.match(/type="checkbox"/g) ?? []).length, 6);
+  assert.equal((html.match(/type="checkbox"[^>]*checked=""/g) ?? []).length, 4);
   assert.equal((html.match(/<summary[^>]*>参数设置 · (?:已自定义|使用默认值)<\/summary>/g) ?? []).length, 3);
   for (const label of ['温度', 'Top P', '最大输出（tokens）', '上下文预算（tokens）', '默认思考深度']) {
     assert.match(html, new RegExp(`<label for="[^"]+">${label}</label>`));
@@ -456,11 +523,11 @@ test('resetting a disabled model ignores the stale host flag once the form is re
   };
   const disabledHtml = renderModels(status, disabled);
   assert.match(disabledHtml, /已禁用/u);
-  assert.equal((disabledHtml.match(/type="checkbox" checked=""/g) ?? []).length, 2);
+  assert.equal((disabledHtml.match(/type="checkbox"[^>]*checked=""/g) ?? []).length, 4);
   // The Host still reports `enabled: false` until its next status refresh; the ready form owns the answer.
   const resetHtml = renderModels(status, { ...snapshot, value: { ...snapshot.value, modelSettings: {} } });
   assert.doesNotMatch(resetHtml, /已禁用/u);
-  assert.equal((resetHtml.match(/type="checkbox" checked=""/g) ?? []).length, 3);
+  assert.equal((resetHtml.match(/type="checkbox"[^>]*checked=""/g) ?? []).length, 5);
   assert.equal((resetHtml.match(/<button[^>]*disabled=""[^>]*>重置<\/button>/g) ?? []).length, 3);
 });
 
@@ -491,7 +558,7 @@ test('advanced offers three protocols, a read-only gateway and real timeout fiel
   assert.match(html, /已检测到 2 次异常回答/u);
   assert.match(html, /持续重试，直到成功或取消/u);
   assert.match(html, /可能额外消耗额度/u);
-  assert.match(html, /type="checkbox" checked=""/u);
+  assert.match(html, /type="checkbox"[^>]*checked=""/u);
 });
 
 test('unavailable writable forms cannot expose editable controls', () => {
@@ -499,7 +566,7 @@ test('unavailable writable forms cannot expose editable controls', () => {
   const html = renderAdvanced(status, unavailable);
   assert.match(html, /type="checkbox" disabled=""/u);
   const modelHtml = renderModels(status, unavailable);
-  assert.equal((modelHtml.match(/type="checkbox" disabled=""/g) ?? []).length, models.length);
+  assert.equal((modelHtml.match(/type="checkbox" disabled=""/g) ?? []).length, models.length * 2);
 });
 
 test('all concurrently pending fields stay disabled', () => {
@@ -524,7 +591,7 @@ test('an unconfigured form snapshot keeps the guard on its host value', () => {
     { ...status, config: { ...status.config, emptyTurnGuard: false } },
     { status: 'loading', writable: false, value: undefined },
   );
-  assert.doesNotMatch(html, /type="checkbox" checked=""/u);
+  assert.doesNotMatch(html, /type="checkbox"[^>]*checked=""/u);
   assert.match(html, /已检测到 2 次异常回答/u);
 });
 
