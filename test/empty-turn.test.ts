@@ -7,11 +7,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { EMPTY_RESPONSE_CODE, ToolCallId, type FinishReason, type StreamChunk } from '@deepseek-ai/dsh-llm';
+import { ToolCallId, type FinishReason, type StreamChunk } from '@deepseek-ai/dsh-llm';
+import { OPENDESIGN_EOT } from '../src/eot-code.js';
 
 import {
   EMPTY_TURN_MESSAGE,
+  INCOMPLETE_TURN_MESSAGE,
   EmptyTurnTracker,
+  isPendingActionTurn,
   isMarkupOnlyStop,
   isResidueOnly,
   stripProtocolResidue,
@@ -54,7 +57,7 @@ function decide(chunks: readonly StreamChunk[], reason: FinishReason = STOP): Fi
 function assertEmptyTurn(reason: FinishReason, label: string): void {
   assert.equal(reason.kind, 'error', `${label}: becomes an error`);
   if (reason.kind !== 'error') return;
-  assert.equal(reason.failure.code, EMPTY_RESPONSE_CODE, `${label}: EMPTY_RESPONSE is what retry policy knows`);
+  assert.equal(reason.failure.code, OPENDESIGN_EOT, `${label}: EOT recovery owns this failure`);
   assert.equal(reason.failure.message, EMPTY_TURN_MESSAGE, `${label}: the failure explains itself`);
 }
 
@@ -70,6 +73,9 @@ const RESIDUE_CASES: readonly (readonly [string, readonly StreamChunk[]])[] = [
   ['an empty thinking pair', [textBlock('\n<thinking> </thinking>\n')]],
   ['REA tool-call opener', [textBlock('<rea:tool_calls>')]],
   ['REA tool-call pair', [delta('<rea:'), delta('tool_calls>'), delta('</rea:tool_calls>')]],
+  ['REA tool call with argument text', [textBlock('<rea:tool_calls><rea:tool name="read"><rea:parameter name="path">README.md</rea:parameter></rea:tool></rea:tool_calls>')]],
+  ['incomplete REA tool call with argument text', [textBlock('<rea:tool_calls><rea:tool name="read"><rea:parameter name="path">README.md')]],
+  ['DSML tool call with argument text', [textBlock('<｜｜DSML｜｜calls><｜｜DSML｜｜invoke>arguments</｜｜DSML｜｜invoke></｜｜DSML｜｜calls>')]],
   ['an empty presentation tag', [textBlock('<返璞归真></返璞归真>')]],
   ['whitespace only', [textBlock('   \n\t  ')]],
   ['markup plus punctuation', [textBlock('  </thinking> | ')]],
@@ -85,6 +91,9 @@ test('stripProtocolResidue removes known protocol tokens only', () => {
   assert.equal(stripProtocolResidue('结论如下。\n<thinking> </thinking>'), '结论如下。', 'real prose survives');
   assert.equal(stripProtocolResidue('任务已完成。<rea:tool_calls></rea:tool_calls>'), '任务已完成。');
   assert.equal(stripProtocolResidue('<rea:analysis>正文</rea:analysis>'), '<rea:analysis>正文</rea:analysis>');
+  assert.equal(stripProtocolResidue('说明：<rea:tool_calls><rea:tool name="read">args</rea:tool></rea:tool_calls>'), '说明：');
+  assert.notEqual(stripProtocolResidue('```xml\n<rea:tool_calls><rea:tool name="read">args</rea:tool></rea:tool_calls>\n```'), '');
+  assert.equal(stripProtocolResidue('｜｜DSML｜｜ 是工具标记格式'), '｜｜DSML｜｜ 是工具标记格式');
   assert.equal(stripProtocolResidue('好的'), '好的');
   assert.equal(stripProtocolResidue('?'), '?');
 });
@@ -113,13 +122,52 @@ test('a stop with no channel content at all is an empty turn', () => {
   assertEmptyTurn(decide([delta('  ')]), 'blank delta');
 });
 
+test('pending actions and concise progress updates become retryable failures', () => {
+  for (const text of [
+    '让我核对项目配置的完整情况。',
+    '好的，我来看看这个文件。',
+    '先读一下配置。',
+    '我需要检查项目配置。',
+    '让我核对根目录。｜｜DSML｜｜ calls>',
+    '让我核对根目录。<rea:tool_calls><rea:tool name="read"><rea:parameter name="path">README.md</rea:parameter></rea:tool></rea:tool_calls>',
+    "I'll check the configuration.",
+    'Let me inspect the files.',
+    'Now let me check X...',
+    '模型已通过测试。现在核对依赖状态，确认相关配置是否已同步。',
+    '本轮检查已通过。现在查看当前目录的配置。',
+    '已更新构建。设置与接口已同步。现在核验发布与配置。',
+  ]) {
+    assert.equal(isPendingActionTurn(text), true, text);
+    const tracker = track([textBlock(text)]);
+    assert.equal(tracker.inspect().pendingAction, true);
+    assert.deepEqual(tracker.resolve(STOP), { kind: 'error', failure: { code: OPENDESIGN_EOT, message: INCOMPLETE_TURN_MESSAGE } });
+    assertPassthrough(track([textBlock(text), toolStart]).resolve(STOP), STOP, 'tool-call protects a preamble');
+    assertPassthrough(track([textBlock(text)], { enabled: false }).resolve(STOP), STOP, 'switch off');
+    assertPassthrough(track([textBlock(text)]).resolve(MAX_TOKENS), MAX_TOKENS, 'max-tokens is not a stop');
+  }
+});
+
+test('preamble heuristic leaves answers, completed actions and multi-sentence text alone', () => {
+  for (const text of [
+    '好的', '?', '这是一个正常的回答，包含标点。',
+    '我先查看了日志。', '我先检查一下，结果是正常。', '让我核对一下。结果正常。',
+    '我会检查什么？', '可以通过检查配置解决此问题。',
+    '｜｜DSML｜｜ 是工具标记格式', 'Let me check. The result is correct.',
+    'The configuration is correct.', '我先检查以下内容：配置正确。',
+    '检查通过。现在查看了日志，发现配置正常。', '检查通过。现在系统可以正常启动。',
+  ]) {
+    assert.equal(isPendingActionTurn(text), false, text);
+    assertPassthrough(decide([textBlock(text)]), STOP, text);
+  }
+});
+
 test('real replies are never touched', async (t) => {
   const cases: readonly (readonly [string, readonly StreamChunk[], FinishReason])[] = [
-    ['a normal sentence', [textBlock('好的，我来看看这个文件。')], STOP],
+    ['a normal sentence', [textBlock('文件中的配置正确。')], STOP],
     ['a one-word answer', [textBlock('好的')], STOP],
     ['a single symbol', [textBlock('?')], STOP],
     ['a sentence with punctuation', [textBlock('这是一个正常的回答，包含标点。')], STOP],
-    ['streamed prose', [delta('先读一'), delta('下配置。')], STOP],
+    ['streamed prose', [delta('配置已'), delta('读取完成。')], STOP],
     ['prose beside leaked markup', [textBlock('结论如下。\n<thinking> </thinking>')], STOP],
     ['a tool call', [toolStart, toolEnd], STOP],
     ['a tool call with preamble text', [delta('先跑一下。'), toolStart, toolEnd], STOP],
@@ -204,7 +252,7 @@ test('telemetry reports counts only and can never break the stream', async (t) =
     assertEmptyTurn(tracker.resolve(STOP), 'rewrite');
     assert.equal(seen.length, 1, 'one report per rewrite');
     const evidence = seen[0] as Record<string, unknown>;
-    assert.deepEqual(Object.keys(evidence).sort(), ['markupOnly', 'reasoningLength', 'sawToolCall', 'textLength']);
+    assert.deepEqual(Object.keys(evidence).sort(), ['markupOnly', 'pendingAction', 'reasoningLength', 'sawToolCall', 'textLength']);
     assert.equal(typeof evidence.textLength, 'number', 'a length, not the text');
     assert.equal(JSON.stringify(evidence).includes('thinking'), false, 'no model output in the report');
   });

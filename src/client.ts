@@ -991,13 +991,13 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
   };
   return h(React.Fragment, null,
     h('section', { className: 'odc-card' },
-      h('h3', null, '空轮监控'),
-      h('p', { className: 'odc-hint' }, '检测 DeepSeek V4.1 Flash 工具对话中的空回答或协议标记残留。'),
+      h('h3', null, '异常结束监控'),
+      h('p', { className: 'odc-hint' }, '检测 DeepSeek V4.1 Flash 工具对话中的空回答、协议标记残留或说明下一步后未执行的提前结束。文字识别可能误判。'),
       h('div', { style: { marginTop: 14 } }, h(Switch, {
         checked: formSnapshot.value?.emptyTurnGuard ?? status?.config.emptyTurnGuard ?? true,
         disabled: !writable || pendingField.includes('emptyTurnGuard'),
-        label: '启用空轮监控',
-        hint: `已检测到 ${status?.guardedTurns ?? '—'} 次空回答。自动重试由 DSH 的重试设置控制，重试可能额外消耗额度。`,
+        label: '启用异常结束监控',
+        hint: `已检测到 ${status?.guardedTurns ?? '—'} 次异常回答。命中后持续重试，直到成功或取消；可能额外消耗额度。`,
         onChange: checked => { void setFormField('emptyTurnGuard', checked); },
       }))),
     h('section', { className: 'odc-card' },

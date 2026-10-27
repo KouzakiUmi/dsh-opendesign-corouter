@@ -4,6 +4,8 @@ import { CoRouterAdapter } from '../src/adapter.js';
 import { PLAN_PROVIDER, PAID_PROVIDER, type RuntimeConfig } from '../src/config.js';
 import { ReasoningEffortId, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm';
 import { AttachmentId, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
+import { EMPTY_TURN_MESSAGE, INCOMPLETE_TURN_MESSAGE } from '../src/empty-turn.js';
+import { OPENDESIGN_EOT } from '../src/eot-code.js';
 const base: RuntimeConfig = { apiKeyEnv: 'FIXTURE_KEY', baseURL: 'https://amr-link.open-design.ai/v1', useDesktopCredential: false, emptyTurnGuard: true, requestTimeoutMs: 10000, streamIdleTimeoutMs: 1000 };
 const options = (provider = PLAN_PROVIDER, model = 'deepseek-v4.1-flash'): GenerateOptions => ({ provider, model, messages: [{ role: 'user', content: [{ type: 'text', text: 'fixture' }] }] });
 const sse = (text: string) => new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
@@ -52,7 +54,7 @@ test('empty-turn monitor only changes gift chat tool-enabled steps; switch is in
   const adapter = new CoRouterAdapter({ config: () => config, apiKey: async () => 'test-key', onEmptyTurn: () => { hits++; }, fetch: async () => sse('<thinking></thinking>') });
   const tool = { name: 'fixture_tool', description: 'fixture', parameters: { type: 'object' } };
   const result = await collect(adapter.stream({ ...options(), tools: [tool] }));
-  assert.deepEqual(result.at(-1), { type: 'finish', reason: { kind: 'error', failure: { code: 'EMPTY_RESPONSE', message: 'OpenDesign：模型回复只剩协议标记，未产生可用内容' } } });
+  assert.deepEqual(result.at(-1), { type: 'finish', reason: { kind: 'error', failure: { code: OPENDESIGN_EOT, message: EMPTY_TURN_MESSAGE } } });
   config = { ...base, emptyTurnGuard: false };
   assert.deepEqual((await collect(adapter.stream({ ...options(), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'stop' } });
   config = { ...base };
@@ -63,15 +65,90 @@ test('empty-turn monitor only changes gift chat tool-enabled steps; switch is in
     assert.deepEqual((await collect(adapter.stream({ ...options(PLAN_PROVIDER, id), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'stop' } });
   }
 });
-test('DSv4.1 leaked REA markers become EMPTY_RESPONSE only when its monitor and tools are enabled', async () => {
+test('DSv4.1 leaked REA markers become EOT failures only when its monitor and tools are enabled', async () => {
   let config = { ...base }, hits = 0;
   const adapter = new CoRouterAdapter({ config: () => config, apiKey: async () => 'fixture-key', onEmptyTurn: () => { hits++; }, fetch: async () => sse('<rea:tool_calls></rea:tool_calls>') });
   const tool = { name: 'fixture_tool', description: 'fixture', parameters: { type: 'object' } };
-  assert.deepEqual((await collect(adapter.stream({ ...options(), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'error', failure: { code: 'EMPTY_RESPONSE', message: 'OpenDesign：模型回复只剩协议标记，未产生可用内容' } } });
+  assert.deepEqual((await collect(adapter.stream({ ...options(), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'error', failure: { code: OPENDESIGN_EOT, message: EMPTY_TURN_MESSAGE } } });
   assert.equal(hits, 1);
   config = { ...base, emptyTurnGuard: false };
   assert.deepEqual((await collect(adapter.stream({ ...options(), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'stop' } });
   assert.equal(hits, 1);
+});
+
+test('standalone action preamble is intercepted for the monitored tool call across protocols', async () => {
+  const text = '让我核对项目配置的完整情况。';
+  const tool = { name: 'fixture_tool', description: 'fixture', parameters: { type: 'object' } };
+  const frames = (events: unknown[]) => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+  for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
+    const events = protocol === 'chat-completions' ? [
+      { choices: [{ delta: { content: text } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ] : protocol === 'responses' ? [
+      { type: 'response.output_text.delta', item_id: 'm', output_index: 0, content_index: 0, delta: text },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ] : [
+      { type: 'message_start', message: { usage: {} } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' } }, { type: 'message_stop' },
+    ];
+    let hits = 0;
+    const adapter = new CoRouterAdapter({ config: () => ({ ...base, apiProtocol: protocol }), apiKey: async () => 'fixture-key', onEmptyTurn: () => { hits++; }, fetch: async () => frames(events) });
+    const result = await collect(adapter.stream({ ...options(), tools: [tool] }));
+    assert.deepEqual(result.at(-1), { type: 'finish', reason: { kind: 'error', failure: { code: OPENDESIGN_EOT, message: INCOMPLETE_TURN_MESSAGE } } }, protocol);
+    assert.equal(hits, 1);
+    assert.deepEqual((await collect(adapter.stream(options()))).at(-1), { type: 'finish', reason: { kind: 'stop' } }, 'no tools');
+  }
+});
+
+test('premature stream termination is retryable only for the monitored call before any tool block', async () => {
+  const tool = { name: 'fixture_tool', description: 'fixture', parameters: { type: 'object' } };
+  const frames = (events: unknown[]) => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+  for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
+    const events = protocol === 'chat-completions' ? [{ choices: [{ delta: { content: '部分内容' } }] }]
+      : protocol === 'responses' ? [{ type: 'response.output_text.delta', item_id: 'm', output_index: 0, content_index: 0, delta: '部分内容' }]
+      : [{ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '部分内容' } }];
+    let enabled = true;
+    const adapter = new CoRouterAdapter({ config: () => ({ ...base, apiProtocol: protocol, emptyTurnGuard: enabled }), apiKey: async () => 'fixture-key', fetch: async () => frames(events) });
+    await assert.rejects(collect(adapter.stream({ ...options(), tools: [tool] })), { code: 'TRANSPORT' }, protocol);
+    enabled = false;
+    await assert.rejects(collect(adapter.stream({ ...options(), tools: [tool] })), { code: 'INVALID_RESPONSE' }, `${protocol}: disabled`);
+    enabled = true;
+    await assert.rejects(collect(adapter.stream(options())), { code: 'INVALID_RESPONSE' }, `${protocol}: no tools`);
+    await assert.rejects(collect(adapter.stream({ ...options(PLAN_PROVIDER, 'deepseek-v4-flash'), tools: [tool] })), { code: 'INVALID_RESPONSE' }, `${protocol}: another model`);
+  }
+  const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'fixture-key', fetch: async () => frames([
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'fixture_tool', arguments: '{' } }] } }] },
+  ]) });
+  await assert.rejects(collect(adapter.stream({ ...options(), tools: [tool] })), { code: 'INVALID_RESPONSE' }, 'a started tool block is never automatically replayed');
+});
+
+test('leaked tool markup is rejected, but a real tool call is never replaced', async () => {
+  const tool = { name: 'fixture_tool', description: 'fixture', parameters: { type: 'object' } };
+  let hits = 0;
+  let response = sse('<rea:tool_calls><rea:tool name="fixture_tool"><rea:parameter name="path">fixture.txt</rea:parameter></rea:tool></rea:tool_calls>');
+  const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'fixture-key', onEmptyTurn: () => { hits++; }, fetch: async () => response });
+  assert.deepEqual((await collect(adapter.stream({ ...options(), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'error', failure: { code: OPENDESIGN_EOT, message: EMPTY_TURN_MESSAGE } } });
+  response = new Response([
+    { choices: [{ delta: { content: '先检查配置。' } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'fixture_tool', arguments: '{}' } }] } }] },
+    { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+  ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+  const result = await collect(adapter.stream({ ...options(), tools: [tool] }));
+  assert.deepEqual(result.at(-1), { type: 'finish', reason: { kind: 'tool-calls' } });
+  assert.equal(hits, 1);
+});
+
+test('zero-content responses get EOT recovery only for the monitored tool call', async () => {
+  const tool = { name: 'fixture_tool', description: 'fixture', parameters: { type: 'object' } };
+  const emptyFrame = () => new Response(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+  for (const fetch of [async () => new Response(null), async () => emptyFrame()]) {
+    let hits = 0;
+    const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'fixture-key', fetch, onEmptyTurn: () => { hits++; } });
+    await assert.rejects(collect(adapter.stream({ ...options(), tools: [tool] })), { code: OPENDESIGN_EOT });
+    await assert.rejects(collect(adapter.stream(options())), { code: 'EMPTY_RESPONSE' });
+    await assert.rejects(collect(adapter.stream({ ...options(PLAN_PROVIDER, 'deepseek-v4-flash'), tools: [tool] })), { code: 'EMPTY_RESPONSE' });
+    assert.equal(hits, 1, 'the monitored failure is counted exactly once');
+  }
 });
 
 test('prepareCall binds metadata and dispatch to a single settings generation', async () => {

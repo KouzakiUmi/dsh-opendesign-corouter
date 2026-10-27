@@ -33,6 +33,11 @@ import {
 } from '@deepseek-ai/dsh-llm';
 import { record } from '../util.js';
 
+/** Missing terminal event, distinguished from a malformed event without changing its base code. */
+export class PrematureEndError extends LlmError {
+  constructor(message: string) { super(message, 'INVALID_RESPONSE'); }
+}
+
 /** 固定文案：只说明分类与下一步，绝不拼接上游文字、状态以外的响应事实或凭据。 */
 const MESSAGES: Readonly<Record<string, string>> = {
   [CONTEXT_WINDOW_EXCEEDED_CODE]: 'OpenDesign：请求超出模型上下文长度，请缩短输入后重试',

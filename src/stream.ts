@@ -8,7 +8,7 @@
 
 import { LlmError, ToolCallId, type StreamChunk, type TokenUsage, type FinishReason } from '@deepseek-ai/dsh-llm';
 import { record, finite } from './util.js';
-import { gatewayError } from './protocols/errors.js';
+import { gatewayError, PrematureEndError } from './protocols/errors.js';
 import { sseFrames } from './protocols/sse.js';
 
 export { gatewayError } from './protocols/errors.js';
@@ -116,7 +116,7 @@ export async function* consumeSse(body: ReadableStream<Uint8Array>, signal: Abor
   }
 
   signal.throwIfAborted();
-  if (!finish) throw new LlmError('OpenDesign：响应流提前中断，未收到结束原因', 'INVALID_RESPONSE');
+  if (!finish) throw new PrematureEndError('OpenDesign：响应流提前中断，未收到结束原因');
   if (!count) throw new LlmError('OpenDesign：模型返回空响应', 'EMPTY_RESPONSE');
   if (finish.kind === 'tool-calls' && !sawTool) throw new LlmError('OpenDesign：响应声明工具调用，但未返回任何工具块', 'INVALID_RESPONSE');
   if (usage) yield { type: 'usage', usage };

@@ -22,7 +22,7 @@ import {
   type FinishReason, type StreamChunk, type TokenUsage,
 } from '@deepseek-ai/dsh-llm';
 import { record } from '../util.js';
-import { anthropicError } from './errors.js';
+import { anthropicError, PrematureEndError } from './errors.js';
 import { streamHeaders } from './headers.js';
 import { inferenceEndpoint } from '../protocol-options.js';
 import { protocolAcceptsEffort } from '../reasoning.js';
@@ -368,7 +368,7 @@ export async function* streamMessages(
   }
 
   signal.throwIfAborted();
-  if (!finish) throw new LlmError('OpenDesign：响应流提前中断，未收到结束事件', 'INVALID_RESPONSE');
+  if (!finish) throw new PrematureEndError('OpenDesign：响应流提前中断，未收到结束事件');
 }
 
 export const messages: Protocol = {

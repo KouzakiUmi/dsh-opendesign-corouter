@@ -22,7 +22,7 @@ Required behavior:
 - Each model can be enabled or disabled and given explicit generation defaults. Disabling affects both advertised models and direct invocation. Settings are persisted through the host configuration service.
 - Inference supports Chat Completions, Responses, and Messages. Model discovery always uses the configured gateway's OpenAI-compatible `GET /models` endpoint, independently of inference protocol selection. User-facing refresh/source messages say “刷新模型目录” / “当前网关”; protocol compatibility must not imply the models come from OpenAI's own service.
 - Reasoning choices follow the [model evidence](docs/reasoning-evidence.md) and are intersected with the active protocol in Host metadata, settings and request validation. Defaults never create a capability list. Stale defaults remain clearable, do not corrupt model metadata, and fail before credential/network I/O when used. Vendor defaults remain upstream-owned.
-- The empty-turn monitor applies only to `deepseek-v4.1-flash` tool-enabled calls. A stop with no tool calls and no usable visible answer becomes `EMPTY_RESPONSE`, including known REA/DSML/thinking residue. Other models and real answers keep their finish semantics. Model request retries belong to the host retry extension.
+- The empty-turn monitor applies only to `deepseek-v4.1-flash` tool-enabled calls. A stop with no tool calls and no usable visible answer becomes `OPENDESIGN_EOT`, including known REA/DSML/thinking residue, prospective action statements and concise progress followed by a pending action. This language heuristic can miss or misclassify replies; preserve substantive answers, actual tool calls and other finish reasons. Its scoped agent/request-error recovery retries EOT without an attempt limit, uses cancellable backoff, and durably records retry events; unrelated errors keep the host retry policy. A missing stream terminal event is retryable as `TRANSPORT` only for monitored attempts before a tool call starts. Other models retain their finish semantics.
 - Manual quota refresh bypasses cached data but shares an in-flight operation. Automatic failed reads back off from 5 to 60 seconds and stop after six consecutive failures; manual refresh or a relevant configuration change starts a new sequence.
 - Unreadable image bytes fall back to a named placeholder; cancellation still terminates the request.
 
@@ -36,6 +36,7 @@ Required behavior:
 - `src/login.ts`, `src/device-auth.ts`: device authorization lifecycle, strict public-link validation, bounded requests and polling.
 - `src/browser-open.ts`: the one temporary activation window. Single instance, bounded launch steps, closed on failure and on plugin disposal. Never touches an existing browser profile.
 - `src/model-discovery.ts`: bounded OpenAI model discovery; no inference-protocol branching.
+- `src/eot-recovery.ts`: scoped EOT recovery at the Agent request-error boundary; never replays tools or changes unrelated retry policies.
 - `src/pricing.ts`: bounded, credential-free public website pricing reader; retain original tier labels and reject incompatible price units/currencies.
 - `src/adapter.ts`, `src/protocols/`: snapshot a call's configuration, translate requests and streams, and enforce model enablement.
 - `src/client.ts`: settings interactions and DSH semantic-theme styling. Form values must drive real host behavior.

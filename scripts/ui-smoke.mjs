@@ -229,7 +229,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await desktopSwitch.check();
   await page.waitForFunction(() => window.__config.useDesktopCredential === true);
   await page.getByRole('tab', { name: '高级', exact: true }).click();
-  const pendingGuard = page.getByRole('checkbox', { name: /启用空轮监控/u });
+  const pendingGuard = page.getByRole('checkbox', { name: /启用异常结束监控/u });
   await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
   await pendingGuard.uncheck();
   assert.equal(await pendingGuard.isChecked(), false);
@@ -548,9 +548,9 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
 
   // Advanced: protocol select, read-only gateway, credential reference and real timeouts.
   await page.getByRole('tab', { name: '高级', exact: true }).click();
-  const guard = page.getByRole('checkbox', { name: /启用空轮监控/u });
+  const guard = page.getByRole('checkbox', { name: /启用异常结束监控/u });
   assert.equal(await guard.isChecked(), true);
-  await page.getByText('已检测到 2 次空回答。', { exact: false }).waitFor();
+  await page.getByText('已检测到 2 次异常回答。', { exact: false }).waitFor();
   await guard.uncheck();
   await page.waitForFunction(() => window.__config.emptyTurnGuard === false);
   await guard.check();

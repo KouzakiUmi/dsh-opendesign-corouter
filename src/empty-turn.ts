@@ -1,35 +1,33 @@
-// Gift-pool empty-turn guard: turn a "markup-only stop" into a retryable EMPTY_RESPONSE.
+// Gift-pool empty-turn guard: identify empty or incomplete action-oriented stops.
 //
 // A translating relay in front of the gift model can hand the model's native tool/thinking
 // markup back as plain text and still finish with `stop`. The step then carries no tool call
 // and no prose the user can use, yet `dsh-agent-loop` reads "no tool call" as "the turn is
-// over". `consumeSse` has the sibling hole: its `!count` check (src/stream.ts:160) only covers
+// over". `consumeSse` has the sibling hole: its `!count` check only covers
 // streams that opened zero blocks, and one residue block already makes `count === 1`.
 //
 // This module is the adapter-callable half of that guard, modelled on FYTXY/dsh-empty-turn-guard
 // 0.4.0 (MIT) — see docs/empty-turn-evidence.md. It never edits model text, never injects a
 // message and never replays work: the only action is rewriting an eligible `finish` reason into
-// `{ kind: 'error', failure: { code: 'EMPTY_RESPONSE' } }`, which the provider's existing retry
-// policy already treats as safe to repeat.
+// `{ kind: 'error', failure: { code: 'OPENDESIGN_EOT' } }`, which the scoped recovery handler
+// returns to the host's request-error waterfall without replaying tools.
 //
-// The decision is the reference plugin's original semantics: visible text only.
-// Three conditions must hold together — the finish is `stop`, no tool call was observed, and the
-// visible text channel is empty once protocol residue is removed. Whether the reasoning channel
-// carried a real train of thought does not rescue the turn: a model that thinks and then answers
-// with nothing is exactly the empty turn this guard exists for, so it is retried too. A real
-// answer, a partial answer, a tool step, or a truncated (`max-tokens`) reply still passes through
-// untouched, because the first two either leave visible content or open a tool call.
+// The visible-text check includes a narrow heuristic for a prospective action statement,
+// optionally after a concise progress update.
+// It also detects empty text and known protocol residue. Reasoning alone does not rescue an empty
+// answer. Real answers, tool steps and truncated (`max-tokens`) replies keep their finish semantics.
 //
-// The switch is a *monitor* switch: `enabled: false` only turns this rewrite off. The adapter's
-// own `count === 0` → `EMPTY_RESPONSE` path is Core behaviour and must stay outside it, so a truly
-// content-free stream is rejected whether or not the monitor is on.
+// A truly content-free stream is rejected whether or not the monitor is on; the adapter
+// converts that parser failure to the scoped EOT code only when this monitor applies.
 //
 // Callers decide *where* it applies: pass `enabled: false` for paid routes so their failures keep
 // their existing behaviour. Nothing here restarts, reconnects, or reroutes a provider.
-import { EMPTY_RESPONSE_CODE, type FinishReason, type StreamChunk } from '@deepseek-ai/dsh-llm';
+import { type FinishReason, type StreamChunk } from '@deepseek-ai/dsh-llm';
+import { OPENDESIGN_EOT } from './eot-code.js';
 
 /** Failure message a rewritten empty turn carries. */
-export const EMPTY_TURN_MESSAGE = 'OpenDesign：模型回复只剩协议标记，未产生可用内容';
+export const EMPTY_TURN_MESSAGE = 'OpenDesign：模型未产生可用回答或有效工具调用';
+export const INCOMPLETE_TURN_MESSAGE = 'OpenDesign：模型停在操作说明，未继续发起工具调用';
 
 /**
  * Protocol residue a relay can leak into a text or reasoning channel: DeepSeek's private
@@ -41,8 +39,13 @@ export const EMPTY_TURN_MESSAGE = 'OpenDesign：模型回复只剩协议标记�
  * content, so a reply that merely discusses a tag is never misread as empty.
  */
 const RESIDUE_PATTERNS: readonly RegExp[] = [
+  /<\s*rea:tool_calls\s*>[\s\S]*?(?:<\s*\/\s*rea:tool_calls\s*>|$)/giu,
+  /<\s*rea:tool(?:\s+[^>]*)?>[\s\S]*?(?:<\s*\/\s*rea:tool\s*>|$)/giu,
+  /<\s*rea:parameter(?:\s+[^>]*)?>[\s\S]*?(?:<\s*\/\s*rea:parameter\s*>|$)/giu,
+  /<\s*｜｜DSML｜｜\s*calls(?:\s+[^>]*)?>[\s\S]*?(?:<\s*\/\s*｜｜DSML｜｜\s*calls\s*>|$)/gu,
   /<\s*\/?\s*｜｜DSML｜｜[^>]*>/gu,
-  /｜｜DSML｜｜[^\n<>]*>?/gu,
+  /｜｜DSML｜｜\s*(?:calls|invoke|parameter)(?:\s+[^>\n]*)?>/giu,
+  /｜｜DSML｜｜(?:\s*(?:calls|invoke|parameter))?\s*$/giu,
   /<\s*\/?\s*thinking\s*>/giu,
   /<\s*\/?\s*rea:tool_calls\s*>/giu,
   /<\s*\/?\s*返璞归真\s*>/gu,
@@ -72,6 +75,24 @@ export function isResidueOnly(text: string | undefined): boolean {
   return text === undefined || stripProtocolResidue(text) === '';
 }
 
+// Only a prospective action statement or a concise status followed by one is eligible.
+const ACTION_PREAMBLE_ZH = /^(?:(?:好的?|明白|收到)[，,。]\s*)?(?:让我|我需要|我(?:先|再|将|会|来|要|这就|马上)|先|现在|接下来(?:我)?(?:将|会)?)(?:先|再|去|来|马上)?(?:看一看|看看|看下|查看|检查|核对|核验|核查|对照|比对|确认|验证|验收|测试|读取|读|打开|搜索|查找|定位|分析|排查|审查|检索|查询|运行|执行|修改|修复|调整|更新|编写|梳理|对比|比较)(?!了|过|到|出|完)[^，,。！？!?\n；;：:]{1,100}[。！!…]?$/u;
+const ACTION_PREAMBLE_EN = /^(?:(?:okay|sure|now)[,.]?\s+)?(?:let me|i(?:'ll| will)|i(?:'m| am) going to)\s+(?:check|inspect|review|verify|read|open|search|find|locate|analy[sz]e|test|run|execute|edit|fix|update|compare)\s+[^.!?,;:\n]{1,100}(?:\.{1,3}|!|…)?$/iu;
+const FOLLOWUP_ACTION_ZH = /^(?:现在|接下来|下一步|随后|接着)(?:我)?(?:先|再|将|会|准备|重新)?(?:看一看|看看|看下|查看|检查|核对|核验|核查|对照|比对|确认|验证|验收|测试|读取|读|打开|搜索|查找|定位|分析|排查|审查|检索|查询|运行|执行|修改|修复|调整|更新|编写|梳理|对比|比较)(?!了|过|到|出|完|结果)[^。！？!?\n；;：:]{1,100}[。！!…]?$/u;
+const COMPLETED_ACTION_ZH = /(?:发现|结果(?:是|为|显示)|显示|得出|证明|确认了|已经完成|已完成|通过|没有问题|无误|正常)/u;
+
+/** Recognize a short action promise, optionally after a concise progress update. */
+export function isPendingActionTurn(text: string | undefined): boolean {
+  if (text === undefined) return false;
+  const content = stripProtocolResidue(text);
+  if (ACTION_PREAMBLE_ZH.test(content) || ACTION_PREAMBLE_EN.test(content)) return true;
+  if (content.length > 200 || /[\n`]/u.test(content)) return false;
+  const sentences = content.split(/(?<=[。！？])\s*/u).filter(Boolean);
+  if (sentences.length < 2 || sentences.length > 3) return false;
+  const last = sentences.at(-1) ?? '';
+  return FOLLOWUP_ACTION_ZH.test(last) && !COMPLETED_ACTION_ZH.test(last);
+}
+
 /** Stream facts one attempt produced, as the adapter accumulated them. */
 export interface EmptyTurnInput {
   /** Whether any tool-call block was opened or streamed during this attempt. */
@@ -89,6 +110,8 @@ export interface EmptyTurnEvidence {
   readonly reasoningLength: number;
   /** True when the visible text channel is empty once protocol residue is removed. */
   readonly markupOnly: boolean;
+  /** True for a narrowly recognized pending-action statement. */
+  readonly pendingAction: boolean;
 }
 
 /**
@@ -113,8 +136,8 @@ export interface EmptyTurnOptions {
   /**
    * Monitor switch, read per request by the caller. `false` makes every
    * {@link EmptyTurnTracker.resolve} a no-op, which is how a paid route keeps its untouched
-   * behaviour. It never suppresses the adapter's own `count === 0` → `EMPTY_RESPONSE` path:
-   * that is Core behaviour and stays in force either way.
+   * behaviour. It never suppresses the protocol reader's own `count === 0` → `EMPTY_RESPONSE`
+   * path, which stays in force either way.
    */
   readonly enabled?: boolean;
   /**
@@ -204,24 +227,28 @@ export class EmptyTurnTracker {
       textLength: text.length,
       reasoningLength: reasoning.length,
       markupOnly: isResidueOnly(text),
+      pendingAction: isPendingActionTurn(text),
     };
   }
 
   /**
-   * Rewrite an eligible finish into the provider-neutral empty-response failure.
+  * Rewrite an eligible finish into the scoped EOT failure.
    *
    * The reason object is returned unchanged (same reference) whenever the monitor is off, the
-   * finish is not `stop`, a tool call was observed, or the visible text carries usable content.
-   * This method only decides and rewrites: the retry itself belongs to the host's provider policy.
+   * finish is not `stop`, a tool call was observed, or the visible text is a substantive answer.
+   * This method only decides and rewrites; scoped recovery runs at the host's request-error boundary.
    * @param reason - the finish reason the adapter is about to yield.
    * @returns a retryable `error` reason, or the given reason untouched.
    */
   resolve(reason: FinishReason): FinishReason {
-    if (!this.#enabled || !isMarkupOnlyStop(reason, { sawToolCall: this.#sawToolCall, text: this.#text() })) {
+    const text = this.#text();
+    const markupOnly = isMarkupOnlyStop(reason, { sawToolCall: this.#sawToolCall, text });
+    const pendingAction = reason.kind === 'stop' && !this.#sawToolCall && isPendingActionTurn(text);
+    if (!this.#enabled || (!markupOnly && !pendingAction)) {
       return reason;
     }
     this.#notify();
-    return { kind: 'error', failure: { code: EMPTY_RESPONSE_CODE, message: EMPTY_TURN_MESSAGE } };
+    return { kind: 'error', failure: { code: OPENDESIGN_EOT, message: pendingAction ? INCOMPLETE_TURN_MESSAGE : EMPTY_TURN_MESSAGE } };
   }
 
   /** Report one rewrite to the telemetry hook; monitoring must never break the stream. */

@@ -9,8 +9,10 @@ import { chatMessages, chatTools, estimateTokens } from './conversion.js';
 import { gatewayError } from './stream.js';
 import { combinedSignal } from './util.js';
 import { EmptyTurnTracker } from './empty-turn.js';
+import { OPENDESIGN_EOT } from './eot-code.js';
 import { applyModelSettings, isModelEnabled, type ModelSettings } from './model-settings.js';
 import { protocolFor } from './protocols/index.js';
+import { PrematureEndError } from './protocols/errors.js';
 import type { ApiProtocol } from './protocol-options.js';
 import { modelReasoningEfforts } from './reasoning.js';
 
@@ -165,9 +167,15 @@ export class CoRouterAdapter extends LlmAdapter {
       }
       throw gatewayError(response.status, error);
     }
-    if (!response.body) throw new LlmError('CoRouter 返回空响应', 'EMPTY_RESPONSE');
     const monitor = row.group === 'plan' && row.id === 'deepseek-v4.1-flash' && config.emptyTurnGuard && Boolean(options.tools?.length);
-    const tracker = new EmptyTurnTracker({ enabled: monitor, onEmptyTurn: () => this.options.onEmptyTurn?.() });
+    const reportEmptyTurn = () => {
+      try { this.options.onEmptyTurn?.(); } catch { /* Diagnostic callbacks must not change the request outcome. */ }
+    };
+    if (!response.body) {
+      if (monitor) reportEmptyTurn();
+      throw new LlmError('CoRouter 返回空响应', monitor ? OPENDESIGN_EOT : 'EMPTY_RESPONSE');
+    }
+    const tracker = new EmptyTurnTracker({ enabled: monitor, onEmptyTurn: reportEmptyTurn });
     try {
       for await (const chunk of protocol.stream(response.body, signal, config.streamIdleTimeoutMs)) {
         tracker.observe(chunk);
@@ -177,6 +185,11 @@ export class CoRouterAdapter extends LlmAdapter {
     } catch (error) {
       if (options.signal?.aborted || this.#lifetime.signal.aborted) signal.throwIfAborted();
       if (signal.aborted) throw new LlmError('CoRouter 请求超过总超时', 'TIMEOUT');
+      if (monitor && !tracker.sawToolCall && error instanceof PrematureEndError) throw new LlmError(error.message, 'TRANSPORT');
+      if (monitor && !tracker.sawToolCall && error instanceof LlmError && error.code === 'EMPTY_RESPONSE') {
+        reportEmptyTurn();
+        throw new LlmError(error.message, OPENDESIGN_EOT);
+      }
       if (error instanceof LlmError) throw error;
       throw new LlmError('CoRouter 响应流连接中断', 'SERVER');
     }

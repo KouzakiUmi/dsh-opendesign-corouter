@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-settings';
 import type {} from '@deepseek-ai/cordis-plugin-loader';
 import { LlmError } from '@deepseek-ai/dsh-llm';
 import { CoRouterAdapter } from './adapter.js';
+import { installEotRecovery } from './eot-recovery.js';
 import { fetchModelCatalog, ModelDiscoveryError } from './model-discovery.js';
 import { fetchPricingSnapshot } from './pricing.js';
 import { isModelEnabled } from './model-settings.js';
@@ -392,6 +393,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 export function apply(ctx: Context, config: LiveConfig): void {
   const current = () => readConfig(config);
   current();
+  installEotRecovery(ctx, () => current().emptyTurnGuard);
   ctx.inject(['settings'], scope => scope.effect(() => scope.settings.configure({ auto: false }, ctx.fiber)));
   let modelsChanged = () => {};
   const service = new OpenDesignCoRouterService(ctx, current, { resolveSession, readQuota, readDesktopQuota, modelsChanged: () => modelsChanged() });

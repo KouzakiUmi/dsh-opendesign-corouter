@@ -487,8 +487,10 @@ test('advanced offers three protocols, a read-only gateway and real timeout fiel
   for (const label of ['请求总超时（毫秒）', '流式空闲超时（毫秒）', '额度自动刷新间隔（秒）']) {
     assert.match(html, new RegExp(`<label for="[^"]+">${label}</label>`));
   }
-  assert.match(html, /启用空轮监控/u);
-  assert.match(html, /已检测到 2 次空回答/u);
+  assert.match(html, /启用异常结束监控/u);
+  assert.match(html, /已检测到 2 次异常回答/u);
+  assert.match(html, /持续重试，直到成功或取消/u);
+  assert.match(html, /可能额外消耗额度/u);
   assert.match(html, /type="checkbox" checked=""/u);
 });
 
@@ -523,6 +525,6 @@ test('an unconfigured form snapshot keeps the guard on its host value', () => {
     { status: 'loading', writable: false, value: undefined },
   );
   assert.doesNotMatch(html, /type="checkbox" checked=""/u);
-  assert.match(html, /已检测到 2 次空回答/u);
+  assert.match(html, /已检测到 2 次异常回答/u);
 });
 

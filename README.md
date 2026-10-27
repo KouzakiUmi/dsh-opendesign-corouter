@@ -32,7 +32,7 @@ dsh plugin --profile web add dsh-opendesign-corouter
 也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
-dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.10.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.11.tgz
 ```
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。
@@ -81,11 +81,11 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.10.tg
   <img src="docs/previews/theme-light.png" width="1040" alt="连接与登录页，展示桌面优先开关、独立登录按钮和不回填的 API Key 输入框；模拟数据">
 </picture>
 
-### DeepSeek V4.1 Flash 空回答检测
+### DeepSeek V4.1 Flash 异常结束检测
 
-独立开关，默认开启。参考 [dsh-empty-turn-guard](https://github.com/FYTXY/dsh-empty-turn-guard)，将“正常 stop、没有工具调用、答案为空或只剩协议残渣”的工具对话标成 `EMPTY_RESPONSE`。
+独立开关，默认开启。参考 [dsh-empty-turn-guard](https://github.com/FYTXY/dsh-empty-turn-guard)，在工具对话中将“stop 且没有工具调用、回答为空或只剩协议残渣”以及短操作前言、简短进度后说明下一步但没有工具调用的情况标成异常 EOT。文字识别属于启发式判断，可能漏检或误判。
 
-检测到空回答后，由 DSH 的重试策略决定是否重试，**重复请求可能额外消耗额度**。该附加监控仅用于 DeepSeek V4.1 Flash 的工具对话，识别 DSML、thinking 及 `<rea:tool_calls>` 残留。
+检测到异常 EOT 后，在同一 Agent 步骤内持续重试，直到成功或取消，**没有次数上限，重复请求可能额外消耗额度**。其他错误仍遵循 DSH 的原有重试策略。附加监控仅用于 DeepSeek V4.1 Flash 的工具对话；未收到流终态且工具调用尚未开始时，按可重试的传输中断处理。
 
 ## 使用前先知道
 
