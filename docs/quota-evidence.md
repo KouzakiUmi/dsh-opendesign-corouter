@@ -61,7 +61,7 @@ POST https://amr-api.open-design.ai/api/v1/cli/device-authorizations/<deviceId>/
 - 真实轮询在等待确认时返回 `status: pending`，并将 `controlKey`、`runtimeKey` 和 `user` 设为 `null`。这种空令牌快照继续等待，不触发窗口清理；半套令牌、失败状态及未知状态仍拒绝。
 - 每次 HTTP 请求最多 20 秒、响应最多 64 KiB，禁止自动重定向。轮询不早于服务端间隔；等待上限取服务端到期与本地五分钟中较早者。
 - 登录起点捕获 revision，提交前检查记录 / 配置冲突与 AbortSignal。取消、超时和卸载中止轮询并关闭插件打开的临时窗口，不关闭用户自己的浏览器。
-- 持久化成功是提交边界；写入后不谎称取消能撤回。设备码有效期不套用为令牌失效期，不推断永久有效或 refresh-token 能力。
+- 持久化成功是提交边界；之后到达的取消请求保留已保存的授权。设备码有效期不套用为令牌失效期，不推断永久有效或 refresh-token 能力。
 - 旧版 Cookie grant 继续按原有效期读取，仅供兼容；新登录不再产生 Cookie grant。
 
 ## 设备令牌额度通道

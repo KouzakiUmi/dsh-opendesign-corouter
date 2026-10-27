@@ -32,7 +32,7 @@ dsh plugin --profile web add dsh-opendesign-corouter
 也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
-dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.6.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.7.tgz
 ```
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。
@@ -48,16 +48,16 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.6.tgz
 
 ## 功能预览
 
-### 两个 Provider，逐模型配置
+### 模型分组与默认参数
 
 | Provider | 模型数 | 用途 |
 | --- | ---: | --- |
 | `opendesign-corouter-plan` | 13 | Core / Design Plan 附赠通道，含预检确认覆盖的 MiniMax M3.1 Flash |
 | `opendesign-corouter-paid` | 25 | Plan 套餐模型及其他钱包付费模型 |
 
-上表为内置目录。模型页可从 OpenAI `/models` 端口刷新，逐个启用或停用模型，并配置温度、top-p、默认输出上限、上下文预算及思考深度。停用同时影响模型选择器和直接调用；参数会保存并应用到实际请求。媒体生成接口不在对话目录中，未知能力不按名称猜测。
+上表为内置目录。模型页可通过当前配置网关的 OpenAI 兼容 `/models` 接口刷新目录，逐个启用或停用模型，并配置温度、top-p、默认输出上限、上下文预算及思考深度。停用同时影响模型选择器和直接调用；参数会保存并应用到实际请求。媒体生成接口不在对话目录中，未知能力不按名称猜测。
 
-推理协议可选 **OpenAI Chat Completions、OpenAI Responses、Anthropic Messages**。模型发现始终使用 OpenAI 端口，不随推理协议切换。
+推理协议可选 **OpenAI Chat Completions、OpenAI Responses、Anthropic Messages**。模型发现始终使用当前网关的 OpenAI 兼容 `/models` 接口，不随推理协议切换。
 
 > **分组不等于计费隔离。** 赠送额度耗尽后是否转扣套餐余额或钱包，由服务端和账号权益决定。选择“套餐赠送”不能保证绝不消耗钱包余额。
 
@@ -72,7 +72,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.6.tgz
 
 ### 桌面优先，也能独立登录
 
-独立登录采用设备授权，官方授权页可交给插件自己启动的临时 Chrome 窗口显示（不读取或改动你已有的浏览器配置），也可复制链接到你自己的浏览器沿用已有登录态、密码管理器和自动填充。确认后设备令牌保存到 DSH 凭据服务；取消、超时和卸载停止轮询并关闭临时窗口，不关闭你自己的浏览器，也不修改桌面配置。
+点击“开始设备授权”后，插件在临时 Chrome 窗口打开官方授权页。也可用“复制授权链接”在常用浏览器完成确认；复制不可用时会显示可选取的链接。确认后自动保存授权，取消或到期时结束等待并关闭临时窗口。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/previews/theme-dark.png">
@@ -83,13 +83,13 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.6.tgz
 
 独立开关，默认开启。参考 [dsh-empty-turn-guard](https://github.com/FYTXY/dsh-empty-turn-guard)，将“正常 stop、没有工具调用、答案为空或只剩协议残渣”的工具对话标成 `EMPTY_RESPONSE`。
 
-监控不注入提示、不修改正文、不重放工具、不自动重启；实际重试交给宿主策略，**可能额外消耗额度**。付费 Provider 和无工具后台请求不启用这项附加监控。
+检测到空回答后，由 DSH 的重试策略决定是否重试，**重复请求可能额外消耗额度**。该监控仅用于套餐赠送模型的工具对话。
 
 ## 使用前先知道
 
-- **数字不是账单**：部分读取接口属于桌面 / 控制台私有协议，可能随上游变化。
-- **凭据不是加密承诺**：插件使用 DSH 凭据服务，不把 Key / Cookie 放进普通设置或回填网页；落盘保护仍取决于宿主凭据实现和本机权限。
-- **验证有范围**：已做类型检查、隔离 Loader 装载 / 卸载 / 重载、离线界面与主题检查；尚未完成本插件的真实账号登录、推理及生产 Profile 联调。
+- **额度数据**：来自官方服务及桌面端，部分接口可能随上游变化；实际扣款以控制台和账单为准。
+- **凭据存储**：API Key 和设备授权由 DSH 凭据服务保存，落盘保护取决于宿主与本机权限，详见[安全说明](SECURITY.md)。
+- **验证状态**：已完成真实设备授权、模型目录读取和逐模型计费预检，以及类型、隔离加载、离线界面与主题检查。真实推理和已安装 Profile 的完整联调仍待验证。
 
 ## 兼容性
 
@@ -98,10 +98,10 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.6.tgz
 | 目标 DSH Core | `0.2.1-rc.3`，以官方同版本发布包验证 |
 | Core 声明范围 | `>=0.2.1-rc.3 <0.3.0-0`，范围内其他版本不代表已实测 |
 | Node.js | `>=24.9.0` |
-| 独立登录 | 能访问官方授权页的常用浏览器；无需浏览器自动化或扩展 |
+| 独立登录 | 自动打开需本机 Chrome；也可复制链接到常用浏览器确认 |
 | 默认推理接口 | `https://amr-link.open-design.ai/v1/chat/completions` |
 
-CI 在 Windows 与 Ubuntu 执行构建、类型检查及隔离测试；Ubuntu 另执行四页签浏览器和亮暗主题检查。通过 CI 不等于已安装或已通过真实账号验收。[开发与验证范围](docs/development.md)
+CI 在 Windows 与 Ubuntu 执行构建、类型检查及隔离测试；Ubuntu 另执行四页签浏览器和亮暗主题检查。[开发与验证范围](docs/development.md)
 
 ## 开发与构建
 

@@ -8,7 +8,7 @@
  *   `data-model-module="design-plan"` 12 款归 `plan`；其余在售对话模型归 `paid`。
  * - `plan` 12 款的 contextWindow / maxOutputTokens / inputModalities / reasoningEfforts
  *   来自 Go 侧 `dsh-opendesign-go` 0.1.9 的 MODEL_DEFAULTS（同一 `amr-link` endpoint 部署资料），
- *   由父会话移植，**未经官网独立复核**；只用于 plan 通道。
+ *   作为部署参考，尚无官网能力数值的独立佐证；只用于对应的原有 12 款模型。
  * - 客户端桌面安装（Open Design 0.26.1）不内联 CoRouter 目录；其
  *   `vela model preset --format json` 只有 11 个旧预设 id（见 docs/client-evidence.md），
  *   与本表不同代，故不用于本目录。
@@ -27,7 +27,7 @@
  *   走 `/api/v1/media/*`，不应出现在对话模型列表里，避免选中后 chat 请求必败。
  *
  * `paid` 25 款及新增 M3.1 Flash 的能力字段一律缺省：没有可核实的能力数值，
- * 不按名称推断图像能力，也不给未知项填 `['text']` 谎称不支持图像。
+ * 未知模态保持缺省；`['text']` 仅表示已确认的纯文本输入。
  */
 export interface CatalogModel {
   id: string;

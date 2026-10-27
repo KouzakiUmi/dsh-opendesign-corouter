@@ -98,6 +98,24 @@ test('status round-trips, and nothing outside the allowlist survives', () => {
   assert.equal(JSON.stringify(sanitized).includes('secret=1'), false);
 });
 
+test('credential source is an optional credential-free enum and preserves legacy status payloads', () => {
+  for (const apiKeySource of ['reference', 'stored', 'device'] as const) {
+    const parsed = through('status', { ...status, apiKeySource }) as Status;
+    assert.equal(parsed.apiKeySource, apiKeySource);
+    assert.equal('apiKey' in parsed, false);
+  }
+  assert.equal(parseStatus(status).apiKeySource, undefined);
+  assert.throws(() => parseStatus({ ...status, apiKeyConfigured: false, apiKeySource: 'stored' }), /推理凭据来源/u);
+  assert.throws(() => parseStatus({ ...status, apiKeySource: 'secret-token-value' }), /推理凭据来源/u);
+});
+
+test('remote configuration lower bounds agree with accepted Host settings', () => {
+  for (const [field, min] of [['requestTimeoutMs', 1000], ['streamIdleTimeoutMs', 1000], ['quotaRefreshSeconds', 5]] as const) {
+    assert.throws(() => parseStatus({ ...status, config: { ...status.config, [field]: min - 1 } }), /超出范围/u);
+    assert.equal(parseStatus({ ...status, config: { ...status.config, [field]: min } }).config[field], min);
+  }
+});
+
 test('status rejects a malformed payload instead of repairing it', () => {
   assert.throws(() => parseStatus({ ...status, revision: '' }), /配置版本/u);
   assert.throws(() => parseStatus({ ...status, revision: 'x'.repeat(257) }), /配置版本/u);

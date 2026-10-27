@@ -31,10 +31,11 @@ export const inject = ['llm'];
 const API_KEY = credentialKey(name, 'api-key');
 const SESSION = credentialKey(name, 'console');
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value) ?? '').digest('hex');
-const needLogin = (): QuotaSnapshot => ({ state: 'need-login', updatedAt: new Date().toISOString(), windows: [], balances: {}, note: '尚未读取额度；可使用桌面登录态或在连接页登录' });
+const needLogin = (): QuotaSnapshot => ({ state: 'need-login', updatedAt: new Date().toISOString(), windows: [], balances: {}, note: '请在连接与登录页完成账号授权后读取额度。' });
+const unreadQuota = (): QuotaSnapshot => ({ state: 'partial', updatedAt: new Date().toISOString(), windows: [], balances: {}, note: '额度尚未读取，请刷新额度。' });
 interface CapturedState {
   apiRecord: CredentialRecord | undefined; sessionRecord: CredentialRecord | undefined;
-  key: string | undefined; config: ReturnType<typeof readConfig>;
+  key: string | undefined; keySource: Status['apiKeySource']; config: ReturnType<typeof readConfig>;
 }
 interface LoginCapture { revision: string; sessionHash: string; configHash: string }
 export interface HostDependencies {
@@ -59,7 +60,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   private readonly _lifetime = new AbortController();
   private _revision = randomUUID();
   private _fingerprint = '';
-  private _quota = needLogin();
+  private _quota = unreadQuota();
   private _quotaAt = 0;
   private _quotaConfig = '';
   private _quotaIdentity: string | undefined;
@@ -115,18 +116,18 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     if (!service) throw new RemoteError('opendesign/credentials-unavailable', 'DSH 凭据服务不可用；可先使用启动环境变量', undefined);
     return service;
   }
-  private async _key(ref: string, baseURL: string, apiRecord: CredentialRecord | undefined, sessionRecord: CredentialRecord | undefined): Promise<string | undefined> {
+  private async _key(ref: string, baseURL: string, apiRecord: CredentialRecord | undefined, sessionRecord: CredentialRecord | undefined): Promise<{ key: string; source: NonNullable<Status['apiKeySource']> } | undefined> {
     const credentials = this.ctx.get('credentials');
     const ambient = credentials ? (await credentials.resolve(credentialRef(ref)))?.value : launchEnvironmentOf(this.ctx).get(ref)?.value;
-    if (ambient?.trim()) return ambient;
-    if (apiRecord?.kind === 'api-key' && apiRecord.key?.trim()) return apiRecord.key;
+    if (ambient?.trim()) return { key: ambient, source: 'reference' };
+    if (apiRecord?.kind === 'api-key' && apiRecord.key?.trim()) return { key: apiRecord.key, source: 'stored' };
     const grant = grantOf(sessionRecord);
-    return isOfficialRuntimeUrl(baseURL) && grant && 'kind' in grant && grant.kind === 'device' ? grant.runtimeKey : undefined;
+    return isOfficialRuntimeUrl(baseURL) && grant && 'kind' in grant && grant.kind === 'device' ? { key: grant.runtimeKey, source: 'device' } : undefined;
   }
   async resolveApiKey(ref: string, baseURL = this._config().baseURL): Promise<string | undefined> {
     const credentials = this.ctx.get('credentials');
     const [apiRecord, sessionRecord] = await Promise.all([credentials?.readRecord(API_KEY), credentials?.readRecord(SESSION)]);
-    return this._key(ref, baseURL, apiRecord, sessionRecord);
+    return (await this._key(ref, baseURL, apiRecord, sessionRecord))?.key;
   }
   private _invalidateModels(): void {
     const changed = this._modelsUpdatedAt !== undefined;
@@ -144,8 +145,9 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   private async _state(): Promise<CapturedState> {
     const credentials = this.ctx.get('credentials'), config = this._config();
     const [apiRecord, sessionRecord] = await Promise.all([credentials?.readRecord(API_KEY), credentials?.readRecord(SESSION)]);
-    const key = await this._key(config.apiKeyEnv, config.baseURL, apiRecord, sessionRecord);
-    const state = { apiRecord, sessionRecord, key, config };
+    const resolved = await this._key(config.apiKeyEnv, config.baseURL, apiRecord, sessionRecord);
+    const key = resolved?.key;
+    const state = { apiRecord, sessionRecord, key, keySource: resolved?.source, config };
     const modelsFingerprint = hash({ key, baseURL: config.baseURL });
     if (modelsFingerprint !== this._modelsFingerprint) {
       this._modelsFingerprint = modelsFingerprint;
@@ -157,14 +159,16 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   }
   private _conflict() { return new RemoteError('opendesign/revision-conflict', '连接或凭据已改变，请刷新页面后重试', undefined); }
   private _expect(revision: string) { if (revision !== this._revision) throw this._conflict(); }
-  private _invalidateQuota(): void { this._quotaAt = 0; this._quotaEpoch++; this._quota = needLogin(); this._quotaIdentity = undefined; this._quotaController?.abort(); this._quotaPending = undefined; }
+  private _invalidateQuota(): void { this._quotaAt = 0; this._quotaEpoch++; this._quota = unreadQuota(); this._quotaIdentity = undefined; this._quotaController?.abort(); this._quotaPending = undefined; }
   @Remote('status')
   async status(): Promise<Status> {
     const state = await this._state();
     const quotaConfig = hash({ desktop: state.config.useDesktopCredential, session: state.sessionRecord, refreshSeconds: state.config.quotaRefreshSeconds });
     if (this._quotaConfig !== quotaConfig) { this._quotaConfig = quotaConfig; this._invalidateQuota(); }
     return parseStatus({
-      revision: this._revision, apiKeyConfigured: Boolean(state.key?.trim()), ...(this._quota.source ? { sessionSource: this._quota.source } : {}),
+      revision: this._revision, apiKeyConfigured: Boolean(state.key?.trim()),
+      ...(state.keySource ? { apiKeySource: state.keySource } : {}),
+      ...(this._quota.source ? { sessionSource: this._quota.source } : {}),
       quota: this._quota, login: this._login.status(), config: state.config, guardedTurns: this.guardedTurns,
       models: this._models.map(({ id, name, group, contextWindow, maxOutputTokens, reasoningEfforts }) => ({
         id, name, group, enabled: isModelEnabled(id, state.config.modelSettings),
@@ -183,7 +187,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     if (this._modelsPending) return this._modelsPending;
     const key = state.key;
     if (!key?.trim()) {
-      this._modelsError = '请先配置 API Key，再从 OpenAI 端口拉取模型。';
+      this._modelsError = '请先配置 API Key，再从当前网关读取模型目录。';
       return this.status();
     }
     const epoch = this._modelsEpoch;
@@ -195,10 +199,17 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
         const models = await (this.dependencies.fetchModels ?? fetchModelCatalog)(state.config.baseURL, key, signal);
         await this._state();
         if (signal.aborted || epoch !== this._modelsEpoch) return this.status();
+        const previousModels = this._models;
+        const previousUpdatedAt = this._modelsUpdatedAt;
         this._models = models;
         this._modelsUpdatedAt = new Date().toISOString();
         this._modelsError = undefined;
-        this.dependencies.modelsChanged?.();
+        try { this.dependencies.modelsChanged?.(); }
+        catch {
+          this._models = previousModels;
+          this._modelsUpdatedAt = previousUpdatedAt;
+          this._modelsError = '模型目录已读取，但模型选择器更新失败，请重试。';
+        }
       } catch (error) {
         if (!signal.aborted && epoch === this._modelsEpoch) this._modelsError = error instanceof ModelDiscoveryError ? error.message : '模型列表更新失败，请稍后重试。';
       }

@@ -1,7 +1,7 @@
 // Tests for src/catalog.ts.
 // 目录事实来自公开页面（https://corouter.open-design.ai/zh/ 套餐卡 + /zh/models/<slug>/ data-model JSON，2026-10-26）；
 // plan 12 款的能力字段来自 Go dsh-opendesign-go 0.1.9 的 MODEL_DEFAULTS（同 amr-link endpoint 部署资料），
-// 由父会话移植、未经官网独立复核。未使用任何凭据或真实鉴权请求。
+// 能力数值属于部署参考，尚无官网独立佐证；本文件测试固定目录及其元数据。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MODELS, findModel, modelsFor } from '../src/catalog.js';
@@ -119,7 +119,7 @@ test('plan 12 款能力与 Go 0.1.9 MODEL_DEFAULTS 逐项一致', () => {
   }
 });
 
-test('付费组及新附赠 M3.1 Flash 不编造能力：未知字段保持缺省', () => {
+test('付费组及新附赠 M3.1 Flash 的未知能力字段保持缺省', () => {
   const minimax = findModel('minimax-m3.1-flash');
   assert.ok(minimax);
   assert.equal(minimax.group, 'plan');

@@ -1,5 +1,5 @@
-// Independent device authorization. The user follows an official link in their ordinary
-// browser/profile; this module never starts, controls, reads or closes that browser.
+// Device authorization state machine: bounded polling, cancellation and atomic token commit.
+// Approval-window ownership is managed separately by the Host's activation launcher.
 import { randomUUID } from 'node:crypto';
 import { sleep } from './util.js';
 import {

@@ -48,4 +48,4 @@ Authorization: Bearer <工作空间 API Key>
 
 其余模型缺少可核实的能力字段时保持未知，不用模型名称猜图像支持，也不臆造思考档位。目录与元数据由 [目录测试](../test/catalog.test.ts) 约束。
 
-当前适配器支持 Chat Completions、Responses 和 Anthropic Messages，模型发现固定使用 OpenAI `/models`。协议与取消行为有离线合成流回归覆盖；Responses 的完整工具参数会补齐已发送增量，矛盾终项按无效响应处理。未实现媒体生成接口。已使用真实设备授权的运行时令牌验证模型目录读取；尚未进行真实推理调用验收。
+当前适配器支持 Chat Completions、Responses 和 Anthropic Messages，模型发现固定使用当前网关的 OpenAI 兼容 `/models` 接口。协议与取消行为有离线合成流回归覆盖；Responses 的完整工具参数会补齐已发送增量，矛盾终项按无效响应处理。未实现媒体生成接口。已使用真实设备授权的运行时令牌验证模型目录读取；尚未进行真实推理调用验收。

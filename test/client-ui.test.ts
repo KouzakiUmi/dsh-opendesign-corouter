@@ -37,18 +37,18 @@ test('device approval offers a Host window button and keeps the official link as
   assert.match(html, /href="https:\/\/open-design\.ai\/cloud\/cli\/activate\?code=AB12-CD34"/);
   assert.match(html, /target="_blank"/);
   assert.match(html, /rel="noreferrer noopener"/);
-  assert.match(html, /复制链接手动打开/);
+  assert.match(html, /<button[^>]*>复制授权链接<\/button>/u);
+  assert.match(html, />官方授权页<\/a>/u);
   assert.match(html, /AB12-CD34/);
-  // The temporary window never reads the user's browser profile, and the panel says so.
-  assert.match(html, /独立的临时 Chrome/);
-  assert.match(html, /不会读取或改动你正在使用的浏览器配置/);
+  assert.match(html, /临时 Chrome 窗口需要单独登录/u);
+  assert.match(html, /常用浏览器/u);
 
   const opening = renderToStaticMarkup(h(LoginApproval, { login, onOpen: () => {}, opening: true }));
   assert.match(opening, /正在打开…/);
   assert.match(opening, /<button[^>]*disabled[^>]*>正在打开…/);
   const hostless = renderToStaticMarkup(h(LoginApproval, { login }));
   assert.match(hostless, /<button[^>]*disabled[^>]*>在新窗口打开授权页/, 'a Host without the opener cannot promise it');
-  assert.equal(hostless.includes('复制链接手动打开'), true, 'the manual link never depends on the Host');
+  assert.equal(hostless.includes('复制授权链接'), true, 'the manual link never depends on the Host');
 
   for (const code of ['no-link', 'invalid-url', 'unavailable', 'failed'] as const) {
     const noticed = renderToStaticMarkup(h(LoginApproval, { login, onOpen: () => {}, notice: { kind: 'error', text: code } }));
@@ -162,6 +162,14 @@ function renderAdvanced(nextStatus: Status = status, nextSnapshot: FormSnapshot 
   }));
 }
 
+test('model discovery wording names the configured gateway, not OpenAI as the provider', () => {
+  const html = renderModels({ ...status, modelsSource: 'openai', modelsUpdatedAt: '2030-01-01T00:00:00.000Z' });
+  assert.match(html, />刷新模型目录<\/button>/u);
+  assert.match(html, /title="从当前配置的网关读取可用模型目录"/u);
+  assert.match(html, /来源：当前网关/u);
+  assert.doesNotMatch(html, /从 OpenAI 刷新模型|OpenAI \/models 发现/u);
+});
+
 test('settings renders four accessible tabs and one associated tabpanel', () => {
   const html = renderOverview();
   assert.equal((html.match(/role="tab"/g) ?? []).length, 4);
@@ -178,7 +186,7 @@ test('unknown quota stays unknown and never becomes zero', () => {
   assert.ok((html.match(/>—</g) ?? []).length >= 6);
   assert.doesNotMatch(html, /\$0\.00/u);
   assert.match(html, /桌面权限不足时/);
-  assert.match(html, /只读展示/);
+  assert.match(html, /— 表示暂无数据/u);
   // The Host's next cache read is described as a read, never as quota recovery.
 });
 
@@ -214,6 +222,30 @@ test('subscription end, window resets and the auto refresh are separate timestam
   assert.match(timed, /按使用触发/u);
   assert.doesNotMatch(timed, /每 60 秒.*恢复/u);
   assert.equal(formatUsd(80), new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(80));
+});
+
+test('quota windows separate remaining, usage, recovery and optional technical details', () => {
+  const html = renderToStaticMarkup(h(QuotaView, { quota: {
+    ...quota, source: 'login', windows: [
+      { durationSeconds: 18000, used: 120, limit: 500, remaining: 380, percent: 24, resetsAt: '2030-01-01T00:00:00.000Z', windowStart: '2026-10-22T00:00:00.000Z', resetMode: 'activity_triggered' },
+      { durationSeconds: 604800, used: 500, limit: 500, percent: 100 },
+    ],
+  } }));
+  assert.match(html, /<section class="odc-window"[^>]*aria-label="5 小时赠送窗口"/u);
+  assert.match(html, /<strong>76\.0%<\/strong>/u);
+  assert.match(html, /<progress[^>]*value="76"[^>]*aria-label="5 小时赠送窗口剩余额度"/u);
+  assert.match(html, /<progress[^>]*value="0"/u);
+  assert.equal((html.match(/class="odc-window-usage"/gu) ?? []).length, 2);
+  assert.match(html, /<dt>已用<\/dt><dd>120<\/dd>/u);
+  assert.match(html, /<dt>上限<\/dt><dd>500<\/dd>/u);
+  assert.match(html, /<dt>剩余<\/dt><dd>380<\/dd>/u);
+  assert.match(html, /<dt>剩余<\/dt><dd>—<\/dd>/u, 'a missing remaining amount is not derived');
+  assert.match(html, /class="odc-window-reset"/u);
+  assert.match(html, /<time dateTime="2030-01-01T00:00:00.000Z"/u);
+  assert.match(html, /<details class="odc-window-details"><summary>窗口详情<\/summary>/u);
+  assert.doesNotMatch(html, /<details[^>]* open/u);
+  assert.match(html, /<dt>最近更新<\/dt>/u);
+  assert.match(html, /<dt>数据来源<\/dt><dd>独立登录<\/dd>/u);
 });
 
 test('an account without Design Plan says so instead of showing a bare dash', () => {
@@ -342,7 +374,7 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
   assert.match(html, /GPT-6 Astra/u);
   assert.match(html, /已禁用/u);
   assert.match(html, /1 \/ 2 已启用/u);
-  assert.match(html, /OpenAI \/models 发现/u);
+  assert.match(html, /来源：当前网关/u);
   assert.match(html, new RegExp(formatTime('2026-10-26T09:30:00.000Z')));
   assert.match(html, /模型发现响应不符合 OpenAI 模型列表格式/u);
   assert.match(html, /role="alert"/u);
@@ -401,7 +433,7 @@ test('advanced offers three protocols, a read-only gateway and real timeout fiel
     assert.match(html, new RegExp(`<label for="[^"]+">${label}</label>`));
   }
   assert.match(html, /启用空轮监控/u);
-  assert.match(html, /本次运行已拦截 2 轮/u);
+  assert.match(html, /已检测到 2 次空回答/u);
   assert.match(html, /type="checkbox" checked=""/u);
 });
 
@@ -416,10 +448,11 @@ test('unavailable writable forms cannot expose editable controls', () => {
 test('all concurrently pending fields stay disabled', () => {
   const html = renderToStaticMarkup(h(Advanced, {
     status, formSnapshot: snapshot, setFormField: async () => true,
-    pendingField: ['emptyTurnGuard', 'apiProtocol'],
+    pendingField: ['emptyTurnGuard', 'apiProtocol', 'apiKeyEnv'],
   }));
   assert.match(html, /type="checkbox" disabled=""/u);
   assert.match(html, /<select[^>]*id="odc-api-protocol"[^>]*disabled=""/u);
+  assert.match(html, /<input[^>]*id="odc-api-key-env"[^>]*disabled=""/u);
 });
 
 test('advanced shows the selected protocol path from the form snapshot', () => {
@@ -435,6 +468,6 @@ test('an unconfigured form snapshot keeps the guard on its host value', () => {
     { status: 'loading', writable: false, value: undefined },
   );
   assert.doesNotMatch(html, /type="checkbox" checked=""/u);
-  assert.match(html, /本次运行已拦截 2 轮/u);
+  assert.match(html, /已检测到 2 次空回答/u);
 });
 

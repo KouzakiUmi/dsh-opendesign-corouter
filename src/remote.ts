@@ -76,6 +76,7 @@ export interface Status {
   /** Opaque Host revision of the credential record; passed back on every write. */
   revision: string;
   apiKeyConfigured: boolean;
+  apiKeySource?: 'reference' | 'stored' | 'device';
   sessionSource?: SessionSource;
   quota: QuotaSnapshot;
   login: LoginState;
@@ -140,9 +141,9 @@ function amount(value: unknown, label: string, negative = false): number {
   return value;
 }
 
-function positiveInteger(value: unknown, label: string, max: number): number {
+function positiveInteger(value: unknown, label: string, max: number, min = 1): number {
   const result = count(value, label);
-  if (result === 0 || result > max) throw new Error(`${label} 超出范围`);
+  if (result < min || result > max) throw new Error(`${label} 超出范围`);
   return result;
 }
 function parseEfforts(value: unknown): string[] {
@@ -252,9 +253,9 @@ function parseStatusConfig(value: unknown): StatusConfig {
     apiKeyEnv,
     ...(value.apiProtocol === undefined ? {} : { apiProtocol: member(value.apiProtocol, API_PROTOCOL_IDS, '推理协议') }),
     ...(value.modelSettings === undefined ? {} : { modelSettings: parseModelSettingsMap(value.modelSettings) }),
-    ...(value.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: positiveInteger(value.requestTimeoutMs, '请求超时', 3_600_000) }),
-    ...(value.streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs: positiveInteger(value.streamIdleTimeoutMs, '流空闲超时', 1_800_000) }),
-    ...(value.quotaRefreshSeconds === undefined ? {} : { quotaRefreshSeconds: positiveInteger(value.quotaRefreshSeconds, '自动刷新间隔', 3600) }),
+    ...(value.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: positiveInteger(value.requestTimeoutMs, '请求超时', 3_600_000, 1000) }),
+    ...(value.streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs: positiveInteger(value.streamIdleTimeoutMs, '流空闲超时', 1_800_000, 1000) }),
+    ...(value.quotaRefreshSeconds === undefined ? {} : { quotaRefreshSeconds: positiveInteger(value.quotaRefreshSeconds, '自动刷新间隔', 3600, 5) }),
   };
 }
 
@@ -269,9 +270,13 @@ export function parseStatus(value: unknown): Status {
     if (ids.has(model.id)) throw new Error(`模型列表重复了 id "${model.id}"`);
     ids.add(model.id);
   }
+  const apiKeyConfigured = flag(value.apiKeyConfigured, '凭据是否就绪');
+  const apiKeySource = value.apiKeySource === undefined ? undefined : member(value.apiKeySource, ['reference', 'stored', 'device'] as const, '推理凭据来源');
+  if (!apiKeyConfigured && apiKeySource !== undefined) throw new Error('未配置凭据时不能指定推理凭据来源');
   return {
     revision: text(value.revision, '配置版本', MAX_REVISION),
-    apiKeyConfigured: flag(value.apiKeyConfigured, '凭据是否就绪'),
+    apiKeyConfigured,
+    ...(apiKeySource === undefined ? {} : { apiKeySource }),
     ...(value.sessionSource === undefined ? {} : { sessionSource: member(value.sessionSource, SESSION_SOURCES, '登录态来源') }),
     quota: parseQuotaSnapshot(value.quota),
     login: parseLoginState(value.login),

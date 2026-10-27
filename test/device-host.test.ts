@@ -104,6 +104,9 @@ test('Host device login saves one grant, supplies official runtime fallback, and
     const after = await f.service.status();
     assert.notEqual(after.revision, before.revision);
     assert.equal(after.apiKeyConfigured, true);
+    assert.equal(after.apiKeySource, 'device');
+    assert.equal(after.quota.state, 'partial');
+    assert.doesNotMatch(after.quota.note ?? '', /登录/u);
     noSecrets(after); noSecrets(f.service.loginStatus());
     const quota = await f.service.refreshQuotaNow();
     assert.equal(quota.state, 'partial');
@@ -113,7 +116,9 @@ test('Host device login saves one grant, supplies official runtime fallback, and
     await start(f.service);
     await until(() => f.service.loginStatus().state === 'success');
     const invalidated = await f.service.status();
-    assert.equal(invalidated.quota.state, 'need-login');
+    assert.equal(invalidated.quota.state, 'partial');
+    assert.match(invalidated.quota.note ?? '', /额度尚未读取/u);
+    assert.equal(invalidated.apiKeySource, 'device');
     assert.equal(invalidated.modelsSource, 'builtin');
     assert.equal(f.counts().modelChanges, 2);
   } finally { await f.dispose(); }
@@ -129,7 +134,12 @@ test('explicit environment and saved keys beat device; device fallback only reac
     assert.equal(await f.service.resolveApiKey('FIXTURE_DEVICE_KEY', 'https://amr-link.open-design.ai/v1'), tokens.runtimeKey, 'request snapshot, not current setting, owns the origin gate');
     f.store.data.set(API_KEY, { kind: 'api-key', key: 'fixture-manual' });
     assert.equal(await f.service.resolveApiKey('FIXTURE_DEVICE_KEY'), 'fixture-manual');
+    assert.equal((await f.service.status()).apiKeySource, 'stored');
     f.store.ambient = 'fixture-environment';
+    assert.equal(await f.service.resolveApiKey('FIXTURE_DEVICE_KEY'), 'fixture-environment');
+    assert.equal((await f.service.status()).apiKeySource, 'reference');
+    const saved = await f.service.saveApiKey({ value: 'fixture-new-manual', expectedRevision: (await f.service.status()).revision });
+    assert.equal(saved.apiKeySource, 'reference');
     assert.equal(await f.service.resolveApiKey('FIXTURE_DEVICE_KEY'), 'fixture-environment');
     noSecrets(await f.service.status());
   } finally { await f.dispose(); }

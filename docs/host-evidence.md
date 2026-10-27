@@ -20,4 +20,4 @@ UI 通过 configForms 写入 volatile 配置，RPC 可用性由 ctx.inject 生�
 
 [隔离组合测试](../test/plugin.test.ts) 覆盖双 Provider、生成元数据、完整卸载和重载。[Host 测试](../test/host.test.ts) 覆盖服务代理、原子写冲突、桌面认证失效回退和额度节流。离线 Chrome 使用模拟数据，验证页签、零参数调用、Key 保存清空、开关、键盘导航、移动深色布局及资源清理。
 
-这些检查不等于真实 Profile 安装或真实账号验收。当前不执行账号登录、付费推理、生产配置修改或宿主重启。
+已完成独立设备授权、模型目录读取及逐模型计费预检，详见[连接与模型证据](client-evidence.md)和[额度证据](quota-evidence.md)。上述实测在隔离脚本中进行；已安装 Profile 的界面到凭据持久化，以及真实推理尚待验证。

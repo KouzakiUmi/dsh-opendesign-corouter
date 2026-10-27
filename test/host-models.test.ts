@@ -120,6 +120,29 @@ const signalOf = (call: Wire): AbortSignal => {
   return signal;
 };
 
+test('selector update failure preserves the previous catalog and a later refresh can recover', async () => {
+  const calls: Wire[] = [];
+  let id = 'previous-model', rejectNotification = false;
+  const { service, dispose } = await host(runtimeConfig(), hostDependencies(calls, () => list(id), () => {
+    if (rejectNotification) throw new Error('PRIVATE_REGISTRATION_FAILURE');
+  }));
+  try {
+    await saveFixtureKey(service);
+    const previous = await service.refreshModels();
+    id = 'replacement-model'; rejectNotification = true;
+    const failed = await service.refreshModels();
+    assert.deepEqual(failed.models, previous.models);
+    assert.equal(failed.modelsUpdatedAt, previous.modelsUpdatedAt);
+    assert.deepEqual(service.modelCatalog().map(row => row.id), ['previous-model']);
+    assert.match(failed.modelsError ?? '', /模型选择器更新失败/u);
+    assert.doesNotMatch(JSON.stringify(failed), /PRIVATE_REGISTRATION_FAILURE/u);
+    rejectNotification = false;
+    const recovered = await service.refreshModels();
+    assert.deepEqual(recovered.models.map(row => row.id), ['replacement-model']);
+    assert.equal(recovered.modelsError, undefined);
+  } finally { await dispose(); }
+});
+
 test('concurrent refreshes share a single discovery request and a single cache notification', async () => {
   const current = runtimeConfig(), calls: Wire[] = [];
   let notifications = 0;

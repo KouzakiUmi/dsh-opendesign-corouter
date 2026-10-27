@@ -8,7 +8,7 @@
 | OpenAI Responses | `https://amr-link.open-design.ai/v1/responses` |
 | Anthropic Messages | `https://amr-link.open-design.ai/v1/messages` |
 
-**模型发现始终使用 OpenAI `GET /v1/models`。** 推理协议改变时，模型拉取路径与已发现目录不会随之切换。裸网关地址自动补上 `/v1`；明确提供的自定义 API 前缀保留原样。
+**模型发现始终读取当前网关的 OpenAI 兼容 `GET /v1/models` 接口。** 推理协议改变时，模型拉取路径与已发现目录不会随之切换。裸网关地址自动补上 `/v1`；明确提供的自定义 API 前缀保留原样。
 
 ## 协议差异
 

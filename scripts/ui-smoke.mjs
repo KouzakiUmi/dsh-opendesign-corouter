@@ -52,6 +52,10 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     });
     let quota = initialQuota();
     let login = { jobId: null, state: 'idle' };
+    let loginSequence = 0;
+    let apiKeySource = 'device';
+    window.__setKeySource = source => { apiKeySource = source; };
+    window.__failStatusReads = false;
     let config = {
       emptyTurnGuard: true, useDesktopCredential: true, baseURL: 'https://amr-link.open-design.ai/v1', apiKeyEnv: 'COROUTER_API_KEY',
       apiProtocol: 'chat-completions', modelSettings: {}, quotaRefreshSeconds: 60, requestTimeoutMs: 1800000, streamIdleTimeoutMs: 300000,
@@ -75,7 +79,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     const syncConfig = () => { window.__config = config; };
     const status = () => {
       const value = {
-        revision: 'fixture-revision', apiKeyConfigured: true, sessionSource: 'login', quota, login, config, guardedTurns: 2,
+        revision: 'fixture-revision', apiKeyConfigured: true, apiKeySource, sessionSource: 'login', quota, login, config, guardedTurns: 2,
         models: models.map(model => ({ ...model, enabled: config.modelSettings?.[model.id]?.enabled ?? model.enabled ?? true })),
         modelsSource,
         ...(modelsUpdatedAt === undefined ? {} : { modelsUpdatedAt }),
@@ -98,7 +102,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     };
     window.__restoreQuota = () => { quota = initialQuota(); };
     const api = {
-      status: async (...args) => { if (args.length) throw new Error('status requires zero arguments'); return { ok: true, value: status() }; },
+      status: async (...args) => { if (args.length) throw new Error('status requires zero arguments'); if (window.__failStatusReads) throw new Error('fixture-status-unavailable'); return { ok: true, value: status() }; },
       refreshModels: async (...args) => {
         if (args.length) throw new Error('refreshModels requires zero arguments');
         window.__refreshModelsCalls += 1;
@@ -126,13 +130,13 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
         return { ok: true, value: quota };
       },
       startLogin: async () => {
-        login = { jobId: 'fixture-job', state: 'waiting', message: '请在授权窗口确认设备授权',
+        login = { jobId: `fixture-job-${++loginSequence}`, state: 'waiting', message: '请在授权窗口确认设备授权',
           activationUrl: 'https://open-design.ai/cloud/cli/activate?deviceId=fixture-device&userCode=AB12-CD34', userCode: 'AB12-CD34',
           expiresAt: new Date(Date.now() + 300_000).toISOString() };
         return { ok: true, value: login };
       },
       loginStatus: async (...args) => { if (args.length) throw new Error('loginStatus requires zero arguments'); return { ok: true, value: login }; },
-      cancelLogin: async () => { login = { jobId: 'fixture-job', state: 'cancelled' }; return { ok: true, value: login }; },
+      cancelLogin: async () => { login = { jobId: login.jobId, state: 'cancelled' }; return { ok: true, value: login }; },
       openActivationPage: async (...args) => {
         if (args.length) throw new Error('openActivationPage requires zero arguments');
         window.__openActivationCalls += 1;
@@ -140,7 +144,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
         const code = window.__activationCode ?? 'opened';
         return { ok: true, value: { code, opened: code === 'opened' } };
       },
-      saveApiKey: async request => { if (request.value !== 'fixture-api-key') throw new Error('Unexpected fixture key'); return { ok: true, value: status() }; },
+      saveApiKey: async request => { if (request.value !== 'fixture-api-key') throw new Error('Unexpected fixture key'); if (apiKeySource !== 'reference') apiKeySource = 'stored'; return { ok: true, value: status() }; },
     };
     api.refreshQuotaNow = async (...args) => {
       if (args.length) throw new Error('refreshQuotaNow requires zero arguments');
@@ -251,6 +255,18 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     assert.match(await metric.locator('.odc-metric-text').innerText(), /\d{4}\//, `${label} must show a concrete timestamp`);
   }
   await page.getByText('套餐赠送窗口', { exact: true }).waitFor();
+  const firstWindow = page.getByRole('region', { name: '5 小时赠送窗口', exact: true });
+  assert.equal(await firstWindow.locator('.odc-window-remaining strong').innerText(), '76.0%');
+  assert.equal(await firstWindow.getByRole('progressbar').getAttribute('value'), '76');
+  assert.deepEqual(await firstWindow.locator('.odc-window-usage dt').allTextContents(), ['已用', '上限', '剩余']);
+  assert.deepEqual(await firstWindow.locator('.odc-window-usage dd').allTextContents(), ['120', '500', '380']);
+  const windowDetails = firstWindow.locator('details');
+  assert.equal(await windowDetails.getAttribute('open'), null, 'technical window details start collapsed');
+  assert.equal(await windowDetails.getByText('窗口开始', { exact: true }).isVisible(), false);
+  await windowDetails.locator('summary').click();
+  await windowDetails.getByText('按使用触发', { exact: true }).waitFor();
+  await windowDetails.locator('summary').click();
+  assert.equal(await page.getByLabel('额度数据来源与更新时间', { exact: true }).locator('dt').count(), 2);
   await mkdir('docs/previews', { recursive: true });
   await page.screenshot({ path: 'docs/previews/overview.png', fullPage: true });
 
@@ -284,9 +300,9 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   // Models: switches, whole-map persistence, parameters, reset, stale-status ordering and discovery.
   await page.getByRole('tab', { name: '模型', exact: true }).click();
   assert.equal(await page.locator('.odc-model-item').count(), 12, 'each group starts with six models');
-  await page.getByLabel('搜索付费 Provider', { exact: true }).fill('qwen');
+  await page.getByLabel('搜索付费模型', { exact: true }).fill('qwen');
   await page.locator('.odc-model-item', { hasText: 'qwen3.7-max' }).waitFor();
-  await page.getByLabel('搜索付费 Provider', { exact: true }).fill('');
+  await page.getByLabel('搜索付费模型', { exact: true }).fill('');
   for (const group of await page.locator('.odc-model-groups > section').all()) {
     const expand = group.getByRole('button', { name: /^显示全部/u });
     if (await expand.count()) await expand.click();
@@ -351,30 +367,44 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     if (await expand.count()) await expand.click();
   }
   // Discovery success: source, timestamp and the new row become visible.
-  await page.getByRole('button', { name: '从 OpenAI 刷新模型', exact: true }).click();
+  await page.getByRole('button', { name: '刷新模型目录', exact: true }).click();
   await page.waitForFunction(() => window.__refreshModelsCalls === 1);
-  await page.getByText(/来源：OpenAI \/models 发现 · 更新于/u).waitFor();
-  await page.getByText('已从 OpenAI 刷新模型列表', { exact: false }).waitFor();
+  await page.getByText(/来源：当前网关 · 更新于/u).waitFor();
+  await page.getByText('已从当前网关刷新模型目录', { exact: false }).waitFor();
   assert.equal(await page.locator('.odc-model-item').count(), fixtureModels.length + 1);
   await page.locator('.odc-model-item', { hasText: 'gpt-6.1-sol-remote' }).waitFor();
   // Discovery failure keeps the previous catalog and must not claim success.
   await page.evaluate(() => window.__setModelsFail(true));
-  await page.getByRole('button', { name: '从 OpenAI 刷新模型', exact: true }).click();
+  await page.getByRole('button', { name: '刷新模型目录', exact: true }).click();
   await page.waitForFunction(() => window.__refreshModelsCalls === 2);
   await page.getByText('模型发现请求超过 20 秒时限', { exact: true }).waitFor();
-  assert.equal(await page.getByText(/已从 OpenAI 刷新模型列表/u).count(), 0);
+  assert.equal(await page.getByText(/已从当前网关刷新模型目录/u).count(), 0);
   await page.evaluate(() => window.__setModelsFail(false));
 
   await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
   const startDevice = page.getByRole('button', { name: '开始设备授权', exact: true });
+  // Action responses remain usable even while a separate status read is unavailable.
+  await page.evaluate(() => { window.__failStatusReads = true; });
   await startDevice.click();
-  const approvalLink = page.getByRole('link', { name: '复制链接手动打开', exact: true });
+  const approvalLink = page.getByRole('link', { name: '官方授权页', exact: true });
   await approvalLink.waitFor();
   assert.equal(await approvalLink.getAttribute('href'), 'https://open-design.ai/cloud/cli/activate?deviceId=fixture-device&userCode=AB12-CD34');
   assert.equal(await approvalLink.getAttribute('target'), '_blank');
   assert.match(await approvalLink.getAttribute('rel'), /noopener/u);
   assert.equal(await page.getByLabel('设备授权码', { exact: true }).innerText(), 'AB12-CD34');
   assert.equal(await startDevice.isDisabled(), true);
+  const copyActivation = page.getByRole('button', { name: '复制授权链接', exact: true });
+  await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async value => { window.__copiedActivation = value; } } }));
+  await copyActivation.click();
+  await page.getByText('链接已复制，可在常用浏览器中粘贴打开。', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.__copiedActivation), await approvalLink.getAttribute('href'));
+  await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('clipboard-unavailable'); } } }));
+  await copyActivation.click();
+  const manualCopy = page.getByLabel('请选择并复制授权链接', { exact: true });
+  await manualCopy.waitFor();
+  assert.equal(await manualCopy.inputValue(), await approvalLink.getAttribute('href'));
+  await manualCopy.focus();
+  assert.equal(await manualCopy.evaluate(input => input.selectionStart === 0 && input.selectionEnd === input.value.length), true);
   // The Host launches the temporary window; the panel reports what actually happened.
   const openWindow = page.getByRole('button', { name: '在新窗口打开授权页', exact: true });
   // Starting login must open once after the authorization code arrives, without a second click.
@@ -413,21 +443,33 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await approvalLink.waitFor({ state: 'detached' });
   await startDevice.click();
   await approvalLink.waitFor();
-  await page.evaluate(() => window.__finishLogin('success'));
+  await page.evaluate(() => {
+    window.__failStatusReads = false;
+    window.__holdQuota = true; window.__releaseQuota = null;
+    window.__setKeySource('reference');
+    window.__finishLogin('success');
+  });
   await page.getByText('设备授权已完成并保存', { exact: true }).waitFor();
+  await page.getByLabel('当前生效的推理凭据来源', { exact: true }).filter({ hasText: '环境或凭据引用' }).waitFor({ timeout: 3000 });
+  await page.waitForFunction(() => typeof window.__releaseQuota === 'function');
+  await page.evaluate(() => { window.__holdQuota = false; window.__releaseQuota(); });
   await approvalLink.waitFor({ state: 'detached' });
   assert.equal(await page.getByLabel('设备授权码', { exact: true }).count(), 0);
   assert.doesNotMatch(await page.locator('.odc-settings').innerText(), /deviceSecret|controlKey|runtimeKey/);
   const password = page.locator('input[type=password]');
+  await page.evaluate(() => { window.__setKeySource('reference'); window.__failStatusReads = true; });
   await password.fill('fixture-api-key');
   await page.getByRole('button', { name: /保存.*Key/u }).click();
   await page.waitForFunction(() => document.querySelector('input[type=password]')?.value === '');
+  await page.getByText('API Key 已保存；当前仍优先使用环境或凭据引用 COROUTER_API_KEY。', { exact: true }).waitFor();
+  await page.getByLabel('当前生效的推理凭据来源', { exact: true }).filter({ hasText: '环境或凭据引用' }).waitFor();
+  await page.evaluate(() => { window.__failStatusReads = false; });
 
   // Advanced: protocol select, read-only gateway, credential reference and real timeouts.
   await page.getByRole('tab', { name: '高级', exact: true }).click();
   const guard = page.getByRole('checkbox', { name: /启用空轮监控/u });
   assert.equal(await guard.isChecked(), true);
-  await page.getByText('本次运行已拦截 2 轮。', { exact: false }).waitFor();
+  await page.getByText('已检测到 2 次空回答。', { exact: false }).waitFor();
   await guard.uncheck();
   await page.waitForFunction(() => window.__config.emptyTurnGuard === false);
   await guard.check();
@@ -515,6 +557,16 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await page.getByRole('tab', { name: '概览', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 900 });
   await page.addStyleTag({ content: 'body{padding:18px}' });
+  assert.equal(await page.locator('.odc-window').evaluateAll(windows => windows.every(window => {
+    const usage = window.querySelector('.odc-window-usage').getBoundingClientRect();
+    const reset = window.querySelector('.odc-window-reset').getBoundingClientRect();
+    return reset.top >= usage.bottom && window.scrollWidth <= window.clientWidth;
+  })), true, 'narrow windows keep recovery on its own row without horizontal overflow');
+  const narrowDetails = page.locator('.odc-window-details').first();
+  await narrowDetails.locator('summary').click();
+  assert.equal(await narrowDetails.getByText('窗口开始', { exact: true }).isVisible(), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await narrowDetails.locator('summary').click();
   reports.push(await auditTheme(page, 'dark-mobile-overview'));
   await writeFile('docs/previews/theme-contrast.json', JSON.stringify({ scope: 'Enabled visible text and placeholders; WCAG sRGB contrast calculation; offline official palette fixture, not a full accessibility certification.', checks: reports }, null, 2) + '\n');
   await page.screenshot({ path: 'docs/previews/mobile-dark.png', fullPage: true });

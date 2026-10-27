@@ -112,7 +112,7 @@ const LOGIN_LABELS: Record<LoginState['state'], string> = {
 };
 const QUOTA_LABELS: Record<QuotaSnapshot['state'], string> = {
   ok: '额度信息已更新',
-  partial: '部分额度暂不可用，其余数据仍可参考',
+  partial: '额度数据暂未完整',
   'need-login': '需要登录后读取额度',
   error: '暂时无法读取额度',
 };
@@ -127,7 +127,9 @@ function installStyles(): () => void {
 .odc-tab{flex:none;border:1px solid transparent;border-radius:8px;padding:7px 13px;background:transparent;color:var(--dsw-alias-label-secondary,inherit);font:inherit;cursor:pointer}.odc-tab:hover{background:var(--dsw-alias-bg-layer-1,transparent)}.odc-tab[aria-selected=true]{color:var(--dsw-alias-label-primary,inherit);border-color:var(--dsw-alias-border-l3,transparent);background:var(--dsw-alias-bg-layer-1,transparent)}
 .odc-panel{display:grid;gap:14px}.odc-card{min-width:0;padding:15px;border:1px solid var(--dsw-alias-border-l4,transparent);border-radius:12px;background:var(--dsw-alias-bg-layer-1,transparent)}.odc-card>p{margin-top:6px}.odc-card-head,.odc-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.odc-card-head{margin-bottom:12px}
 .odc-quota-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.odc-metric{display:grid;align-content:start;gap:5px;min-height:96px}.odc-metric-value{font-size:20px;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.odc-metric-value.odc-metric-text{font-size:13px;font-weight:600;line-height:1.55}.odc-quota-grid+.odc-quota-grid{margin-top:10px}
-.odc-label,.odc-hint,.odc-meta{color:var(--dsw-alias-label-secondary,inherit);font-size:11px;line-height:1.6}.odc-meta{margin-top:10px!important}.odc-window{display:grid;gap:7px;margin-top:10px}.odc-window progress{width:100%;height:7px;accent-color:var(--dsw-alias-brand-primary,Highlight)}
+.odc-label,.odc-hint,.odc-meta{color:var(--dsw-alias-label-secondary,inherit);font-size:11px;line-height:1.6}.odc-meta{margin-top:10px!important}
+.odc-window{display:grid;gap:10px;margin-top:12px;padding:14px;border-radius:10px;background:var(--dsw-alias-bg-layer-2,transparent);min-width:0}.odc-window-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.odc-window h4{margin:0;font-size:13px;font-weight:600}.odc-window-remaining{display:flex;align-items:baseline;gap:6px;font-variant-numeric:tabular-nums;white-space:nowrap}.odc-window-remaining strong{font-size:22px;line-height:1.2}.odc-window progress{display:block;width:100%;height:8px;accent-color:var(--dsw-alias-brand-primary,Highlight)}
+.odc-window-usage{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0}.odc-window-usage>div{display:grid;gap:3px;min-width:0}.odc-window dt,.odc-quota-footer dt{color:var(--dsw-alias-label-secondary,inherit);font-size:11px}.odc-window dd,.odc-quota-footer dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.odc-window-reset{display:grid;gap:3px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-window-reset time{font-size:12px}.odc-window-details>summary{cursor:pointer;font-size:11px;color:var(--dsw-alias-label-secondary,inherit);min-height:32px;padding:6px 0}.odc-window-details dl{display:grid;gap:8px;margin:6px 0 0}.odc-window-details dl>div{display:grid;gap:3px}.odc-quota-footer{display:grid;gap:8px;margin:0;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-quota-footer>div{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px}.odc-quota-footer dd{font-size:11px;color:var(--dsw-alias-label-secondary,inherit)}
 .odc-button{display:inline-flex;align-items:center;justify-content:center;min-height:32px;padding:6px 12px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:12px;cursor:pointer}.odc-button:hover:not(:disabled){border-color:var(--dsw-alias-brand-primary,Highlight)}.odc-button-primary{background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary,Highlight));color:var(--dsw-alias-label-primary-foreground,HighlightText);border-color:transparent}.odc-button-primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover,var(--dsw-alias-brand-primary,Highlight))}.odc-button:disabled{opacity:.55;cursor:not-allowed}.odc-button-small{min-height:26px;padding:3px 9px;font-size:11px}.odc-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .odc-notice{padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);font-size:12px;line-height:1.6}.odc-notice[data-kind=error]{color:var(--dsw-alias-state-error-primary,inherit);color:color-mix(in srgb,var(--dsw-alias-state-error-primary,CanvasText) 85%,var(--dsw-alias-label-primary,CanvasText))}
 .odc-model-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}.odc-model-list{display:grid;gap:6px;margin:10px 0 0;padding:0;list-style:none}.odc-model-item{padding:9px 10px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);min-width:0}.odc-model-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap}.odc-model-switch{min-width:0;flex:1 1 190px}.odc-model-item strong,.odc-model-item code{display:block;overflow-wrap:anywhere}.odc-model-item strong{font-size:12px;font-weight:600}.odc-model-item code{margin-top:2px;color:var(--dsw-alias-label-secondary,inherit);font-size:11px}.odc-model-meta{margin-top:6px!important;color:var(--dsw-alias-label-secondary,inherit);font-size:11px;overflow-wrap:anywhere}.odc-model-count{color:var(--dsw-alias-label-secondary,inherit);font-size:11px;font-weight:400}.odc-chip{display:inline-flex;align-items:center;padding:1px 7px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:999px;color:var(--dsw-alias-label-secondary,inherit);font-size:10px;line-height:1.6}
@@ -323,14 +325,28 @@ export function QuotaView({ quota, nextAutoRefreshAt, refreshIntervalSeconds }: 
           ? h('p', { className: 'odc-hint', role: 'status' }, '当前账号未开通 Design Plan，没有赠送额度窗口。')
           : h(React.Fragment, null,
             h('p', { className: 'odc-metric-value' }, '—'),
-            h('p', { className: 'odc-hint' }, '额度窗口暂不可确认；不按 0 填充。'))
-        : quota.windows.map((window, index) =>
-        h('div', { className: 'odc-window', key: `${window.durationSeconds}-${index}` },
-          h('div', { className: 'odc-row' },
-            h('span', null, windowLabel(window.durationSeconds)),
-            h('span', { className: 'odc-label' }, `已用 ${window.percent.toFixed(1)}% · 剩余 ${window.remaining ?? '—'}`)),
-          h('progress', { max: 100, value: window.percent, 'aria-label': `${windowLabel(window.durationSeconds)}已用额度` }),
-          h('span', { className: 'odc-meta' }, `已用 ${window.used} / 上限 ${window.limit} · 恢复 ${formatTime(window.resetsAt)}${window.windowStart === undefined ? '' : ` · 窗口开始 ${formatTime(window.windowStart)}`}${window.resetMode === undefined ? '' : ` · 重置方式 ${RESET_MODE_LABELS[window.resetMode] ?? window.resetMode}`}`)))),
+            h('p', { className: 'odc-hint' }, '暂时无法获取额度窗口。'))
+        : quota.windows.map((window, index) => {
+          const label = windowLabel(window.durationSeconds);
+          const remainingPercent = Math.max(0, Math.min(100, 100 - window.percent));
+          return h('section', { className: 'odc-window', key: `${window.durationSeconds}-${index}`, 'aria-label': label },
+            h('div', { className: 'odc-window-head' },
+              h('h4', null, label),
+              h('div', { className: 'odc-window-remaining' },
+                h('strong', null, `${remainingPercent.toFixed(1)}%`), h('span', { className: 'odc-label' }, '剩余'))),
+            h('progress', { max: 100, value: remainingPercent, 'aria-label': `${label}剩余额度` }),
+            h('dl', { className: 'odc-window-usage', 'aria-label': '窗口用量明细' },
+              [{ label: '已用', value: window.used }, { label: '上限', value: window.limit }, { label: '剩余', value: window.remaining ?? '—' }].map(item =>
+                h('div', { key: item.label }, h('dt', null, item.label), h('dd', null, item.value)))),
+            h('div', { className: 'odc-window-reset' },
+              h('span', { className: 'odc-label' }, '下次恢复'),
+              window.resetsAt === undefined ? h('span', null, '—') : h('time', { dateTime: window.resetsAt }, formatTime(window.resetsAt))),
+            window.windowStart === undefined && window.resetMode === undefined ? null : h('details', { className: 'odc-window-details' },
+              h('summary', null, '窗口详情'),
+              h('dl', null,
+                window.windowStart === undefined ? null : h('div', null, h('dt', null, '窗口开始'), h('dd', null, h('time', { dateTime: window.windowStart }, formatTime(window.windowStart)))),
+                window.resetMode === undefined ? null : h('div', null, h('dt', null, '重置方式'), h('dd', null, RESET_MODE_LABELS[window.resetMode] ?? window.resetMode)))));
+        })),
     h('div', { className: 'odc-quota-grid' }, metrics.map(metric =>
       h('div', { className: 'odc-card odc-metric', key: metric.label },
         h('span', { className: 'odc-label' }, metric.label),
@@ -341,10 +357,12 @@ export function QuotaView({ quota, nextAutoRefreshAt, refreshIntervalSeconds }: 
         h('span', { className: 'odc-label' }, metric.label),
         h('strong', { className: 'odc-metric-value odc-metric-text' }, metric.value),
         h('span', { className: 'odc-hint' }, metric.hint)))),
-    h('p', { className: 'odc-meta' }, `更新于 ${formatTime(quota.updatedAt)}${quota.source !== undefined ? ` · 来源：${SOURCE_LABELS[quota.source]}（只读展示）` : ''}`),
+    h('dl', { className: 'odc-quota-footer', 'aria-label': '额度数据来源与更新时间' },
+      h('div', null, h('dt', null, '最近更新'), h('dd', null, h('time', { dateTime: quota.updatedAt }, formatTime(quota.updatedAt)))),
+      quota.source === undefined ? null : h('div', null, h('dt', null, '数据来源'), h('dd', null, SOURCE_LABELS[quota.source]))),
     h('details', { className: 'odc-model-details' },
       h('summary', null, '如何理解这些额度？'),
-      h('p', { className: 'odc-hint' }, '赠送窗口与钱包余额分别计量。套餐余额来自订阅，充值 / 赠送金额来自钱包；总额度是钱包当前可用总额。实际扣款由服务端决定。额度数据只读展示，未知金额显示 —。')),
+      h('p', { className: 'odc-hint' }, '赠送窗口显示周期内的使用量。套餐余额和充值 / 赠送金额是钱包的不同分池，总额度是钱包合计。— 表示暂无数据。')),
     quota.note !== undefined ? h('p', { className: 'odc-notice', 'data-kind': quota.state === 'error' ? 'error' : 'status', role: quota.state === 'error' ? 'alert' : 'status' }, quota.note) : null);
 }
 
@@ -462,7 +480,7 @@ export function Overview({ status, busy, onRefresh, nextAutoRefreshAt, refreshIn
           h('p', { className: 'odc-hint' }, status.apiKeyConfigured === false ? '尚无当前网关的推理凭据；可完成设备授权或单独配置 API Key。' : 'API Key 已配置；登录后即可查看账号额度。')),
         onConnection === undefined ? null : h('button', { type: 'button', className: 'odc-button odc-button-primary', onClick: onConnection }, '前往连接与登录')) : null,
     h('div', { className: 'odc-card-head' },
-      h('div', null, h('h3', null, '额度概览'), h('p', { className: 'odc-hint' }, '套餐窗口与钱包余额分开计量；未知数据不做推算。')),
+      h('div', null, h('h3', null, '额度概览'), h('p', { className: 'odc-hint' }, '查看套餐用量、订阅余额和充值余额。')),
       h('button', { className: 'odc-button', type: 'button', disabled: busy, onClick: onRefresh }, busy ? '刷新中…' : '刷新额度')),
     h(QuotaView, { quota: status?.quota, nextAutoRefreshAt, refreshIntervalSeconds }));
 }
@@ -723,28 +741,29 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
       saving.current = false;
     }
   };
-  const source = status?.modelsSource === 'openai' ? 'OpenAI /models 发现' : status?.modelsSource === 'builtin' ? '内置目录' : '尚未确认';
+  const source = status?.modelsSource === 'openai' ? '当前网关' : status?.modelsSource === 'builtin' ? '内置目录' : '尚未确认';
   const updated = status?.modelsUpdatedAt === undefined ? '' : ` · 更新于 ${formatTime(status.modelsUpdatedAt)}`;
   const models = status?.models ?? [];
   return h(React.Fragment, null,
     h('div', { className: 'odc-card-head' },
       h('div', null,
         h('h3', null, '可用模型'),
-        h('p', { className: 'odc-hint' }, '两个 Provider 独立筛选。逐模型的启用与参数会保存到插件设置，只影响本插件的模型选择与请求。')),
+        h('p', { className: 'odc-hint' }, '按分组搜索模型，设置启用状态与默认参数。')),
       h('div', { className: 'odc-actions' },
         h('span', { className: 'odc-label', role: 'status' }, `来源：${source}${updated}`),
         h('button', {
           className: 'odc-button', type: 'button',
           disabled: refreshingModels || status === undefined || status.apiKeyConfigured === false,
           onClick: onRefreshModels,
-        }, refreshingModels ? '正在刷新模型…' : '从 OpenAI 刷新模型'))),
+          title: '从当前配置的网关读取可用模型目录',
+        }, refreshingModels ? '正在刷新模型…' : '刷新模型目录'))),
     status?.apiKeyConfigured === false ? h('p', { className: 'odc-hint' }, '刷新模型需要可用的 API Key；保存 Key 后重试。') : null,
     status?.modelsError !== undefined ? h('p', { className: 'odc-notice', 'data-kind': 'error', role: 'alert' }, status.modelsError) : null,
     h(NoticeView, { notice }),
     models.length === 0 ? h('p', { className: 'odc-hint', role: 'status' }, '暂无可用模型；可刷新模型列表后重试。') :
       h('div', { className: 'odc-model-groups' },
-        h(ModelGroup, { title: '套餐赠送 Provider', group: 'plan', models, settingsMap, authoritative, writable, pending, onCommit: commit }),
-        h(ModelGroup, { title: '付费 Provider', group: 'paid', models, settingsMap, authoritative, writable, pending, onCommit: commit })));
+        h(ModelGroup, { title: '套餐赠送模型', group: 'plan', models, settingsMap, authoritative, writable, pending, onCommit: commit }),
+        h(ModelGroup, { title: '付费模型', group: 'paid', models, settingsMap, authoritative, writable, pending, onCommit: commit })));
 }
 
 export interface AdvancedProps {
@@ -837,17 +856,17 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
   return h(React.Fragment, null,
     h('section', { className: 'odc-card' },
       h('h3', null, '空轮监控'),
-      h('p', { className: 'odc-hint' }, '独立监控套餐赠送模型的空轮或协议残渣；不影响付费 Provider 的开关。'),
+      h('p', { className: 'odc-hint' }, '检测套餐赠送模型在工具对话中返回的空回答。'),
       h('div', { style: { marginTop: 14 } }, h(Switch, {
         checked: formSnapshot.value?.emptyTurnGuard ?? status?.config.emptyTurnGuard ?? true,
         disabled: !writable || pendingField.includes('emptyTurnGuard'),
         label: '启用空轮监控',
-        hint: `本次运行已拦截 ${status?.guardedTurns ?? '—'} 轮。检测后由宿主重试策略处理，宿主重试会额外消耗额度。`,
+        hint: `已检测到 ${status?.guardedTurns ?? '—'} 次空回答。自动重试由 DSH 的重试设置控制，重试可能额外消耗额度。`,
         onChange: checked => { void setFormField('emptyTurnGuard', checked); },
       }))),
     h('section', { className: 'odc-card' },
       h('h3', null, '推理协议'),
-      h('p', { className: 'odc-hint' }, '插件按所选协议组装请求；模型发现始终读取 OpenAI /models，与这里的选择无关。'),
+      h('p', { className: 'odc-hint' }, '选择当前网关支持的推理协议。模型目录始终从该网关读取。'),
       h('div', { className: 'odc-field' },
         h('label', { htmlFor: 'odc-api-protocol' }, 'API 协议'),
         h('select', {
@@ -870,7 +889,7 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
       h('div', { className: 'odc-field' },
         h('label', { htmlFor: 'odc-api-key-env' }, 'API Key 环境变量 / 凭据引用名'),
         h('input', {
-          id: 'odc-api-key-env', className: 'odc-input', type: 'text', value: apiKeyEnv, disabled: !writable,
+          id: 'odc-api-key-env', className: 'odc-input', type: 'text', value: apiKeyEnv, disabled: !writable || pendingField.includes('apiKeyEnv'),
           autoCapitalize: 'off', spellCheck: false,
           onChange: (event: React.ChangeEvent<HTMLInputElement>) => setApiKeyEnv(event.target.value),
         }),
@@ -880,7 +899,7 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
       h(NoticeView, { notice: keyNotice })),
     h('section', { className: 'odc-card' },
       h('h3', null, '请求时限与自动刷新'),
-      h('p', { className: 'odc-hint' }, '数值在离开输入框时校验并保存；留空或越界不会写入。'),
+      h('p', { className: 'odc-hint' }, '输入有效范围内的整数，离开输入框后保存。'),
       h(NumberField, {
         id: 'odc-request-timeout', label: '请求总超时（毫秒）', hint: '从发出请求到响应结束的上限，1000–3600000。',
         value: requestTimeout, min: MIN_REQUEST_TIMEOUT_MS, max: MAX_REQUEST_TIMEOUT_MS, integer: true,
@@ -917,7 +936,7 @@ function loginInFlight(state: LoginState['state']): boolean {
 const ACTIVATION_OPEN_LABELS: Record<ActivationOpenState['code'], string> = {
   opened: '已在新窗口打开官方授权页；请在该窗口确认设备码。',
   'no-link': '授权码已失效，请重新申请。',
-  'invalid-url': '授权链接未通过校验，请复制链接手动打开。',
+  'invalid-url': '授权链接无效，请取消并重新开始登录。',
   unavailable: '无法启动临时浏览器，请确认已安装 Chrome；也可复制链接手动打开。',
   failed: '临时浏览器窗口未能打开，请复制链接手动打开。',
 };
@@ -929,9 +948,27 @@ export function LoginApproval({ login, onOpen, opening, notice }: {
   opening?: boolean;
   notice?: { kind: 'status' | 'error'; text: string } | null;
 }) {
+  const mounted = useMounted();
+  const copyVersion = React.useRef(0);
+  const [copyState, setCopyState] = React.useState<'idle' | 'copying' | 'copied' | 'manual'>('idle');
+  React.useEffect(() => {
+    copyVersion.current += 1;
+    setCopyState('idle');
+  }, [login?.jobId, login?.state, login?.activationUrl]);
   if (login?.state !== 'waiting' || login.userCode === undefined || login.expiresAt === undefined) return null;
   const url = validateActivationUrl(login.activationUrl, login.userCode);
   if (url === null) return null;
+  const copyLink = async () => {
+    const version = ++copyVersion.current;
+    setCopyState('copying');
+    try {
+      if (typeof navigator.clipboard?.writeText !== 'function') throw new Error('clipboard-unavailable');
+      await navigator.clipboard.writeText(url);
+      if (mounted.current && version === copyVersion.current) setCopyState('copied');
+    } catch {
+      if (mounted.current && version === copyVersion.current) setCopyState('manual');
+    }
+  };
   return h('div', { className: 'odc-readonly', 'aria-label': '设备授权' },
     h('span', { className: 'odc-label' }, '核对授权码'),
     h('code', { className: 'odc-metric-value', 'aria-label': '设备授权码' }, login.userCode),
@@ -940,20 +977,25 @@ export function LoginApproval({ login, onOpen, opening, notice }: {
         className: 'odc-button odc-button-primary', type: 'button', disabled: opening === true || onOpen === undefined,
         onClick: () => { onOpen?.(); },
       }, opening === true ? '正在打开…' : '在新窗口打开授权页'),
-      h('a', { className: 'odc-button', href: url, target: '_blank', rel: 'noreferrer noopener' }, '复制链接手动打开')),
+      h('button', { className: 'odc-button', type: 'button', disabled: copyState === 'copying', onClick: () => { void copyLink(); } }, copyState === 'copying' ? '正在复制…' : '复制授权链接'),
+      h('a', { className: 'odc-link', href: url, target: '_blank', rel: 'noreferrer noopener' }, '官方授权页')),
+    copyState === 'copied' ? h('p', { className: 'odc-hint', role: 'status' }, '链接已复制，可在常用浏览器中粘贴打开。') : null,
+    copyState === 'manual' ? h('label', { className: 'odc-field' },
+      h('span', null, '请选择并复制授权链接'),
+      h('input', { className: 'odc-input', type: 'text', readOnly: true, value: url, onFocus: (event: React.FocusEvent<HTMLInputElement>) => event.target.select() })) : null,
     notice ? h(NoticeView, { notice }) : null,
     h('p', { className: 'odc-hint' }, `授权码有效至 ${formatTime(login.expiresAt)}。在授权窗口确认后，返回此页查看结果。`),
-    h('p', { className: 'odc-hint' }, '新窗口是独立的临时 Chrome，不会读取或改动你正在使用的浏览器配置；需要沿用已有登录态时，右键复制链接到常用浏览器。仅确认你本人发起的授权。'));
+    h('p', { className: 'odc-hint' }, '临时 Chrome 窗口需要单独登录；也可复制链接到已登录的常用浏览器。仅确认你本人发起的授权。'));
 }
 
-function Connection({ status, formSnapshot, setFormField, pendingField, caller, loadStatus, refreshAfterLogin }: {
+function Connection({ status, formSnapshot, setFormField, pendingField, caller, onLoginStatus, onStatus }: {
   status: Status | undefined;
   formSnapshot: FormSnapshot;
   setFormField: (field: string, value: unknown) => Promise<boolean>;
   pendingField: readonly string[];
   caller: RpcCaller;
-  loadStatus: () => Promise<void>;
-  refreshAfterLogin: () => Promise<void>;
+  onLoginStatus: (login: LoginState) => void;
+  onStatus: (status: Status) => void;
 }) {
   const mounted = useMounted();
   const actionVersion = React.useRef(0);
@@ -992,12 +1034,12 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
     try {
       const next = await caller<LoginState>('startLogin', { expectedRevision: status.revision });
       if (!mounted.current || version !== actionVersion.current) return;
+      onLoginStatus(next);
       setNotice(null);
       setActivationNotice(null);
-      await (next.state === 'success' ? refreshAfterLogin() : loadStatus());
     } catch {
       autoOpenPending.current = false;
-      if (mounted.current && version === actionVersion.current) setNotice({ kind: 'error', text: '无法启动登录，请稍后重试。' });
+      if (mounted.current && version === actionVersion.current) setNotice({ kind: 'error', text: '登录请求暂未确认，请重试。' });
     } finally {
       if (mounted.current && version === actionVersion.current) setBusy(false);
     }
@@ -1007,10 +1049,11 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
     const version = ++actionVersion.current;
     setBusy(true);
     try {
-      await caller<LoginState>('cancelLogin', { jobId: login.jobId });
+      const next = await caller<LoginState>('cancelLogin', { jobId: login.jobId });
       if (!mounted.current || version !== actionVersion.current) return;
-      await loadStatus();
-      if (mounted.current) setNotice({ kind: 'status', text: '已请求取消登录。' });
+      autoOpenPending.current = false;
+      onLoginStatus(next);
+      setNotice({ kind: 'status', text: next.message ?? LOGIN_LABELS[next.state] });
     } catch {
       if (mounted.current && version === actionVersion.current) setNotice({ kind: 'error', text: '取消未完成，请稍后重试。' });
     } finally {
@@ -1027,15 +1070,17 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
     setKeyBusy(true);
     setNotice(null);
     try {
-      await caller<Status>('saveApiKey', { value: apiKey, expectedRevision: status.revision });
+      const next = await caller<Status>('saveApiKey', { value: apiKey, expectedRevision: status.revision });
       if (!mounted.current || version !== actionVersion.current) return;
       setApiKey('');
-      await loadStatus();
-      if (mounted.current) setNotice({ kind: 'status', text: 'API Key 已安全保存。' });
+      onStatus(next);
+      setNotice({ kind: 'status', text: next.apiKeySource === 'reference'
+        ? `API Key 已保存；当前仍优先使用环境或凭据引用 ${next.config.apiKeyEnv}。`
+        : next.apiKeySource === 'stored' ? 'API Key 已保存并用于当前网关。' : 'API Key 已保存。' });
     } catch {
       if (!mounted.current || version !== actionVersion.current) return;
       setApiKey('');
-      setNotice({ kind: 'error', text: 'API Key 未保存，请检查后重试。' });
+      setNotice({ kind: 'error', text: '保存结果暂未确认，请稍后重试。' });
     } finally {
       if (mounted.current && version === actionVersion.current) setKeyBusy(false);
     }
@@ -1065,15 +1110,19 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
     }
   };
   React.useEffect(() => {
-    if (!autoOpenPending.current || busy || keyBusy) return;
+    if (!autoOpenPending.current || busy || keyBusy || opening || status === undefined) return;
     if (state === 'waiting') {
       autoOpenPending.current = false;
       void openActivation();
     } else if (state === 'error' || state === 'cancelled' || state === 'success') {
       autoOpenPending.current = false;
     }
-  }, [state, login?.jobId, busy, keyBusy]);
+  }, [state, login?.jobId, busy, keyBusy, opening, status]);
   const desktopChecked = formSnapshot.value?.useDesktopCredential ?? status?.config.useDesktopCredential ?? true;
+  const keySource = status?.apiKeySource === 'reference' ? `环境或凭据引用（${status.config.apiKeyEnv}）`
+    : status?.apiKeySource === 'stored' ? '已保存的 API Key'
+    : status?.apiKeySource === 'device' ? '设备授权'
+    : status?.apiKeyConfigured ? '尚未确认' : '未配置';
   return h(React.Fragment, null,
     h('section', { className: 'odc-card' },
       h('h3', null, '连接方式'),
@@ -1083,7 +1132,7 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
           checked: desktopChecked,
           disabled: formSnapshot.status !== 'ready' || formSnapshot.value === undefined || !formSnapshot.writable || pendingField.includes('useDesktopCredential'),
           label: '优先使用桌面登录态',
-          hint: '仅控制读取优先级，不会修改或写回桌面端登录文件。',
+          hint: '优先显示桌面端登录账号的额度。',
           onChange: checked => { void setFormField('useDesktopCredential', checked); },
         })),
       h('p', { className: 'odc-meta' }, `当前会话来源：${status?.sessionSource === undefined ? '—' : { desktop: '桌面登录态', login: '独立登录', environment: '环境凭据' }[status.sessionSource]}`)),
@@ -1098,8 +1147,9 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
       h('p', { className: 'odc-meta', role: state === 'error' ? 'alert' : 'status' }, login?.message ?? LOGIN_LABELS[state]),
       h(NoticeView, { notice })),
     h('section', { className: 'odc-card' },
-      h('h3', null, 'API Key（可选覆盖）'),
-      h('p', { className: 'odc-hint' }, status?.apiKeyConfigured === true ? '当前网关已有可用推理凭据。优先级：环境或凭据引用 → 手动保存的 API Key → 设备授权令牌。' : '当前网关尚无推理凭据。可完成设备授权以使用官方网关，或为当前网关单独保存 API Key。'),
+      h('h3', null, 'API Key'),
+      h('p', { className: 'odc-meta', 'aria-label': '当前生效的推理凭据来源' }, `当前生效来源：${keySource}`),
+      h('p', { className: 'odc-hint' }, status?.apiKeyConfigured === true ? '当前网关已配置推理凭据。可在此保存插件专用的 API Key。' : '当前网关尚无推理凭据。可完成设备授权以使用官方网关，或为当前网关单独保存 API Key。'),
       h('form', { onSubmit: (event: React.FormEvent) => { void saveKey(event); } },
         h('div', { className: 'odc-field' },
           h('label', { htmlFor: 'odc-api-key' }, '新的 API Key'),
@@ -1151,6 +1201,21 @@ export function SettingsPage({ caller, form }: SettingsProps) {
     ...acceptedFormSnapshot,
     value: acceptedFormSnapshot.value === undefined ? undefined : { ...acceptedFormSnapshot.value, ...pendingValues },
   }), [acceptedFormSnapshot, pendingValues]);
+
+  const acceptLoginStatus = React.useCallback((login: LoginState) => {
+    // Action responses supersede reads started before that action completed.
+    statusVersion.current += 1;
+    loginVersion.current += 1;
+    setStatus(previous => previous === undefined ? previous : { ...previous, login });
+    setError(undefined);
+  }, []);
+  const acceptStatus = React.useCallback((next: Status) => {
+    statusVersion.current += 1;
+    loginVersion.current += 1;
+    setStatus(next);
+    setModelsNotice(null);
+    setError(undefined);
+  }, []);
 
   const loadStatus = React.useCallback(async () => {
     const version = ++statusVersion.current;
@@ -1261,7 +1326,7 @@ export function SettingsPage({ caller, form }: SettingsProps) {
       setError(undefined);
       // A failed discovery returns the previous catalog plus `modelsError`; never claim success then.
       setModelsNotice(next.modelsError === undefined
-        ? { kind: 'status', text: `已从 OpenAI 刷新模型列表，共 ${next.models.length} 个模型。` }
+        ? { kind: 'status', text: `已从当前网关刷新模型目录，共 ${next.models.length} 个模型。` }
         : null);
     } catch {
       if (mounted.current && version === modelsVersion.current) setModelsNotice({ kind: 'error', text: '模型刷新未完成，请检查凭据、网关与网络后重试。' });
@@ -1284,10 +1349,7 @@ export function SettingsPage({ caller, form }: SettingsProps) {
         const login = await caller<LoginState>('loginStatus');
         if (stopped || !mounted.current || version !== loginVersion.current) return;
         setStatus(previous => previous === undefined ? previous : { ...previous, login });
-        if (!loginInFlight(login.state)) {
-          if (login.state === 'success') void refresh();
-          else void loadStatus();
-        }
+        if (!loginInFlight(login.state) && login.state !== 'success') void loadStatus();
       } catch {
         // Keep the last good state; the next bounded poll can recover transient failures.
       }
@@ -1296,6 +1358,13 @@ export function SettingsPage({ caller, form }: SettingsProps) {
     const timer = setInterval(() => { void poll(); }, 1_200);
     return () => { stopped = true; clearInterval(timer); loginVersion.current += 1; };
   }, [caller, loadStatus, loginActive, mounted, refresh]);
+
+  React.useEffect(() => {
+    if (loginState !== 'success') return;
+    // Connection status is independent of the first quota network read.
+    void loadStatus();
+    void refresh(true);
+  }, [loginState, status?.login.jobId, loadStatus, refresh]);
 
   const configuredSeconds = formSnapshot.value?.quotaRefreshSeconds ?? status?.config.quotaRefreshSeconds;
   const refreshIntervalSeconds = configuredSeconds === undefined
@@ -1333,14 +1402,14 @@ export function SettingsPage({ caller, form }: SettingsProps) {
       onRefreshModels: () => { void refreshModels(); }, refreshingModels, notice: modelsNotice,
     });
   } else if (tab === 'connection') {
-    content = h(Connection, { status, formSnapshot, setFormField, pendingField, caller, loadStatus, refreshAfterLogin: refresh });
+    content = h(Connection, { status, formSnapshot, setFormField, pendingField, caller, onLoginStatus: acceptLoginStatus, onStatus: acceptStatus });
   } else {
     content = h(Advanced, { status, formSnapshot, setFormField, pendingField });
   }
 
   return h('div', { className: 'odc-settings' },
     h('h2', null, 'OpenDesign CoRouter'),
-    h('p', { className: 'odc-intro' }, '在一个简洁面板中管理额度、双 Provider 模型、登录与运行保护。'),
+    h('p', { className: 'odc-intro' }, '查看额度，管理模型、连接与请求设置。'),
     h('div', { className: 'odc-tabs', role: 'tablist', 'aria-label': 'CoRouter 设置分类' }, TABS.map((item, index) =>
       h('button', {
         key: item.id, ref: (node: HTMLButtonElement | null): void => { tabRefs.current[index] = node; },
