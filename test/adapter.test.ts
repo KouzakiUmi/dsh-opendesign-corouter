@@ -12,17 +12,17 @@ test('two independent Providers advertise disjoint catalogs and reject cross-gro
   let calls = 0;
   const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'test-key', fetch: async () => { calls++; return sse('ok'); } });
   assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 13);
-  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 25);
+  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 26);
   assert.throws(() => adapter.stream(options(PLAN_PROVIDER, 'gpt-6-astra')), { code: 'INVALID_REQUEST' });
   assert.equal(calls, 0);
 });
-test('verified API additions advertise and invoke through their evidence-backed provider', async () => {
+test('verified catalog additions advertise and invoke through their evidence-backed provider', async () => {
   const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'test-key', fetch: async (_input, init) => {
     const wire = JSON.parse(String(init?.body));
-    assert.ok(['minimax-m3.1-flash', 'gemini-4-argon', 'kimi-k3.1-pro', 'muse-spark-1.3', 'muse-wonder'].includes(wire.model));
+    assert.ok(['minimax-m3.1-flash', 'gemini-4-argon', 'kimi-k3.1-pro', 'muse-spark-1.3', 'muse-wonder', 'gpt-6.1-terra'].includes(wire.model));
     return sse('ok');
   } });
-  for (const id of ['minimax-m3.1-flash', 'gemini-4-argon', 'kimi-k3.1-pro', 'muse-spark-1.3', 'muse-wonder']) {
+  for (const id of ['minimax-m3.1-flash', 'gemini-4-argon', 'kimi-k3.1-pro', 'muse-spark-1.3', 'muse-wonder', 'gpt-6.1-terra']) {
     const provider = id === 'minimax-m3.1-flash' ? PLAN_PROVIDER : PAID_PROVIDER;
     assert.ok((await adapter.listModels(provider)).some(model => model.id === id));
     assert.equal((await collect(adapter.stream(options(provider, id)))).at(-1)?.type, 'finish');
@@ -105,7 +105,7 @@ test('model switches hide routes and enforce rejection on direct calls', async (
   const configured: RuntimeConfig = { ...base, modelSettings: { 'deepseek-v4.1-flash': { enabled: false } } };
   const adapter = new CoRouterAdapter({ config: () => configured, apiKey: async () => 'test-key', fetch: async () => { assert.fail('disabled model must not fetch'); } });
   assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 12);
-  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 25);
+  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 26);
   assert.throws(() => adapter.stream(options()), { code: 'MODEL_DISABLED' });
   await assert.rejects(adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash'), { code: 'MODEL_DISABLED' });
 });

@@ -140,6 +140,16 @@ test('five verified API additions retain their catalog labels without inventing 
   }
 });
 
+test('discovery preserves GPT-6.1 Terra catalog metadata', async () => {
+  const { fetcher } = stub(() => Response.json({ data: [{ id: 'gpt-6.1-terra', name: 'untrusted override' }] }));
+  const [model] = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
+  assert.deepEqual(model, {
+    id: 'gpt-6.1-terra', name: 'GPT-6.1 Terra', group: 'paid',
+    contextWindow: 1_050_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'],
+    reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+  });
+});
+
 test('drops unusable and duplicate rows instead of inventing models', async () => {
   const { fetcher } = stub(() => Response.json({
     data: [

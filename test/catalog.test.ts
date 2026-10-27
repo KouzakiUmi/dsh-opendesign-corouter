@@ -30,7 +30,7 @@ const PLAN_IDS = [
   'minimax-m3.1-flash',
 ] as const;
 
-// 25 项归付费通道；不承诺每个账号的具体套餐权限。
+// 26 项归付费通道；不承诺每个账号的具体套餐权限。
 const PAID_IDS = [
   'qwen3.7-max',
   'claude-fable-5',
@@ -49,6 +49,7 @@ const PAID_IDS = [
   'gpt-6-astra',
   'gpt-6-sol',
   'gpt-6.1-sol',
+  'gpt-6.1-terra',
   'glm-5.2',
   'grok-4.5',
   'grok-4.6',
@@ -83,12 +84,13 @@ const GO_CAPACITY = new Map<string, {
 ]);
 
 /**
- * 全 38 型号的思考档位矩阵（厂商官方文档逐型号取值）。
+ * 全 39 型号的思考档位矩阵（厂商官方文档逐型号取值）。
  * `[]` = 该型号没有可调的思考档位；`null` = 厂商档位未确认（目录中保持缺省）。
  */
 const EFFORT_MATRIX = new Map<string, readonly string[] | null>([
   // OpenAI：`reasoning.effort` 支持集合；GPT-6.1 Sol 与 GPT-6 Astra 官方明文不支持 `none`。
   ['gpt-6.1-sol', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['gpt-6.1-terra', ['none', 'low', 'medium', 'high', 'xhigh', 'max']],
   ['gpt-6-astra', ['low', 'medium', 'high', 'xhigh', 'max']],
   ['gpt-6-luna', ['none', 'low', 'medium', 'high', 'xhigh', 'max']],
   ['gpt-6-sol', ['none', 'low', 'medium', 'high', 'xhigh', 'max']],
@@ -135,7 +137,7 @@ const EFFORT_MATRIX = new Map<string, readonly string[] | null>([
 /** 厂商文档化过的全部思考档位取值；`ultra` 不在其中。 */
 const KNOWN_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 /** 官方明文支持 `none` 的 OpenAI 型号。 */
-const OPENAI_NONE_MODELS = new Set(['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+const OPENAI_NONE_MODELS = new Set(['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-terra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 /** Anthropic 型号：effort 只有 low/medium/high/xhigh/max。 */
 const ANTHROPIC_MODELS = [
   'claude-fable-5.1',
@@ -148,10 +150,10 @@ const ANTHROPIC_MODELS = [
   'claude-haiku-5.5',
 ] as const;
 
-test('catalog 收录 38 个目录项：Core 附赠通道 13 + 付费通道 25', () => {
-  assert.equal(MODELS.length, 38);
+test('catalog 收录 39 个目录项：Core 附赠通道 13 + 付费通道 26', () => {
+  assert.equal(MODELS.length, 39);
   assert.equal(modelsFor('plan').length, 13);
-  assert.equal(modelsFor('paid').length, 25);
+  assert.equal(modelsFor('paid').length, 26);
   assert.deepEqual([...modelsFor('plan').map(model => model.id)].sort(), [...PLAN_IDS].sort());
   assert.deepEqual([...modelsFor('paid').map(model => model.id)].sort(), [...PAID_IDS].sort());
 });
@@ -189,19 +191,26 @@ test('plan 12 款的容量/输出/模态与 Go 0.1.9 MODEL_DEFAULTS 逐项一致
   }
 });
 
-test('付费组及新附赠 M3.1 Flash 的容量字段保持缺省', () => {
+test('付费组及新附赠 M3.1 Flash 的容量字段保持缺省，唯 GPT-6.1 Terra 用厂商型号文档取值', () => {
   const minimax = findModel('minimax-m3.1-flash');
   assert.ok(minimax);
   assert.equal(minimax.group, 'plan');
-  for (const model of [...modelsFor('paid'), minimax]) {
+  for (const model of [...modelsFor('paid').filter(model => model.id !== 'gpt-6.1-terra'), minimax]) {
     assert.equal(model.contextWindow, undefined, `${model.id} 不应携带 contextWindow`);
     assert.equal(model.maxOutputTokens, undefined, `${model.id} 不应携带 maxOutputTokens`);
     assert.equal(model.inputModalities, undefined, `${model.id} 不应推断 inputModalities`);
   }
+  // GPT-6.1 Terra 的容量与模态取自厂商型号文档，网关侧未实测。
+  const terra = findModel('gpt-6.1-terra');
+  assert.ok(terra);
+  assert.equal(terra.group, 'paid');
+  assert.equal(terra.contextWindow, 1_050_000);
+  assert.equal(terra.maxOutputTokens, 128_000);
+  assert.deepEqual(terra.inputModalities, ['text', 'image']);
 });
 
-test('全 38 型号的思考档位矩阵按厂商官方文档逐型号固定', () => {
-  assert.equal(EFFORT_MATRIX.size, 38);
+test('全 39 型号的思考档位矩阵按厂商官方文档逐型号固定', () => {
+  assert.equal(EFFORT_MATRIX.size, 39);
   assert.deepEqual([...EFFORT_MATRIX.keys()].sort(), MODELS.map(model => model.id).sort());
   for (const model of MODELS) {
     const expected = EFFORT_MATRIX.get(model.id);

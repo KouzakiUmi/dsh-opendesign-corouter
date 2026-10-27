@@ -71,7 +71,8 @@ test('official Loader mounts the built package, typert-loader auto-registers its
     await eventually(loader, () => ctx.get(REMOTE_SERVICE) !== undefined);
     assert.deepEqual(providerIds(ctx), [PAID_PROVIDER, PLAN_PROVIDER]);
     assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 13);
-    assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 25);
+    assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 26);
+    assert.ok((await ctx.llm.listModels(PAID_PROVIDER)).some(model => model.id === 'gpt-6.1-terra'));
     // Discovery alone registers nothing: that is typert-loader's job.
     assert.equal(ctx.typert.getPackage(REMOTE_PACKAGE, 'host'), undefined);
 

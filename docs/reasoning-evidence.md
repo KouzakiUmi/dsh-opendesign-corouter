@@ -1,6 +1,6 @@
 # 推理档位取证
 
-本文记录 CoRouter 目录中 38 个对话模型 ID 的推理控制证据。采样日期 2026-10-27；所有来源在该日返回 HTTP 200。
+本文记录 CoRouter 目录中 39 个对话模型 ID 的推理控制证据。采样日期 2026-10-27；所有来源在该日返回 HTTP 200。
 
 ## 证据层级
 
@@ -22,7 +22,7 @@
 | 常量 | 档位 | 对应模型 |
 | --- | --- | --- |
 | `EFFORTS_REASONING` | low / medium / high / xhigh / max | OpenAI 6.1-sol、6-astra；Claude 8 款；MiniMax M3.1 Flash |
-| `EFFORTS_OPENAI` | none + `EFFORTS_REASONING` | OpenAI 6-sol、6-luna、5.6-sol、5.6-terra、5.6-luna |
+| `EFFORTS_OPENAI` | none + `EFFORTS_REASONING` | OpenAI 6.1-terra、6-sol、6-luna、5.6-sol、5.6-terra、5.6-luna |
 | `EFFORTS_GLM52` | none / minimal / low / medium / high / xhigh / max | GLM-5.2 |
 | `EFFORTS_LOW_HIGH` | low / high / max | DeepSeek 4 款；GLM-5.3-flash、5.3-flashx；Kimi K3、K3.1 Pro |
 | `EFFORTS_LEVELS` | low / medium / high | Gemini 4 Argon、3.8 Flash、3.7 Flash；Grok 4.5 |
@@ -31,15 +31,16 @@
 | 空数组 `[]` | 无离散档位 | MiMo V2.6 Pro、MiMo V2.6 Flash、Kimi K2.7 Code、Qwen3.7 Max |
 | 缺省 | 未知 | Muse Wonder |
 
-合计 33 款可调档位、4 款固定思考或仅开关/预算控制、1 款未知。
+合计 34 款可调档位、4 款固定思考或仅开关/预算控制、1 款未知。
 
 ## 证据矩阵
 
-### OpenAI（7）
+### OpenAI（8）
 
 | 模型 ID | 官方档位 | 官方默认 | 原生控制与协议限制 | 官方来源 | 原文要点 |
 | --- | --- | --- | --- | --- | --- |
 | gpt-6.1-sol | low / medium / high / xhigh / max | medium | 工具调用需要 Responses；支持集合未含 none、minimal | [模型页](https://developers.openai.com/api/docs/models/gpt-6.1-sol.md)、[迁移指南](https://developers.openai.com/api/docs/guides/latest-model.md) | “`reasoning.effort` supports `low`, `medium` (default), `high`, `xhigh`, and `max`”；迁移指南明确 Astra 与 6.1 Sol 不支持 none |
+| gpt-6.1-terra | none / low / medium / high / xhigh / max | medium | 工具调用需要 Responses（Chat Completions 仅作非工具请求）；支持 none | [模型页](https://developers.openai.com/api/docs/models/gpt-6.1-terra.md)、[迁移指南](https://developers.openai.com/api/docs/guides/latest-model.md) | “`reasoning.effort` supports `none`, `low`, `medium` (default), `high`, `xhigh`, and `max`”；“Tool calling requires the Responses API”；迁移指南：“GPT-6.1 Terra, GPT-6 Sol, and GPT-6 Luna support `none`” |
 | gpt-6-astra | low / medium / high / xhigh / max | 未声明 | none 不可用，传 none 返回 HTTP 400 | [模型页](https://developers.openai.com/api/docs/models/gpt-6-astra.md)、[推理指南](https://developers.openai.com/api/docs/guides/reasoning.md) | “`reasoning.effort` supports `low`, `medium`, `high`, `xhigh`, and `max`”；“GPT-6 Astra does not support `none` reasoning effort … returns HTTP 400” |
 | gpt-6-luna | none / low / medium / high / xhigh / max | medium | 内置工具与函数调用需用 Responses；Chat Completions 仅在 `reasoning_effort` 为 none 时支持函数调用 | [模型页](https://developers.openai.com/api/docs/models/gpt-6-luna.md) | “`reasoning.effort` supports `none`, `low`, `medium` (default), `high`, `xhigh`, and `max`” |
 | gpt-6-sol | none / low / medium / high / xhigh / max | medium | 同 6-luna | [模型页](https://developers.openai.com/api/docs/models/gpt-6-sol.md) | “`reasoning.effort` supports `none`, `low`, `medium` (default), `high`, `xhigh`, and `max`” |

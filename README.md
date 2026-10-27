@@ -32,7 +32,7 @@ dsh plugin --profile web add dsh-opendesign-corouter
 也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
-dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.8.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.9.tgz
 ```
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。
@@ -53,13 +53,13 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.8.tgz
 | Provider | 模型数 | 用途 |
 | --- | ---: | --- |
 | `opendesign-corouter-plan` | 13 | Core / Design Plan 附赠通道，含预检确认覆盖的 MiniMax M3.1 Flash |
-| `opendesign-corouter-paid` | 25 | Plan 套餐模型及其他钱包付费模型 |
+| `opendesign-corouter-paid` | 26 | Plan 套餐模型及其他钱包付费模型 |
 
 上表为内置目录。模型页可通过当前配置网关的 OpenAI 兼容 `/models` 接口刷新目录，逐个启用或停用模型，并配置温度、top-p、默认输出上限、上下文预算及思考深度。停用同时影响模型选择器和直接调用；参数会保存并应用到实际请求。媒体生成接口不在对话目录中，未知能力不按名称猜测。
 
 推理协议可选 **OpenAI Chat Completions、OpenAI Responses、Anthropic Messages**。模型发现始终使用当前网关的 OpenAI 兼容 `/models` 接口，不随推理协议切换。
 
-思考档位按精确型号的厂商文档维护，并按当前协议筛选。33 款提供离散档位，4 款为固定思考或开关/预算控制，Muse Wonder 的精确别名尚待确认。旧配置中的无效默认档位可在参数设置中改为“继承默认”。[逐模型来源与网关验证状态](docs/reasoning-evidence.md)
+思考档位按精确型号的厂商文档维护，并按当前协议筛选。34 款提供离散档位，4 款为固定思考或开关/预算控制，Muse Wonder 的精确别名尚待确认。旧配置中的无效默认档位可在参数设置中改为“继承默认”。[逐模型来源与网关验证状态](docs/reasoning-evidence.md)
 
 > **分组不等于计费隔离。** 赠送额度耗尽后是否转扣套餐余额或钱包，由服务端和账号权益决定。选择“套餐赠送”不能保证绝不消耗钱包余额。
 

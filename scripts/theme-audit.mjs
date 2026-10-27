@@ -42,6 +42,24 @@ export async function auditTheme(page, label) {
       if (Array.from(element.childNodes).some(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim())) check(element, getComputedStyle(element), 'text');
       if (element.matches('input[placeholder]')) check(element, getComputedStyle(element, '::placeholder'), 'placeholder');
     }
+    // Native popup options have no client rect while closed, but their own colors
+    // still determine the menu, independently of the select's painted surface.
+    for (const select of document.querySelectorAll('.odc-settings select:not(:disabled)')) {
+      if (!select.getClientRects().length) continue;
+      for (const option of select.querySelectorAll('option:not(:disabled)')) {
+        const style = getComputedStyle(option);
+        if (rgba(style.backgroundColor)[3] < .99) issues.push({ kind: 'option-background', text: option.textContent });
+        check(option, style, 'option');
+      }
+    }
+    // Input and secondary-button boundaries must remain visible on their surroundings.
+    for (const element of document.querySelectorAll('.odc-input:not(:disabled), .odc-button:not(.odc-button-primary):not(:disabled)')) {
+      if (!element.getClientRects().length) continue;
+      const style = getComputedStyle(element);
+      const bg = background(element.parentElement);
+      const value = ratio(over(rgba(style.borderTopColor), bg), bg);
+      if (value + .01 < 3) issues.push({ kind: 'control-boundary', element: element.tagName, ratio: Number(value.toFixed(2)), required: 3 });
+    }
     return { checked: measurements.length, minimum: Math.min(...measurements), issues };
   });
   assert.ok(report.checked >= 8, `${label}: no meaningful visible UI was measured`);

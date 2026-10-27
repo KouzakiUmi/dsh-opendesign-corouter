@@ -46,7 +46,7 @@ test('real Cordis scope loads both Providers and Host RPC, then fully withdraws 
     const fiber = await ctx.plugin(isolatedPlugin, { useDesktopCredential: false });
     assert.deepEqual(ctx.llm.listProviders().map(row => row.id), [PLAN_PROVIDER, PAID_PROVIDER]);
     assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 13);
-    assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 25);
+    assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 26);
     assert.ok(ctx.typert.getPackage(REMOTE_PACKAGE, 'host'));
     assert.ok(ctx.get('openDesignCoRouter'));
     await fiber.dispose();

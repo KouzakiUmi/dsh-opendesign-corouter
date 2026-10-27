@@ -2,11 +2,13 @@
 import { chromium } from 'playwright-core';
 import { build } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { auditTheme } from './theme-audit.mjs';
 import assert from 'node:assert/strict';
 import { MODELS, Config } from '../lib/index.js';
 import { volatileForm } from '../node_modules/@deepseek-ai/dsh-settings/lib/types/schema.js';
 const formSchema = volatileForm(Config);
+const previewDir = process.env.ODC_PREVIEW_DIR || 'docs/previews';
 assert.ok(formSchema);
 const react = await build({ stdin: { contents: `import * as React from 'react'; import {createRoot} from 'react-dom/client'; import Schema from '@deepseek-ai/schemastery'; window.__Schema=Schema; window.__React=React; window.__mount=(component,props)=>{window.__root=createRoot(document.getElementById('root'));window.__root.render(React.createElement(component,props));};`, resolveDir: process.cwd(), loader: 'js' }, bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"development"' } });
 const client = await readFile('lib/client.js', 'utf8');
@@ -273,8 +275,8 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await windowDetails.getByText('按使用触发', { exact: true }).waitFor();
   await windowDetails.locator('summary').click();
   assert.equal(await page.getByLabel('额度数据来源与更新时间', { exact: true }).locator('dt').count(), 2);
-  await mkdir('docs/previews', { recursive: true });
-  await page.screenshot({ path: 'docs/previews/overview.png', fullPage: true });
+  await mkdir(previewDir, { recursive: true });
+  await page.screenshot({ path: join(previewDir, 'overview.png'), fullPage: true });
 
   // Auto refresh follows the Host's planned read when it is earlier than the configured interval.
   await page.evaluate(() => window.__armAutoRefresh());
@@ -306,6 +308,19 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   // Models: switches, whole-map persistence, parameters, reset, stale-status ordering and discovery.
   await page.getByRole('tab', { name: '模型', exact: true }).click();
   assert.equal(await page.locator('.odc-model-item').count(), 12, 'each group starts with six models');
+  // The settings pane may be narrow even in a wide browser window.
+  await page.locator('#root').evaluate(root => { root.style.width = '600px'; });
+  assert.equal(await page.locator('.odc-model-groups').evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length), 1, 'model groups follow the actual pane width');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.locator('#root').evaluate(root => { root.style.width = '320px'; });
+  assert.equal(await page.locator('.odc-settings').evaluate(element => element.scrollWidth <= element.clientWidth), true, 'narrow embedded pane has no horizontal overflow');
+  assert.equal(await page.locator('.odc-model-item code').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 12), true, 'model identifiers remain legible');
+  assert.equal(await page.locator('.odc-button-small').first().evaluate(element => element.getBoundingClientRect().height >= 32), true, 'model actions keep a usable target size');
+  await page.locator('#root').evaluate(root => { root.style.width = ''; });
+  const groupCards = page.locator('.odc-model-groups > section');
+  await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('no-such-model');
+  assert.equal(await groupCards.evaluateAll(cards => cards[0].getBoundingClientRect().height < cards[1].getBoundingClientRect().height), true, 'shorter group does not stretch to its neighbour');
+  await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('');
   await page.getByLabel('搜索付费模型', { exact: true }).fill('qwen');
   await page.locator('.odc-model-item', { hasText: 'qwen3.7-max' }).waitFor();
   await page.getByLabel('搜索付费模型', { exact: true }).fill('');
@@ -367,7 +382,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await temperature.fill('0.7');
   await temperature.blur();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.temperature === 0.7);
-  await page.screenshot({ path: 'docs/previews/models.png', fullPage: true });
+  await page.screenshot({ path: join(previewDir, 'models.png'), fullPage: true });
   for (const group of await page.locator('.odc-model-groups > section').all()) {
     const expand = group.getByRole('button', { name: /^显示全部/u });
     if (await expand.count()) await expand.click();
@@ -397,6 +412,10 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await page.getByText('模型发现请求超过 20 秒时限', { exact: true }).waitFor();
   assert.equal(await page.getByText(/已从当前网关刷新模型目录/u).count(), 0);
   await page.evaluate(() => window.__setModelsFail(false));
+  await page.getByRole('button', { name: '刷新模型目录', exact: true }).click();
+  await page.waitForFunction(() => window.__refreshModelsCalls === 3);
+  await page.getByText('模型发现请求超过 20 秒时限', { exact: true }).waitFor({ state: 'detached' });
+  await page.getByText('已从当前网关刷新模型目录', { exact: false }).waitFor();
 
   await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
   const startDevice = page.getByRole('button', { name: '开始设备授权', exact: true });
@@ -429,7 +448,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await page.getByText('已在新窗口打开官方授权页；请在该窗口确认设备码。', { exact: true }).waitFor();
   assert.doesNotMatch(await page.locator('.odc-settings').innerText(), /deviceSecret|controlKey|runtimeKey/);
   // Capture the working state before exercising the failure path.
-  await page.screenshot({ path: 'docs/previews/connection.png', fullPage: true });
+  await page.screenshot({ path: join(previewDir, 'connection.png'), fullPage: true });
   // A Host that cannot offer the window says so instead of claiming success.
   await page.evaluate(() => window.__setActivationCode('unavailable'));
   await openWindow.click();
@@ -526,7 +545,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await refreshSeconds.fill('30');
   await refreshSeconds.blur();
   await page.locator('.odc-field-error').waitFor({ state: 'detached' });
-  await page.screenshot({ path: 'docs/previews/advanced.png', fullPage: true });
+  await page.screenshot({ path: join(previewDir, 'advanced.png'), fullPage: true });
   await page.getByRole('tab', { name: '高级', exact: true }).press('Home');
   assert.equal(await page.getByRole('tab', { name: '概览', exact: true }).getAttribute('aria-selected'), 'true');
   const reports = [];
@@ -535,7 +554,6 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     await page.emulateMedia({ colorScheme: mode === 'dark' ? 'light' : 'dark', forcedColors: 'none' });
     await page.evaluate(mode => {
       document.body.toggleAttribute('data-ds-dark-theme', mode === 'dark');
-      document.documentElement.style.colorScheme = mode;
     }, mode);
   };
   for (const [index, mode] of ['light', 'dark', 'light'].entries()) {
@@ -543,9 +561,17 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     for (const tab of ['概览', '模型', '连接与登录', '高级']) {
       await page.getByRole('tab', { name: tab, exact: true }).click();
       reports.push(await auditTheme(page, `${index + 1}-${mode}-${tab}`));
-      if (tab === '概览') await page.screenshot({ path: `docs/previews/overview-${mode}.png`, fullPage: true });
+      assert.equal(await page.locator('.odc-settings').evaluate(element => getComputedStyle(element).colorScheme), mode, `${mode}: native controls follow the host theme, not the OS`);
+      if (tab === '概览') await page.screenshot({ path: join(previewDir, `overview-${mode}.png`), fullPage: true });
+      if (tab === '高级' && mode === 'dark') await page.screenshot({ path: join(previewDir, 'advanced-dark.png'), fullPage: true });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     }
+    await page.getByRole('tab', { name: '模型', exact: true }).click();
+    const modelDetails = page.locator('.odc-model-details').filter({ has: page.getByRole('combobox', { name: '默认思考深度', includeHidden: true }) }).first();
+    await modelDetails.locator('summary').click();
+    assert.equal(await modelDetails.getByRole('combobox', { name: '默认思考深度' }).isEnabled(), true);
+    reports.push(await auditTheme(page, `${index + 1}-${mode}-model-options`));
+    if (mode === 'dark') await page.screenshot({ path: join(previewDir, 'models-dark.png'), fullPage: true });
     await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
     const primary = page.locator('.odc-button-primary');
     const foreground = await primary.evaluate(element => {
@@ -557,7 +583,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     reports.push(await auditTheme(page, `${index + 1}-${mode}-hover`));
     await page.locator('input[type=password]').focus();
     assert.equal(await page.locator('input[type=password]').evaluate(element => element.matches(':focus-visible') && getComputedStyle(element).outlineStyle === 'solid' && parseFloat(getComputedStyle(element).outlineWidth) >= 2), true);
-    await page.screenshot({ path: `docs/previews/theme-${mode}.png`, fullPage: true });
+    await page.screenshot({ path: join(previewDir, `theme-${mode}.png`), fullPage: true });
     await page.getByRole('tab', { name: '概览', exact: true }).click();
     await page.evaluate(() => window.__setQuotaState('error', '模拟额度读取失败，请稍后重试。'));
     await page.getByRole('button', { name: '刷新额度', exact: true }).click();
@@ -570,6 +596,8 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
   await page.emulateMedia({ forcedColors: 'active' });
   reports.push(await auditTheme(page, 'forced-colors-connection'));
+  await page.getByRole('tab', { name: '高级', exact: true }).click();
+  reports.push(await auditTheme(page, 'forced-colors-protocol-options'));
   await switchTheme('dark');
   await page.getByRole('tab', { name: '概览', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 900 });
@@ -585,8 +613,8 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await narrowDetails.locator('summary').click();
   reports.push(await auditTheme(page, 'dark-mobile-overview'));
-  await writeFile('docs/previews/theme-contrast.json', JSON.stringify({ scope: 'Enabled visible text and placeholders; WCAG sRGB contrast calculation; offline official palette fixture, not a full accessibility certification.', checks: reports }, null, 2) + '\n');
-  await page.screenshot({ path: 'docs/previews/mobile-dark.png', fullPage: true });
+  await writeFile(join(previewDir, 'theme-contrast.json'), JSON.stringify({ scope: 'Enabled visible text and placeholders, native option colors and input/secondary-button boundaries; WCAG sRGB contrast calculation; offline official palette fixture, not a full accessibility certification.', checks: reports }, null, 2) + '\n');
+  await page.screenshot({ path: join(previewDir, 'mobile-dark.png'), fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
   await page.evaluate(() => window.__cleanup());
   assert.equal(await page.locator('style[data-opendesign-corouter]').count(), 0);

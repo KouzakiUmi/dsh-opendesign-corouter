@@ -9,6 +9,9 @@
  * - `plan` 原有 12 款的 contextWindow / maxOutputTokens / inputModalities
  *   来自 Go 侧 `dsh-opendesign-go` 0.1.9 的 MODEL_DEFAULTS（同一 `amr-link` endpoint 部署资料），
  *   作为部署参考，尚无官网能力数值的独立佐证；只用于对应的原有 12 款模型。
+ * - `gpt-6.1-terra` 的 contextWindow / maxOutputTokens / inputModalities 取自
+ *   厂商型号文档（1,050,000 / 128,000 / text+image，与 `gpt-6-luna` 同口径）；
+ *   CoRouter 网关侧未实测该型号的有效预算。
  * - 客户端桌面安装（Open Design 0.26.1）不内联 CoRouter 目录；其
  *   `vela model preset --format json` 只有 11 个旧预设 id（见 docs/client-evidence.md），
  *   与本表不同代，故不用于本目录。
@@ -16,9 +19,11 @@
  * 分组语义（重要）：`plan`/`paid` 是**本插件本地目录分类**，用于把“套餐赠送通道”与
  * “其余付费通道”拆成两个 Provider，不是上游强制计费契约。最终可用性、扣哪个额度池、
  * 是否先扣 Design Plan 额度再用套餐模型/钱包额度，全部由服务端按账号套餐决定。
- * 2026-10-27 官方 GET /v1/models 实测补齐五个 ID，现为 plan 13 + paid 25。
+ * 2026-10-27 官方 GET /v1/models 实测补齐五个 ID，同日厂商型号文档与服务目录
+ * 补齐 GPT-6.1 Terra，现为 plan 13 + paid 26。
  * 同日桌面 Vela 按模型 billing preflight：M3.1 Flash 的 modelCovered=true /
  * funding=coding_plan，新增于附赠通道；其余四项为 false / wallet，归付费通道。
+ * GPT-6.1 Terra 同为 modelCovered=false / funding=wallet，归付费通道。
  * 此分类以当次工作区证据为依据，不保证其他账号或未来套餐权益。
  * 新增项证据及名称来源见 docs/client-evidence.md；不从型号名推断能力。
  *
@@ -54,11 +59,20 @@ const EFFORTS_MUSE = ['minimal', ...EFFORTS_REASONING] as const;
 
 /**
  * `plan` 为官网 12 款 Core / Design Plan 模型，加预检确认覆盖的 M3.1 Flash；
- * 其余 25 项归 `paid`（Plan / 钱包付费通道）。
+ * 其余 26 项归 `paid`（Plan / 钱包付费通道）。
  */
 export const MODELS: readonly CatalogModel[] = [
-  // ── OpenAI（7） ─────────────────────────────────────────────
+  // ── OpenAI（8） ─────────────────────────────────────────────
   { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
+  {
+    id: 'gpt-6.1-terra',
+    name: 'GPT-6.1 Terra',
+    group: 'paid',
+    contextWindow: 1_050_000,
+    maxOutputTokens: 128_000,
+    inputModalities: TEXT_AND_IMAGE,
+    reasoningEfforts: EFFORTS_OPENAI,
+  },
   { id: 'gpt-6-astra', name: 'GPT-6 Astra', group: 'paid', reasoningEfforts: EFFORTS_REASONING },
   {
     id: 'gpt-6-luna',
