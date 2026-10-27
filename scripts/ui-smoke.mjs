@@ -75,6 +75,8 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     window.__refreshQuotaCalls = 0;
     window.__forceRefreshCalls = 0;
     window.__refreshModelsCalls = 0;
+    window.__refreshPricesCalls = 0;
+    window.__pricesFail = false;
     window.__modelsFail = false;
     window.__autoRefreshBump = false;
     window.__config = config;
@@ -103,8 +105,18 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
       quota = { state: 'partial', updatedAt: new Date().toISOString(), eligible: false, windows: [], balances: {} };
     };
     window.__restoreQuota = () => { quota = initialQuota(); };
+    window.__setWindowResetSoon = () => { quota = { ...quota, windows: quota.windows.map((item, index) => index === 0 ? { ...item, resetsAt: new Date(Date.now() + 1800).toISOString() } : item) }; };
     const api = {
       status: async (...args) => { if (args.length) throw new Error('status requires zero arguments'); if (window.__failStatusReads) throw new Error('fixture-status-unavailable'); return { ok: true, value: status() }; },
+      refreshPrices: async (...args) => {
+        if (args.length) throw new Error('refreshPrices requires zero arguments');
+        window.__refreshPricesCalls += 1;
+        const base = { label: '27.2 万 Token 及以内', currency: 'USD', unit: 'per_1m_tokens', input: 2, output: 10, cacheRead: 0.1, cacheWrite: null };
+        return { ok: true, value: { state: window.__pricesFail ? 'error' : 'ok', stale: window.__pricesFail, fetchedAt: '2026-10-27T08:00:00Z', models: [
+          { id: 'gpt-6.1-sol', tiers: [base, { ...base, label: '超过 27.2 万 Token', input: 4, output: 15 }] },
+          { id: 'gpt-6-luna', tiers: [{ ...base, label: '不按输入长度分档', input: 0.25, output: 1 }] },
+        ] } };
+      },
       refreshModels: async (...args) => {
         if (args.length) throw new Error('refreshModels requires zero arguments');
         window.__refreshModelsCalls += 1;
@@ -258,25 +270,44 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   await page.getByRole('tab', { name: '概览', exact: true }).click();
   await page.getByText('US$80.00', { exact: true }).waitFor();
   assert.equal(await page.getByRole('tab').count(), 4);
-  for (const label of ['订阅账期结束', '下次额度恢复', '下次自动刷新']) {
+  for (const label of ['订阅账期结束', '下次额度恢复']) {
     const metric = page.locator('.odc-metric', { hasText: label });
-    assert.match(await metric.locator('.odc-metric-text').innerText(), /\d{4}\//, `${label} must show a concrete timestamp`);
+    assert.match(await metric.locator('.odc-metric-text').innerText(), /(?:后|已到结束时间|等待更新)/u, `${label} shows relative time`);
+    assert.match(await metric.locator('time').getAttribute('title'), /\d{4}\//u, `${label} retains its exact timestamp`);
   }
+  const refreshCountdown = page.locator('.odc-metric', { hasText: '下次自动刷新' }).locator('time');
+  assert.match(await refreshCountdown.innerText(), /(?:\d+秒后|\d+分\d+秒后)/u);
+  assert.match(await refreshCountdown.getAttribute('title'), /计划刷新时间：\d{4}\//u);
+  const beforeCountdown = await refreshCountdown.innerText();
+  await page.waitForFunction(before => {
+    const nodes = [...document.querySelectorAll('.odc-metric')];
+    return nodes.find(node => node.textContent.includes('下次自动刷新'))?.querySelector('time')?.textContent !== before;
+  }, beforeCountdown, { timeout: 4000 });
   await page.getByText('套餐赠送窗口', { exact: true }).waitFor();
   const firstWindow = page.getByRole('region', { name: '5 小时赠送窗口', exact: true });
   assert.equal(await firstWindow.locator('.odc-window-remaining strong').innerText(), '76.0%');
   assert.equal(await firstWindow.getByRole('progressbar').getAttribute('value'), '76');
-  assert.deepEqual(await firstWindow.locator('.odc-window-usage dt').allTextContents(), ['已用', '上限', '剩余']);
-  assert.deepEqual(await firstWindow.locator('.odc-window-usage dd').allTextContents(), ['120', '500', '380']);
+  assert.equal(await firstWindow.locator('.odc-window-usage').innerText(), '已用 120 / 总计 500 积分');
+  assert.equal(await page.locator('.odc-quota-status').getAttribute('data-tone'), 'good');
+  await page.getByText('赠送窗口额度充足', { exact: true }).waitFor();
   const windowDetails = firstWindow.locator('details');
   assert.equal(await windowDetails.getAttribute('open'), null, 'technical window details start collapsed');
   assert.equal(await windowDetails.getByText('窗口开始', { exact: true }).isVisible(), false);
   await windowDetails.locator('summary').click();
   await windowDetails.getByText('按使用触发', { exact: true }).waitFor();
+  assert.equal(await windowDetails.locator('dd').first().innerText(), '380');
   await windowDetails.locator('summary').click();
   assert.equal(await page.getByLabel('额度数据来源与更新时间', { exact: true }).locator('dt').count(), 2);
   await mkdir(previewDir, { recursive: true });
   await page.screenshot({ path: join(previewDir, 'overview.png'), fullPage: true });
+  // A window passing its reset time must stop claiming the previous reading is current.
+  await page.evaluate(() => window.__setWindowResetSoon());
+  await page.getByRole('button', { name: '刷新额度', exact: true }).click();
+  await page.getByText('等待更新窗口额度', { exact: true }).waitFor({ timeout: 5000 });
+  assert.equal(await firstWindow.getAttribute('data-tone'), 'neutral');
+  await page.evaluate(() => window.__restoreQuota());
+  await page.getByRole('button', { name: '刷新额度', exact: true }).click();
+  await page.getByText('赠送窗口额度充足', { exact: true }).waitFor();
 
   // Auto refresh follows the Host's planned read when it is earlier than the configured interval.
   await page.evaluate(() => window.__armAutoRefresh());
@@ -330,6 +361,20 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   }
   assert.equal(await page.locator('.odc-model-item').count(), fixtureModels.length);
   const luna = page.locator('.odc-model-item', { hasText: 'gpt-6-luna' });
+  await luna.getByText(/官网参考.*输入 \$0\.25/u).waitFor();
+  assert.equal(await page.evaluate(() => window.__refreshPricesCalls), 1, 'model tab loads prices once');
+  const solPrice = page.locator('.odc-model-item', { hasText: 'gpt-6.1-sol' }).first();
+  await solPrice.getByText(/共 2 档/u).waitFor();
+  await solPrice.locator('summary').click();
+  await solPrice.getByText('超过 27.2 万 Token · 每百万 Token', { exact: true }).waitFor();
+  assert.equal(await solPrice.getByText('未列出', { exact: true }).count(), 2, 'unlisted cache write prices stay unknown');
+  await solPrice.locator('summary').click();
+  await page.evaluate(() => { window.__pricesFail = true; });
+  await page.getByRole('button', { name: '更新价格', exact: true }).click();
+  await page.getByText(/读取失败，显示上次价格/u).waitFor();
+  await page.evaluate(() => { window.__pricesFail = false; });
+  await page.getByRole('button', { name: '更新价格', exact: true }).click();
+  await page.waitForFunction(() => window.__refreshPricesCalls === 3);
   const lunaSwitch = luna.locator('input[type=checkbox]');
   assert.equal(await lunaSwitch.isChecked(), true);
   await lunaSwitch.uncheck();
@@ -576,9 +621,9 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     const primary = page.locator('.odc-button-primary');
     const foreground = await primary.evaluate(element => {
       const css = getComputedStyle(element);
-      return { actual: css.color.replace(/\s+/g, ''), expected: css.getPropertyValue('--dsw-alias-label-primary-foreground').replace(/\s+/g, '') };
+      return { actual: css.color.replace(/\s+/g, ''), expected: css.getPropertyValue('--dsw-alias-label-primary').replace(/\s+/g, '') };
     });
-    assert.equal(foreground.actual, foreground.expected, `${mode}: primary label uses the actual host foreground token`);
+    assert.equal(foreground.actual, foreground.expected, `${mode}: tinted primary action uses the host primary text token`);
     await primary.hover();
     reports.push(await auditTheme(page, `${index + 1}-${mode}-hover`));
     await page.locator('input[type=password]').focus();
@@ -605,12 +650,24 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   assert.equal(await page.locator('.odc-window').evaluateAll(windows => windows.every(window => {
     const usage = window.querySelector('.odc-window-usage').getBoundingClientRect();
     const reset = window.querySelector('.odc-window-reset').getBoundingClientRect();
-    return reset.top >= usage.bottom && window.scrollWidth <= window.clientWidth;
+    const lineHeight = parseFloat(getComputedStyle(window.querySelector('.odc-window-usage')).lineHeight);
+    return reset.top >= usage.bottom && usage.height <= lineHeight + 1 && window.scrollWidth <= window.clientWidth;
   })), true, 'narrow windows keep recovery on its own row without horizontal overflow');
+  assert.equal(await page.locator('.odc-timing-row').evaluateAll(rows => rows.every(row => {
+    const bounds = row.getBoundingClientRect();
+    return [...row.children].every(child => {
+      const rect = child.getBoundingClientRect();
+      return rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1;
+    });
+  })), true, 'relative dates and their labels stay inside the timing panel');
   const narrowDetails = page.locator('.odc-window-details').first();
   await narrowDetails.locator('summary').click();
   assert.equal(await narrowDetails.getByText('窗口开始', { exact: true }).isVisible(), true);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.locator('#root').evaluate(root => { root.style.width = '320px'; });
+  assert.equal(await page.locator('.odc-settings').evaluate(element => element.scrollWidth <= element.clientWidth), true, '320px pane keeps the expanded window inside');
+  assert.equal(await narrowDetails.evaluate(element => element.scrollWidth <= element.clientWidth), true, 'expanded window details remain readable');
+  await page.locator('#root').evaluate(root => { root.style.width = ''; });
   await narrowDetails.locator('summary').click();
   reports.push(await auditTheme(page, 'dark-mobile-overview'));
   await writeFile(join(previewDir, 'theme-contrast.json'), JSON.stringify({ scope: 'Enabled visible text and placeholders, native option colors and input/secondary-button boundaries; WCAG sRGB contrast calculation; offline official palette fixture, not a full accessibility certification.', checks: reports }, null, 2) + '\n');
@@ -620,5 +677,5 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   assert.equal(await page.locator('style[data-opendesign-corouter]').count(), 0);
   assert.equal(await page.evaluate(() => window.__remoteDisposed), true);
   assert.deepEqual(errors, []);
-  console.log(`Offline UI smoke passed: 4 tabs, ${fixtureModels.length} models, model enable/edit/reset persistence, protocol selection, quota timing and auto-refresh scheduling, 9 RPCs, credential input, guard switch, keyboard navigation, disposal; ${reports.length} official light/dark/forced-color audits, minimum measured text contrast ${Math.min(...reports.map(report => report.minimum))}:1.`);
+  console.log(`Offline UI smoke passed: 4 tabs, ${fixtureModels.length} models, price tiers and stale fallback, model enable/edit/reset persistence, protocol selection, quota timing and auto-refresh scheduling, 10 RPCs, credential input, guard switch, keyboard navigation, disposal; ${reports.length} official light/dark/forced-color audits, minimum measured text contrast ${Math.min(...reports.map(report => report.minimum))}:1.`);
 } finally { await browser.close(); }

@@ -20,7 +20,7 @@ assert.equal(typeof host.apply, 'function');
 assert.equal(typeof host.Config, 'function');
 const { validateTypertManifest } = await import('@deepseek-ai/dsh-typert-loader');
 const contribution = await import(pathToFileURL(resolve(manifest.exports['./typert'].default)).href);
-assert.equal(validateTypertManifest(manifest.name, contribution.TYPERT).invocations.length, 9);
+assert.equal(validateTypertManifest(manifest.name, contribution.TYPERT).invocations.length, 10);
 let registration;
 runInNewContext(await readFile('lib/client.js', 'utf8'), { window: { __ModuleLoader__: { load(value) { registration = value; } } }, console });
 assert.equal(registration.id, manifest.name);

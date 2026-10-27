@@ -55,6 +55,23 @@ export interface StatusModel {
   reasoningEfforts?: readonly string[];
 }
 
+/** Public website quotes, independent of account entitlements and gateway discovery. */
+export interface PriceTier {
+  label: string;
+  currency: 'USD' | null;
+  unit: 'per_1m_tokens' | 'per_1k_tokens' | null;
+  input: number | null;
+  output: number | null;
+  cacheRead: number | null;
+  cacheWrite: number | null;
+}
+export interface PriceCatalog {
+  state: 'ok' | 'partial' | 'error';
+  stale: boolean;
+  fetchedAt?: string;
+  models: readonly { id: string; tiers: readonly PriceTier[] }[];
+}
+
 /** Terminal-or-in-flight phases a login job may report. */
 export type LoginPhase = 'idle' | 'launching' | 'waiting' | 'verifying' | 'success' | 'cancelled' | 'error';
 
@@ -154,6 +171,40 @@ function member<T extends string>(value: unknown, allowed: readonly T[], label: 
   const hit = allowed.find(candidate => candidate === value);
   if (hit === undefined) throw new Error(`${label} 不在允许的取值内`);
   return hit;
+}
+
+/** Only bounded, public pricing fields cross into the Client. */
+export function parsePriceCatalog(value: unknown): PriceCatalog {
+  if (!record(value) || !Array.isArray(value.models) || value.models.length > MAX_MODELS) throw new Error('价格目录格式无效');
+  const state = member(value.state, ['ok', 'partial', 'error'] as const, '价格目录状态');
+  const stale = flag(value.stale, '价格缓存状态');
+  const fetchedAt = value.fetchedAt === undefined ? undefined : isoTime(value.fetchedAt, '价格更新时间');
+  if (stale && fetchedAt === undefined) throw new Error('过期价格必须标注更新时间');
+  const ids = new Set<string>();
+  const nullableAmount = (item: unknown): number | null => {
+    if (item === null) return null;
+    const result = amount(item, '价格');
+    if (result > 1_000_000) throw new Error('价格超出范围');
+    return result;
+  };
+  const models = value.models.map(model => {
+    if (!record(model) || !Array.isArray(model.tiers) || model.tiers.length === 0 || model.tiers.length > 8) throw new Error('模型价格格式无效');
+    const id = text(model.id, '模型 id', 128);
+    if (!MODEL_ID.test(id) || ids.has(id)) throw new Error('模型价格 id 无效或重复');
+    ids.add(id);
+    const tiers = model.tiers.map(tier => {
+      if (!record(tier)) throw new Error('价格档位格式无效');
+      return {
+        label: text(tier.label, '价格档位', 128),
+        currency: tier.currency === null ? null : member(tier.currency, ['USD'] as const, '价格币种'),
+        unit: tier.unit === null ? null : member(tier.unit, ['per_1m_tokens', 'per_1k_tokens'] as const, '价格单位'),
+        input: nullableAmount(tier.input), output: nullableAmount(tier.output),
+        cacheRead: nullableAmount(tier.cacheRead), cacheWrite: nullableAmount(tier.cacheWrite),
+      };
+    });
+    return { id, tiers };
+  });
+  return { state, stale, ...(fetchedAt === undefined ? {} : { fetchedAt }), models };
 }
 
 function parseQuotaWindow(value: unknown): QuotaWindow {

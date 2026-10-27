@@ -10,6 +10,7 @@ import type {} from '@deepseek-ai/cordis-plugin-loader';
 import { LlmError } from '@deepseek-ai/dsh-llm';
 import { CoRouterAdapter } from './adapter.js';
 import { fetchModelCatalog, ModelDiscoveryError } from './model-discovery.js';
+import { fetchPricingSnapshot } from './pricing.js';
 import { isModelEnabled } from './model-settings.js';
 import { modelReasoningEfforts } from './reasoning.js';
 import type { CatalogModel } from './catalog.js';
@@ -21,8 +22,8 @@ import { ActivationLauncher, type ActivationLauncherOptions } from './browser-op
 import { readQuota, ConsoleError, type QuotaSnapshot } from './quota.js';
 import { readDesktopQuota } from './desktop-quota.js';
 import { record } from './util.js';
-import { parseStatus, parseLoginState, parseStartLoginRequest as parseStartLogin, parseCancelLoginRequest as parseCancelLogin, parseSaveApiKeyRequest as parseSaveApiKey, parseActivationOpenState,
-  type Status, type LoginState, type StartLoginRequest, type CancelLoginRequest, type SaveApiKeyRequest, type ActivationOpenState } from './remote.js';
+import { parseStatus, parsePriceCatalog, parseLoginState, parseStartLoginRequest as parseStartLogin, parseCancelLoginRequest as parseCancelLogin, parseSaveApiKeyRequest as parseSaveApiKey, parseActivationOpenState,
+  type Status, type PriceCatalog, type LoginState, type StartLoginRequest, type CancelLoginRequest, type SaveApiKeyRequest, type ActivationOpenState } from './remote.js';
 
 export { Config } from './config.js';
 export { CoRouterAdapter } from './adapter.js';
@@ -44,6 +45,7 @@ export interface HostDependencies {
   readQuota: typeof readQuota;
   readDesktopQuota: typeof readDesktopQuota;
   fetchModels?: typeof fetchModelCatalog;
+  fetchPrices?: typeof fetchPricingSnapshot;
   modelsChanged?: () => void;
   loginOptions?: LoginOptions;
   activationOptions?: ActivationLauncherOptions;
@@ -76,6 +78,8 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   private _modelsEpoch = 0;
   private _modelsPending: Promise<Status> | undefined;
   private _modelsController: AbortController | undefined;
+  private _prices: PriceCatalog | undefined;
+  private _pricesPending: Promise<PriceCatalog> | undefined;
   modelCatalog(): readonly CatalogModel[] { return this._models; }
   constructor(ctx: Context, config: () => ReturnType<typeof readConfig>, readonly dependencies: HostDependencies = { resolveSession, readQuota, readDesktopQuota }) {
     super(ctx, 'openDesignCoRouter');
@@ -223,6 +227,30 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     this._modelsPending = run;
     try { return await run; }
     finally { if (this._modelsPending === run) this._modelsPending = undefined; }
+  }
+  /** Public website prices do not use gateway credentials or alter the model catalog. */
+  @Remote('refreshPrices')
+  async refreshPrices(): Promise<PriceCatalog> {
+    if (this._pricesPending) return this._pricesPending;
+    const run = (async (): Promise<PriceCatalog> => {
+      try {
+        const result = await (this.dependencies.fetchPrices ?? fetchPricingSnapshot)({ signal: this._lifetime.signal });
+        if (this._lifetime.signal.aborted || result.status === 'failed') throw new Error('price unavailable');
+        const next = parsePriceCatalog({
+          state: result.status, stale: false, fetchedAt: result.fetchedAt,
+          models: result.models.map(({ id, tiers }) => ({ id, tiers })),
+        });
+        this._prices = next;
+        return next;
+      } catch {
+        return this._prices === undefined
+          ? { state: 'error', stale: false, models: [] }
+          : { ...this._prices, state: 'error', stale: true };
+      }
+    })();
+    this._pricesPending = run;
+    try { return await run; }
+    finally { if (this._pricesPending === run) this._pricesPending = undefined; }
   }
   @Remote('refreshQuota')
   async refreshQuota(): Promise<QuotaSnapshot> { return this._refreshQuota(false); }

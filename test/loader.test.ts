@@ -26,6 +26,7 @@ const ENTRY_ID = 'llm-opendesign-corouter';
 const ENDPOINTS = [
   `${REMOTE_SERVICE}/status`,
   `${REMOTE_SERVICE}/refreshModels`,
+  `${REMOTE_SERVICE}/refreshPrices`,
   `${REMOTE_SERVICE}/refreshQuota`,
   `${REMOTE_SERVICE}/refreshQuotaNow`,
   `${REMOTE_SERVICE}/startLogin`,
@@ -57,7 +58,7 @@ async function eventually(loader: Loader, ready: () => boolean): Promise<void> {
 const entry = (config: Record<string, unknown> = {}) => ({ id: ENTRY_ID, name: REMOTE_PACKAGE, config });
 const providerIds = (ctx: Context) => ctx.llm.listProviders().map(row => row.id).sort();
 
-test('official Loader mounts the built package, typert-loader auto-registers its nine RPC, and reload is conflict-free', async () => {
+test('official Loader mounts the built package, typert-loader auto-registers its ten RPCs, and reload is conflict-free', async () => {
   const ctx = new Context();
   ctx.baseUrl = ANCHOR;
   const llm = await ctx.plugin(LlmRuntime);

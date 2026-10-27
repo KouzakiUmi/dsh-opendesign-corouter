@@ -6,6 +6,8 @@ import {
   type LoginState,
   type Status,
   type StatusModel,
+  type PriceCatalog,
+  type PriceTier,
 } from './remote.js';
 import type { QuotaSnapshot, QuotaWindow } from './quota.js';
 import { inferenceEndpoint, API_PROTOCOL_OPTIONS, type ApiProtocol } from './protocol-options.js';
@@ -138,14 +140,26 @@ function installStyles(): () => void {
 .odc-model-details{margin-top:8px}.odc-model-details>summary{cursor:pointer;color:var(--dsw-alias-label-secondary,inherit);font-size:11px;line-height:1.7}.odc-model-editor{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 10px;margin-top:8px}
 .odc-field{display:grid;gap:6px;margin-top:14px}.odc-field-compact{margin-top:8px}.odc-field label,.odc-switch-text{font-size:12px;font-weight:550}.odc-input{width:100%;min-width:0;min-height:34px;padding:7px 9px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:12px}.odc-field-compact .odc-input{min-height:30px;padding:5px 8px;font-size:11px}.odc-input::placeholder{color:var(--dsw-alias-label-secondary,inherit);opacity:1}.odc-input:disabled{opacity:.55}
 .odc-input option{background:var(--dsw-alias-bg-layer-2,Canvas);color:var(--dsw-alias-label-primary,CanvasText)}
-.odc-input,.odc-button:not(.odc-button-primary),.odc-tab[aria-selected=true]{border-color:var(--dsw-alias-border-l3,CanvasText);border-color:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 45%,var(--dsw-alias-bg-layer-2,Canvas))}
+.odc-input,.odc-button:not(.odc-button-primary),.odc-tab[aria-selected=true]{border-color:var(--dsw-alias-border-l3,CanvasText);border-color:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 55%,var(--dsw-alias-bg-layer-2,Canvas))}
 .odc-switch{display:flex;align-items:center;gap:12px;min-height:44px;padding:6px 2px;cursor:pointer}.odc-switch input{appearance:auto;width:20px;height:20px;flex:none;margin:0;cursor:inherit;accent-color:var(--dsw-alias-brand-primary,Highlight)}.odc-switch>span{display:grid;gap:4px;min-width:0}.odc-switch:has(input:disabled){cursor:not-allowed;opacity:.6}.odc-divider{height:1px;border:0;background:var(--dsw-alias-border-l4,transparent);margin:2px 0}.odc-link{color:var(--dsw-alias-brand-primary,inherit);text-underline-offset:3px}
 .odc-readonly{display:grid;gap:10px;margin-top:14px;padding:10px 12px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent)}.odc-code{display:block;min-width:0;color:var(--dsw-alias-label-primary,inherit);font-family:ui-monospace,'Cascadia Mono',Consolas,monospace;font-size:11px;line-height:1.6;overflow-wrap:anywhere}
 .odc-timing{padding:12px 0;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-timing .odc-metric{min-height:0}.odc-settings>.odc-notice{margin-bottom:14px}.odc-model-details>summary{min-height:32px;padding:6px 0}
 .odc-field-error{color:var(--dsw-alias-state-error-primary,inherit);color:color-mix(in srgb,var(--dsw-alias-state-error-primary,CanvasText) 85%,var(--dsw-alias-label-primary,CanvasText))}
 .odc-model-groups{align-items:start}.odc-label,.odc-hint,.odc-meta,.odc-window dt,.odc-quota-footer dt,.odc-quota-footer dd,.odc-window-details>summary,.odc-model-details>summary,.odc-model-item code,.odc-model-meta,.odc-model-count,.odc-code{font-size:12px}.odc-field-compact .odc-input,.odc-button-small{font-size:12px}.odc-button-small{min-height:32px}.odc-chip{font-size:11px}
+.odc-settings{--odc-accent:var(--dsw-alias-brand-primary-new-colorprimary-new-color,#4176e6);max-width:720px;padding:16px;line-height:1.6}
+.odc-settings h2{font-size:16px;letter-spacing:0}.odc-intro{margin:4px 0 12px!important}.odc-tabs{flex-wrap:wrap;overflow:visible;gap:4px;padding:0;border:0;margin-bottom:14px}
+.odc-tab{border:1px solid transparent;border-radius:999px;padding:6px 12px;font-size:12px}.odc-tab[aria-selected=true]{border-color:transparent;background:color-mix(in srgb,var(--odc-accent) 16%,transparent);font-weight:600}
+.odc-card{border-radius:10px;background:transparent;padding:14px}.odc-panel{gap:12px}.odc-card-head{margin-bottom:10px}.odc-button-primary{background:color-mix(in srgb,var(--odc-accent) 12%,transparent);border-color:color-mix(in srgb,var(--odc-accent) 65%,transparent);color:var(--dsw-alias-label-primary,CanvasText)}.odc-button-primary:hover:not(:disabled){background:color-mix(in srgb,var(--odc-accent) 18%,transparent)}
+.odc-quota-panel{display:grid;gap:8px;min-width:0}.odc-quota-panel>.odc-card-head{margin:0}.odc-quota-status{--odc-state:var(--odc-accent);display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--odc-state) 28%,transparent);border-radius:10px;background:color-mix(in srgb,var(--odc-state) 10%,transparent);font-size:13px;font-weight:600}.odc-quota-status[data-tone=good]{--odc-state:var(--dsw-alias-state-success-primary,Highlight)}.odc-quota-status[data-tone=warn]{--odc-state:var(--dsw-alias-state-warn-primary,Highlight)}.odc-quota-status[data-tone=critical]{--odc-state:var(--dsw-alias-state-error-primary,Highlight)}.odc-state-mark{display:grid;place-items:center;width:28px;height:28px;border:1px solid color-mix(in srgb,var(--odc-state) 65%,transparent);border-radius:8px;flex:none;font-size:15px;font-weight:700}.odc-state-copy{display:grid;gap:1px;min-width:0}.odc-state-copy .odc-hint{font-weight:400}
+.odc-window{--odc-window-color:var(--dsw-alias-label-secondary,CanvasText);gap:5px;margin:0;padding:10px 12px;border:0;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 5%,transparent)}.odc-window[data-tone=good]{--odc-window-color:color-mix(in srgb,var(--dsw-alias-state-success-primary,Highlight) 70%,var(--dsw-alias-label-primary,CanvasText))}.odc-window[data-tone=warn]{--odc-window-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary,Highlight) 70%,var(--dsw-alias-label-primary,CanvasText))}.odc-window[data-tone=critical]{--odc-window-color:var(--dsw-alias-state-error-primary,Highlight)}.odc-window-remaining strong{font-size:18px}.odc-window progress{appearance:none;height:7px;border:0;border-radius:999px;overflow:hidden;background:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 18%,transparent);accent-color:var(--odc-window-color)}.odc-window progress::-webkit-progress-bar{background:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 18%,transparent);border-radius:999px}.odc-window progress::-webkit-progress-value{background:var(--odc-window-color);border-radius:999px}
+.odc-window-usage{display:block;margin:0;color:var(--dsw-alias-label-secondary,inherit);font-size:12px;overflow-wrap:anywhere}.odc-window-bottom{display:flex;align-items:baseline;justify-content:space-between;gap:4px 12px;flex-wrap:wrap}.odc-window-reset{display:flex;align-items:baseline;justify-content:flex-start;flex-wrap:wrap;gap:4px 6px;padding:0;border:0}.odc-window-details>summary{min-height:28px;padding:4px 0}.odc-window-details[open]{flex-basis:100%}.odc-window-details dl>div{display:flex;justify-content:space-between;gap:12px}
+@media(forced-colors:active){.odc-window progress{appearance:auto;accent-color:Highlight;forced-color-adjust:auto}.odc-window progress::-webkit-progress-value{background:Highlight}}
+.odc-balance-list,.odc-timing{display:grid;gap:0;margin:0}.odc-balance-row,.odc-timing-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;min-width:0;min-height:0;padding:6px 0;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-balance-row:first-child,.odc-timing-row:first-child{border-top:0}.odc-balance-row>div,.odc-timing-row>div{min-width:0}.odc-balance-row dt,.odc-timing-row dt{font-size:12px;font-weight:600}.odc-balance-row dd,.odc-timing-row dd{margin:0;min-width:0;text-align:right}.odc-balance-row .odc-metric-value{font-size:13px}.odc-timing-row .odc-metric-text{font-size:13px;white-space:nowrap}.odc-timing-row .odc-hint{display:block}.odc-timing{padding:4px 14px}
+.odc-model-item{background:transparent;border:1px solid var(--dsw-alias-border-l4,transparent)}.odc-model-item:has(details[open]){border-color:color-mix(in srgb,var(--odc-accent) 55%,transparent);background:color-mix(in srgb,var(--odc-accent) 5%,transparent)}
+.odc-price-summary{margin:5px 0 0!important;font-size:12px;color:var(--dsw-alias-label-secondary,inherit);overflow-wrap:anywhere}.odc-pricing-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.odc-price-tier{padding:8px 0;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-price-tier dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;margin:6px 0 0}.odc-price-tier dl>div{display:flex;justify-content:space-between;gap:8px}.odc-price-tier dt{color:var(--dsw-alias-label-secondary,inherit)}.odc-price-tier dd{margin:0;font-variant-numeric:tabular-nums}
 .odc-settings :focus-visible{outline:2px solid var(--dsw-alias-brand-primary,Highlight);outline-offset:3px}@media(max-width:680px){.odc-quota-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.odc-model-groups{grid-template-columns:1fr}.odc-model-editor{grid-template-columns:1fr}}@media(max-width:380px){.odc-quota-grid{grid-template-columns:1fr}.odc-card{padding:12px}}
 @container(max-width:680px){.odc-quota-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.odc-model-groups,.odc-model-editor{grid-template-columns:1fr}}@container(max-width:380px){.odc-quota-grid{grid-template-columns:1fr}.odc-card{padding:12px}}
+@container(max-width:480px){.odc-timing-row{align-items:flex-start}.odc-timing-row>div{flex:1 1 0}.odc-timing-row dd{flex:0 0 auto;max-width:50%;overflow-wrap:anywhere}.odc-timing-row .odc-metric-text{white-space:normal}}
 `;
   document.head.append(style);
   return () => style.remove();
@@ -246,6 +260,38 @@ export function formatTime(value: string | undefined): string {
   return Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN', { hour12: false }) : '—';
 }
 
+/** Relative time uses the actual scheduled instant, not the refresh interval. */
+export function formatRelativeDeadline(value: string | undefined, now: number, dueText: string): string {
+  const at = value === undefined ? Number.NaN : Date.parse(value);
+  if (!Number.isFinite(at) || !Number.isFinite(now)) return '—';
+  const seconds = Math.ceil((at - now) / 1000);
+  if (seconds <= 0) return dueText;
+  if (seconds >= 86400) return `${Math.floor(seconds / 86400)}天${Math.floor(seconds % 86400 / 3600)}小时后`;
+  if (seconds >= 3600) return `${Math.floor(seconds / 3600)}小时${Math.floor(seconds % 3600 / 60)}分钟后`;
+  if (seconds >= 60) return `${Math.floor(seconds / 60)}分${seconds % 60}秒后`;
+  return `${seconds}秒后`;
+}
+
+export function formatRefreshCountdown(value: string | undefined, now: number): string {
+  return formatRelativeDeadline(value, now, '即将刷新');
+}
+
+function RelativeDeadline({ at, busy = false, dueText, titleLabel, futureSuffix = '' }: { at: string | undefined; busy?: boolean | undefined; dueText: string; titleLabel: string; futureSuffix?: string | undefined }) {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (at === undefined || !Number.isFinite(Date.parse(at))) return;
+    const update = () => setNow(Date.now());
+    update();
+    const timer = setInterval(update, 1000);
+    document.addEventListener('visibilitychange', update);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', update); };
+  }, [at]);
+  if (busy) return h('span', null, '刷新中…');
+  if (at === undefined || !Number.isFinite(Date.parse(at))) return h('span', null, '—');
+  const relative = formatRelativeDeadline(at, now, dueText) + (Date.parse(at) > now ? futureSuffix : '');
+  return h('time', { dateTime: at, title: `${titleLabel}：${formatTime(at)}`, 'aria-label': `${relative}，${titleLabel}：${formatTime(at)}` }, relative);
+}
+
 /** Token capacities use the same zh-CN grouping as amounts so large windows stay readable. */
 export function formatTokens(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value)) return '—';
@@ -259,10 +305,43 @@ function windowLabel(seconds: number): string {
   return `${seconds} 秒赠送窗口`;
 }
 
+/** Compact credits for the summary; exact figures remain available to assistive technology. */
+export function formatWindowCredits(value: number): string {
+  if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
+  if (value >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
+  if (value >= 1e3) return `${(value / 1e3).toFixed(1)}K`;
+  return String(value);
+}
+
+type QuotaTone = 'neutral' | 'good' | 'warn' | 'critical';
+function windowTone(window: QuotaWindow): QuotaTone {
+  return window.percent >= 100 ? 'critical' : window.percent >= 71 ? 'warn' : 'good';
+}
+function windowDue(window: QuotaWindow, now: number): boolean {
+  if (window.resetsAt === undefined) return false;
+  const at = Date.parse(window.resetsAt);
+  return Number.isFinite(at) && at <= now;
+}
+export function quotaStatusView(quota: QuotaSnapshot, now: number): { title: string; tone: QuotaTone; icon: string; window?: QuotaWindow } {
+  if (quota.state === 'error') return { title: QUOTA_LABELS.error, tone: 'critical', icon: '!' };
+  if (quota.state === 'need-login') return { title: QUOTA_LABELS['need-login'], tone: 'neutral', icon: 'i' };
+  if (quota.stale) return { title: '显示上次成功读数', tone: 'warn', icon: '?' };
+  if (quota.state === 'partial') return { title: QUOTA_LABELS.partial, tone: 'warn', icon: '?' };
+  if (quota.eligible === false) return { title: '未开通 Design Plan', tone: 'neutral', icon: 'i' };
+  const windows = quota.windows.filter(window => Number.isFinite(window.percent));
+  if (!windows.length) return { title: '暂无赠送窗口数据', tone: 'neutral', icon: 'i' };
+  if (windows.some(window => windowDue(window, now))) return { title: '等待更新窗口额度', tone: 'neutral', icon: '…' };
+  const window = windows.reduce((worst, next) => next.percent > worst.percent ? next : worst);
+  const tone = windowTone(window);
+  const title = tone === 'critical' ? '赠送窗口额度已用尽' : window.percent >= 91 ? '赠送窗口额度即将用尽' : tone === 'warn' ? '赠送窗口额度偏少' : '赠送窗口额度充足';
+  return { title, tone, icon: tone === 'good' ? '✓' : tone === 'warn' ? '!' : '×', window };
+}
+
 export interface QuotaViewProps {
   quota: QuotaSnapshot | undefined;
   nextAutoRefreshAt?: string | undefined;
   refreshIntervalSeconds?: number | undefined;
+  busy?: boolean | undefined;
 }
 
 /** Earliest still-future window reset; quota recovery comes only from `windows[].resetsAt`. */
@@ -289,7 +368,16 @@ const RESET_MODE_LABELS: Record<string, string> = {
   anchored_recurring: '固定周期',
 };
 
-export function QuotaView({ quota, nextAutoRefreshAt, refreshIntervalSeconds }: QuotaViewProps) {
+export function QuotaView({ quota, nextAutoRefreshAt, refreshIntervalSeconds, busy = false }: QuotaViewProps) {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => { setNow(Date.now()); }, [quota?.windows]);
+  React.useEffect(() => {
+    const future = (quota?.windows ?? []).map(window => Date.parse(window.resetsAt ?? '')).filter(at => Number.isFinite(at) && at > now);
+    const update = () => setNow(Date.now());
+    const timer = future.length ? setTimeout(update, Math.min(2_147_483_647, Math.max(1, Math.min(...future) - now + 10))) : undefined;
+    document.addEventListener('visibilitychange', update);
+    return () => { if (timer !== undefined) clearTimeout(timer); document.removeEventListener('visibilitychange', update); };
+  }, [quota?.windows, now]);
   if (quota === undefined) return h('p', { className: 'odc-hint', role: 'status' }, '正在读取额度…');
   const metrics = [
     { label: '套餐余额', value: formatUsd(quota.balances.subscriptionUsd), hint: '订阅剩余可用金额' },
@@ -299,17 +387,17 @@ export function QuotaView({ quota, nextAutoRefreshAt, refreshIntervalSeconds }: 
   const timing = [
     {
       label: '订阅账期结束',
-      value: formatTime(quota.subscriptionPeriodEnd),
+      value: h(RelativeDeadline, { at: quota.subscriptionPeriodEnd, dueText: '已到结束时间', titleLabel: '账期结束时间' }),
       hint: `账期开始：${formatTime(quota.subscriptionPeriodStart)}`,
     },
     {
       label: '下次额度恢复',
-      value: formatTime(nextWindowResetAt(quota.windows, Date.now())),
+      value: h(RelativeDeadline, { at: nextWindowResetAt(quota.windows, Date.now()), dueText: '等待更新', titleLabel: '额度恢复时间' }),
       hint: '最早恢复的赠送窗口；不代表钱包到账时间',
     },
     {
       label: '下次自动刷新',
-      value: formatTime(quota.state === 'need-login' || quota.autoRefreshPaused ? undefined : nextAutoRefreshAt),
+      value: h(RelativeDeadline, { at: quota.state === 'need-login' || quota.autoRefreshPaused ? undefined : nextAutoRefreshAt, busy: busy && quota.state !== 'need-login' && !quota.autoRefreshPaused, dueText: '即将刷新', titleLabel: '计划刷新时间' }),
       hint: quota.state === 'need-login' ? '登录后自动刷新' : quota.autoRefreshPaused ? '连续失败，自动重试已暂停；点击刷新额度重试' : refreshIntervalSeconds === undefined ? '未启用自动刷新' : quota.refreshFailures ? `刷新失败 ${quota.refreshFailures} 次，正在延迟重试` : `每 ${refreshIntervalSeconds} 秒自动刷新`,
     },
   ];
@@ -317,15 +405,20 @@ export function QuotaView({ quota, nextAutoRefreshAt, refreshIntervalSeconds }: 
     quota.tier === undefined ? undefined : `当前套餐：${quota.tier}`,
     quota.eligible === undefined ? undefined : `套餐资格：${quota.eligible ? '已开通' : '未开通'}`,
   ].filter((value): value is string => value !== undefined).join(' · ');
+  const quotaStatus = quotaStatusView(quota, now);
   return h(React.Fragment, null,
-    h('div', { className: 'odc-card' },
+    h('div', { className: 'odc-quota-panel' },
       h('div', { className: 'odc-card-head' },
         h('div', null,
           h('h3', null, '套餐赠送窗口'),
           tierLine === '' ? null : h('p', { className: 'odc-hint' }, tierLine)),
-        h('div', { className: 'odc-actions' },
-          h('span', { className: 'odc-label' }, QUOTA_LABELS[quota.state]),
-          quota.stale ? h('span', { className: 'odc-chip' }, '上次成功读数') : null)),
+        quota.stale ? h('span', { className: 'odc-chip' }, '上次成功读数') : null),
+      h('div', { className: 'odc-quota-status', 'data-state': quota.state, 'data-tone': quotaStatus.tone },
+        h('span', { className: 'odc-state-mark', 'aria-hidden': true }, quotaStatus.icon),
+        h('div', { className: 'odc-state-copy' },
+          h('strong', null, quotaStatus.title),
+          quotaStatus.window === undefined ? null : h('span', { className: 'odc-hint' }, `${windowLabel(quotaStatus.window.durationSeconds).replace('赠送窗口', '')} · 剩余 ${Math.max(0, Math.min(100, 100 - quotaStatus.window.percent)).toFixed(1)}%`,
+            quotaStatus.window.resetsAt === undefined ? null : h(React.Fragment, null, ' · ', h(RelativeDeadline, { at: quotaStatus.window.resetsAt, dueText: '等待更新', titleLabel: '预计恢复时间', futureSuffix: '恢复' }))))),
       quota.windows.length === 0
         ? quota.eligible === false
           ? h('p', { className: 'odc-hint', role: 'status' }, '当前账号未开通 Design Plan，没有赠送额度窗口。')
@@ -335,34 +428,35 @@ export function QuotaView({ quota, nextAutoRefreshAt, refreshIntervalSeconds }: 
         : quota.windows.map((window, index) => {
           const label = windowLabel(window.durationSeconds);
           const remainingPercent = Math.max(0, Math.min(100, 100 - window.percent));
-          return h('section', { className: 'odc-window', key: `${window.durationSeconds}-${index}`, 'aria-label': label },
+          const tone = quota.state === 'ok' && !quota.stale && !windowDue(window, now) ? windowTone(window) : 'neutral';
+          return h('section', { className: 'odc-window', key: `${window.durationSeconds}-${index}`, 'aria-label': label, 'data-tone': tone },
             h('div', { className: 'odc-window-head' },
               h('h4', null, label),
               h('div', { className: 'odc-window-remaining' },
-                h('strong', null, `${remainingPercent.toFixed(1)}%`), h('span', { className: 'odc-label' }, '剩余'))),
+                h('strong', null, `${remainingPercent.toFixed(1)}%`), h('span', { className: 'odc-label' }, '剩余比例'))),
             h('progress', { max: 100, value: remainingPercent, 'aria-label': `${label}剩余额度` }),
-            h('dl', { className: 'odc-window-usage', 'aria-label': '窗口用量明细' },
-              [{ label: '已用', value: window.used }, { label: '上限', value: window.limit }, { label: '剩余', value: window.remaining ?? '—' }].map(item =>
-                h('div', { key: item.label }, h('dt', null, item.label), h('dd', null, item.value)))),
-            h('div', { className: 'odc-window-reset' },
-              h('span', { className: 'odc-label' }, '下次恢复'),
-              window.resetsAt === undefined ? h('span', null, '—') : h('time', { dateTime: window.resetsAt }, formatTime(window.resetsAt))),
-            window.windowStart === undefined && window.resetMode === undefined ? null : h('details', { className: 'odc-window-details' },
-              h('summary', null, '窗口详情'),
-              h('dl', null,
-                window.windowStart === undefined ? null : h('div', null, h('dt', null, '窗口开始'), h('dd', null, h('time', { dateTime: window.windowStart }, formatTime(window.windowStart)))),
-                window.resetMode === undefined ? null : h('div', null, h('dt', null, '重置方式'), h('dd', null, RESET_MODE_LABELS[window.resetMode] ?? window.resetMode)))));
+            h('p', { className: 'odc-window-usage', title: `已用 ${window.used} / 总计 ${window.limit} 积分`, 'aria-label': `窗口积分：已用 ${window.used}，总计 ${window.limit}` }, `已用 ${formatWindowCredits(window.used)} / 总计 ${formatWindowCredits(window.limit)} 积分`),
+            h('div', { className: 'odc-window-bottom' },
+              h('div', { className: 'odc-window-reset' },
+                h('span', { className: 'odc-label' }, '下次恢复'),
+                h(RelativeDeadline, { at: window.resetsAt, dueText: '已到恢复时间，等待更新', titleLabel: '预计恢复时间' })),
+              h('details', { className: 'odc-window-details' },
+                h('summary', null, '窗口详情'),
+                h('dl', null,
+                  h('div', null, h('dt', null, '接口剩余积分'), h('dd', null, window.remaining === undefined ? '—' : window.remaining)),
+                  window.windowStart === undefined ? null : h('div', null, h('dt', null, '窗口开始'), h('dd', null, h('time', { dateTime: window.windowStart }, formatTime(window.windowStart)))),
+                  window.resetMode === undefined ? null : h('div', null, h('dt', null, '重置方式'), h('dd', null, RESET_MODE_LABELS[window.resetMode] ?? window.resetMode))))));
         })),
-    h('div', { className: 'odc-quota-grid' }, metrics.map(metric =>
-      h('div', { className: 'odc-card odc-metric', key: metric.label },
-        h('span', { className: 'odc-label' }, metric.label),
-        h('strong', { className: 'odc-metric-value' }, metric.value),
-        h('span', { className: 'odc-hint' }, metric.hint)))),
-    h('div', { className: 'odc-quota-grid odc-timing', 'aria-label': '额度时间安排' }, timing.map(metric =>
-      h('div', { className: 'odc-metric', key: metric.label },
-        h('span', { className: 'odc-label' }, metric.label),
-        h('strong', { className: 'odc-metric-value odc-metric-text' }, metric.value),
-        h('span', { className: 'odc-hint' }, metric.hint)))),
+    h('section', { className: 'odc-card', 'aria-label': '钱包余额' },
+      h('h3', null, '钱包余额'),
+      h('dl', { className: 'odc-balance-list' }, metrics.map(metric =>
+        h('div', { className: 'odc-balance-row odc-metric', key: metric.label },
+          h('div', null, h('dt', { title: metric.hint }, metric.label)),
+          h('dd', null, h('strong', { className: 'odc-metric-value' }, metric.value)))))),
+    h('dl', { className: 'odc-card odc-timing', 'aria-label': '额度时间安排' }, timing.map(metric =>
+      h('div', { className: 'odc-timing-row odc-metric', key: metric.label },
+        h('div', null, h('dt', null, metric.label), h('span', { className: 'odc-hint' }, metric.hint)),
+        h('dd', null, h('strong', { className: 'odc-metric-value odc-metric-text' }, metric.value))))),
     h('dl', { className: 'odc-quota-footer', 'aria-label': '额度数据来源与更新时间' },
       h('div', null, h('dt', null, '最近更新'), h('dd', null, h('time', { dateTime: quota.updatedAt }, formatTime(quota.updatedAt)))),
       quota.source === undefined ? null : h('div', null, h('dt', null, '数据来源'), h('dd', null, SOURCE_LABELS[quota.source]))),
@@ -488,7 +582,7 @@ export function Overview({ status, busy, onRefresh, nextAutoRefreshAt, refreshIn
     h('div', { className: 'odc-card-head' },
       h('div', null, h('h3', null, '额度概览'), h('p', { className: 'odc-hint' }, '查看套餐用量、订阅余额和充值余额。')),
       h('button', { className: 'odc-button', type: 'button', disabled: busy, onClick: onRefresh }, busy ? '刷新中…' : '刷新额度')),
-    h(QuotaView, { quota: status?.quota, nextAutoRefreshAt, refreshIntervalSeconds }));
+    h(QuotaView, { quota: status?.quota, nextAutoRefreshAt, refreshIntervalSeconds, busy }));
 }
 
 type NumericKey = 'temperature' | 'topP' | 'maxTokens' | 'contextWindow';
@@ -595,6 +689,22 @@ function EffortField({ id, model, value, disabled, onChange }: {
     }, error ?? (invalidDefault ? '已保存的档位不适用于当前模型或协议，请选择其他档位或继承默认。' : unavailable ? '当前模型或协议未提供可调整的思考档位。' : '留空使用服务端默认档位。')));
 }
 
+const PRICE_SITE = 'https://corouter.open-design.ai/zh/models/';
+function priceUnit(tier: PriceTier): string {
+  return tier.unit === 'per_1m_tokens' ? '每百万 Token' : tier.unit === 'per_1k_tokens' ? '每千 Token' : '计价单位未标明';
+}
+function priceAmount(amount: number | null, currency: PriceTier['currency']): string {
+  if (amount === null) return '未列出';
+  return currency === 'USD' ? `$${amount}` : `${amount}（币种未标明）`;
+}
+function PriceDetails({ tiers }: { tiers: readonly PriceTier[] }) {
+  return h('div', { className: 'odc-price-details', 'aria-label': '官网价格详情' }, tiers.map((tier, index) =>
+    h('section', { className: 'odc-price-tier', key: `${index}-${tier.label}` },
+      h('strong', null, `${tier.label} · ${priceUnit(tier)}`),
+      h('dl', null, ([['输入', tier.input], ['输出', tier.output], ['缓存读取', tier.cacheRead], ['缓存写入', tier.cacheWrite]] as const).map(([label, value]) =>
+        h('div', { key: label }, h('dt', null, label), h('dd', null, priceAmount(value, tier.currency))))))));
+}
+
 export interface ModelRowProps {
   model: StatusModel;
   settings: ModelSettings;
@@ -602,10 +712,12 @@ export interface ModelRowProps {
   authoritative: boolean;
   writable: boolean;
   pending: boolean;
+  price?: PriceCatalog['models'][number] | undefined;
+  priceKnown?: boolean | undefined;
   onCommit: (next: ModelSettings | undefined) => Promise<boolean>;
 }
 
-export function ModelRow({ model, settings, authoritative, writable, pending, onCommit }: ModelRowProps) {
+export function ModelRow({ model, settings, authoritative, writable, pending, price, priceKnown = false, onCommit }: ModelRowProps) {
   const id = React.useId();
   const mounted = useMounted();
   const [error, setError] = React.useState<string | undefined>(undefined);
@@ -653,9 +765,12 @@ export function ModelRow({ model, settings, authoritative, writable, pending, on
       h('div', { className: 'odc-actions' },
         enabled ? null : h('span', { className: 'odc-chip' }, '已禁用'),
         h('button', { className: 'odc-button odc-button-small', type: 'button', disabled: !writable || pending || !hasOverrides, onClick: () => { void reset(); } }, '重置'))),
+    price !== undefined ? h('p', { className: 'odc-price-summary' }, `官网参考 · ${price.tiers[0]!.label} · 输入 ${priceAmount(price.tiers[0]!.input, price.tiers[0]!.currency)} / 输出 ${priceAmount(price.tiers[0]!.output, price.tiers[0]!.currency)} · ${priceUnit(price.tiers[0]!)}${price.tiers.length > 1 ? ` · 共 ${price.tiers.length} 档` : ''}`)
+      : priceKnown ? h('p', { className: 'odc-price-summary' }, '官网暂未列出此模型价格') : null,
     h('details', { className: 'odc-model-details' },
-      h('summary', { 'aria-label': `${model.name} 参数设置` }, hasOverrides ? '参数设置 · 已自定义' : '参数设置 · 使用默认值'),
+      h('summary', { 'aria-label': `${model.name} 参数设置${price === undefined ? '' : '与价格'}` }, `${price === undefined ? '参数设置' : '参数与价格'} · ${hasOverrides ? '已自定义' : '使用默认值'}`),
       h('p', { className: 'odc-model-meta' }, facts),
+      price === undefined ? null : h(PriceDetails, { tiers: price.tiers }),
       h('p', { className: 'odc-hint' }, '数值离开输入框后保存，留空继承默认。'),
       h('div', { className: 'odc-model-editor' },
         NUMERIC_ORDER.map(key => h(OptionalNumberField, {
@@ -676,7 +791,7 @@ export function ModelRow({ model, settings, authoritative, writable, pending, on
     error !== undefined ? h('p', { className: 'odc-hint odc-field-error', role: 'alert' }, error) : null);
 }
 
-function ModelGroup({ title, group, models, settingsMap, authoritative, writable, pending, onCommit }: {
+function ModelGroup({ title, group, models, settingsMap, authoritative, writable, pending, onCommit, prices }: {
   title: string;
   group: StatusModel['group'];
   models: readonly StatusModel[];
@@ -684,6 +799,7 @@ function ModelGroup({ title, group, models, settingsMap, authoritative, writable
   authoritative: boolean;
   writable: boolean;
   pending: boolean;
+  prices?: PriceCatalog | undefined;
   onCommit: (id: string, next: ModelSettings | undefined) => Promise<boolean>;
 }) {
   const [query, setQuery] = React.useState('');
@@ -708,7 +824,7 @@ function ModelGroup({ title, group, models, settingsMap, authoritative, writable
       h('ul', { id: `${id}-list`, className: 'odc-model-list' }, visible.map(model =>
         h(ModelRow, {
           key: model.id, model, settings: modelSettingsEntry(settingsMap, model.id), authoritative,
-          writable, pending,
+          writable, pending, price: prices?.models.find(entry => entry.id === model.id), priceKnown: prices !== undefined && (prices.state !== 'error' || prices.stale),
           onCommit: next => onCommit(model.id, next),
         }))),
     normalized === '' && filtered.length > 6 ? h('button', {
@@ -726,9 +842,12 @@ export interface ModelsProps {
   onRefreshModels: () => void;
   refreshingModels: boolean;
   notice: Notice | null;
+  prices?: PriceCatalog | undefined;
+  refreshingPrices?: boolean | undefined;
+  onRefreshPrices?: (() => void) | undefined;
 }
 
-export function Models({ status, formSnapshot, setFormField, pendingField, onRefreshModels, refreshingModels, notice }: ModelsProps) {
+export function Models({ status, formSnapshot, setFormField, pendingField, onRefreshModels, refreshingModels, notice, prices, refreshingPrices = false, onRefreshPrices }: ModelsProps) {
   // A ready form snapshot is authoritative; before it is ready, trust the Host's credential-free
   // mirror instead of assuming every model is enabled.
   const formReady = formSnapshot.status === 'ready' && formSnapshot.value !== undefined;
@@ -771,10 +890,16 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
     status?.apiKeyConfigured === false ? h('p', { className: 'odc-hint' }, '刷新模型需要可用的 API Key；保存 Key 后重试。') : null,
     status?.modelsError !== undefined ? h('p', { className: 'odc-notice', 'data-kind': 'error', role: 'alert' }, status.modelsError) : null,
     h(NoticeView, { notice }),
+    h('section', { className: 'odc-card', 'aria-label': '官网模型价格' },
+      h('div', { className: 'odc-pricing-head' },
+        h('h3', null, '官网参考价格'),
+        h('button', { className: 'odc-button', type: 'button', disabled: refreshingPrices || onRefreshPrices === undefined, onClick: onRefreshPrices }, refreshingPrices ? '正在更新价格…' : '更新价格')),
+      h('p', { className: 'odc-hint', role: 'status' }, refreshingPrices ? '正在读取官网价格…' : prices === undefined ? '等待读取官网价格。' : prices.state === 'error' ? prices.stale ? `读取失败，显示上次价格（${formatTime(prices.fetchedAt)}）。` : '官网价格暂不可用，请稍后重试。' : `已更新：${formatTime(prices.fetchedAt)}${prices.state === 'partial' ? '；部分价格未能读取' : ''}`),
+      h('p', { className: 'odc-hint' }, '官网分档价格仅供参考；实际费用以账户账单为准。', ' ', h('a', { className: 'odc-link', href: PRICE_SITE, target: '_blank', rel: 'noreferrer noopener' }, '查看官网价格'))),
     models.length === 0 ? h('p', { className: 'odc-hint', role: 'status' }, '暂无可用模型；可刷新模型列表后重试。') :
       h('div', { className: 'odc-model-groups' },
-        h(ModelGroup, { title: '套餐赠送模型', group: 'plan', models, settingsMap, authoritative, writable, pending, onCommit: commit }),
-        h(ModelGroup, { title: '付费模型', group: 'paid', models, settingsMap, authoritative, writable, pending, onCommit: commit })));
+        h(ModelGroup, { title: '套餐赠送模型', group: 'plan', models, settingsMap, authoritative, writable, pending, onCommit: commit, prices }),
+        h(ModelGroup, { title: '付费模型', group: 'paid', models, settingsMap, authoritative, writable, pending, onCommit: commit, prices })));
 }
 
 export interface AdvancedProps {
@@ -1192,6 +1317,10 @@ export function SettingsPage({ caller, form }: SettingsProps) {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [refreshingModels, setRefreshingModels] = React.useState(false);
+  const [prices, setPrices] = React.useState<PriceCatalog>();
+  const [refreshingPrices, setRefreshingPrices] = React.useState(false);
+  const pricesBusy = React.useRef(false);
+  const pricesRequested = React.useRef(false);
   const [modelsNotice, setModelsNotice] = React.useState<Notice | null>(null);
   const [pendingField, setPendingField] = React.useState<readonly string[]>([]);
   const writeTail = React.useRef<Promise<void>>(Promise.resolve());
@@ -1349,6 +1478,28 @@ export function SettingsPage({ caller, form }: SettingsProps) {
     }
   }, [caller, mounted]);
 
+  const refreshPrices = React.useCallback(async () => {
+    if (pricesBusy.current) return;
+    pricesBusy.current = true;
+    setRefreshingPrices(true);
+    try {
+      const next = await caller<PriceCatalog>('refreshPrices');
+      if (mounted.current) setPrices(next);
+    } catch {
+      if (mounted.current) setPrices(previous => previous?.fetchedAt === undefined
+        ? { state: 'error', stale: false, models: [] }
+        : { ...previous, state: 'error', stale: true });
+    } finally {
+      pricesBusy.current = false;
+      if (mounted.current) setRefreshingPrices(false);
+    }
+  }, [caller, mounted]);
+  React.useEffect(() => {
+    if (tab !== 'models' || pricesRequested.current) return;
+    pricesRequested.current = true;
+    void refreshPrices();
+  }, [tab, refreshPrices]);
+
   const loginState = status?.login.state;
   const loginActive = loginState !== undefined && loginInFlight(loginState);
   React.useEffect(() => {
@@ -1411,6 +1562,7 @@ export function SettingsPage({ caller, form }: SettingsProps) {
     content = h(Models, {
       status, formSnapshot, setFormField, pendingField,
       onRefreshModels: () => { void refreshModels(); }, refreshingModels, notice: modelsNotice,
+      prices, refreshingPrices, onRefreshPrices: () => { void refreshPrices(); },
     });
   } else if (tab === 'connection') {
     content = h(Connection, { status, formSnapshot, setFormField, pendingField, caller, onLoginStatus: acceptLoginStatus, onStatus: acceptStatus });

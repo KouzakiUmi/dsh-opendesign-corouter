@@ -120,6 +120,43 @@ const signalOf = (call: Wire): AbortSignal => {
   return signal;
 };
 
+test('public price reads are deduplicated, keep old quotes on error and recover', async () => {
+  const calls: Wire[] = [];
+  const deps = hostDependencies(calls, () => list());
+  const pending = deferred<Awaited<ReturnType<NonNullable<HostDependencies['fetchPrices']>>>>();
+  let attempts = 0;
+  deps.fetchPrices = async options => {
+    assert.ok(options?.signal instanceof AbortSignal);
+    attempts += 1;
+    if (attempts === 1) return pending.promise;
+    if (attempts === 2) throw new Error('private server content');
+    return { ...await pending.promise, fetchedAt: '2030-01-02T00:00:00Z' };
+  };
+  const { service, dispose } = await host(runtimeConfig(), deps);
+  try {
+    const first = service.refreshPrices(), second = service.refreshPrices();
+    assert.equal(attempts, 1);
+    pending.resolve({ status: 'ok', source: { kind: 'official-website', origin: 'https://corouter.open-design.ai', catalogUrl: 'https://corouter.open-design.ai/zh/models/' }, fetchedAt: '2030-01-01T00:00:00Z', currency: 'USD', unit: 'per_1m_tokens', issues: [], models: [{
+      id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', provider: null, slug: null, detailUrl: null,
+      tiers: [{ index: 0, label: '标准', currency: 'USD', unit: 'per_1m_tokens', input: 2, output: 10, cacheRead: 0.1, cacheWrite: null }],
+    }] });
+    assert.deepEqual(await first, await second);
+    const old = await first;
+    assert.equal(old.models[0]?.tiers[0]?.cacheWrite, null);
+    const failed = await service.refreshPrices();
+    assert.equal(failed.state, 'error');
+    assert.equal(failed.stale, true);
+    assert.equal(failed.fetchedAt, old.fetchedAt);
+    assert.deepEqual(failed.models, old.models);
+    assert.doesNotMatch(JSON.stringify(failed), /private server content/u);
+    const recovered = await service.refreshPrices();
+    assert.equal(recovered.state, 'ok');
+    assert.equal(recovered.stale, false);
+    assert.equal(recovered.fetchedAt, '2030-01-02T00:00:00Z');
+    assert.equal(calls.length, 0, 'prices never invoke gateway discovery');
+  } finally { await dispose(); }
+});
+
 test('selector update failure preserves the previous catalog and a later refresh can recover', async () => {
   const calls: Wire[] = [];
   let id = 'previous-model', rejectNotification = false;

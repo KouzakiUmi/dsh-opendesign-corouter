@@ -2,9 +2,10 @@
 import { z } from 'zod';
 import { createTypertRemoteInfo } from '@deepseek-ai/dsh-typert-protocol/remote-info';
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol';
-import { parseStatus, parseQuotaSnapshot, parseLoginState, parseStartLoginRequest, parseCancelLoginRequest, parseActivationOpenState, parseSaveApiKeyRequest } from '../remote.js';
-import type { Status, QuotaSnapshot, LoginState, StartLoginRequest, CancelLoginRequest, ActivationOpenState, SaveApiKeyRequest } from '../remote.js';
+import { parseStatus, parsePriceCatalog, parseQuotaSnapshot, parseLoginState, parseStartLoginRequest, parseCancelLoginRequest, parseActivationOpenState, parseSaveApiKeyRequest } from '../remote.js';
+import type { Status, PriceCatalog, QuotaSnapshot, LoginState, StartLoginRequest, CancelLoginRequest, ActivationOpenState, SaveApiKeyRequest } from '../remote.js';
 const StatusCodec={mode:'strict' as const,typeSymbol:"dsh-opendesign-corouter#Status",create:()=>z.unknown().transform(value=>parseStatus(value))};
+const PriceCatalogCodec={mode:'strict' as const,typeSymbol:"dsh-opendesign-corouter#PriceCatalog",create:()=>z.unknown().transform(value=>parsePriceCatalog(value))};
 const QuotaSnapshotCodec={mode:'strict' as const,typeSymbol:"dsh-opendesign-corouter#QuotaSnapshot",create:()=>z.unknown().transform(value=>parseQuotaSnapshot(value))};
 const LoginStateCodec={mode:'strict' as const,typeSymbol:"dsh-opendesign-corouter#LoginState",create:()=>z.unknown().transform(value=>parseLoginState(value))};
 const StartLoginRequestCodec={mode:'strict' as const,typeSymbol:"dsh-opendesign-corouter#StartLoginRequest",create:()=>z.unknown().transform(value=>parseStartLoginRequest(value))};
@@ -13,6 +14,7 @@ const ActivationOpenStateCodec={mode:'strict' as const,typeSymbol:"dsh-opendesig
 const SaveApiKeyRequestCodec={mode:'strict' as const,typeSymbol:"dsh-opendesign-corouter#SaveApiKeyRequest",create:()=>z.unknown().transform(value=>parseSaveApiKeyRequest(value))};
 export type CoRouterRemote={status:()=>Promise<RemoteResult<Status>>;
 refreshModels:()=>Promise<RemoteResult<Status>>;
+refreshPrices:()=>Promise<RemoteResult<PriceCatalog>>;
 refreshQuota:()=>Promise<RemoteResult<QuotaSnapshot>>;
 refreshQuotaNow:()=>Promise<RemoteResult<QuotaSnapshot>>;
 startLogin:(input:StartLoginRequest)=>Promise<RemoteResult<LoginState>>;
@@ -23,6 +25,7 @@ saveApiKey:(input:SaveApiKeyRequest)=>Promise<RemoteResult<Status>>;};
 declare module '@deepseek-ai/dsh-typert-protocol' { interface TypertRemoteNamespaceMap { openDesignCoRouter:CoRouterRemote } }
 export const TYPERT_REMOTE=createTypertRemoteInfo({package:"dsh-opendesign-corouter",methods:{"openDesignCoRouter/status":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[],result:StatusCodec},
 "openDesignCoRouter/refreshModels":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[],result:StatusCodec},
+"openDesignCoRouter/refreshPrices":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[],result:PriceCatalogCodec},
 "openDesignCoRouter/refreshQuota":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[],result:QuotaSnapshotCodec},
 "openDesignCoRouter/refreshQuotaNow":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[],result:QuotaSnapshotCodec},
 "openDesignCoRouter/startLogin":{service:"openDesignCoRouter",invocation:{kind:'direct' as const},parameters:[{name:"input",source:'json' as const,codec:StartLoginRequestCodec,strictCodec:StartLoginRequestCodec}],result:LoginStateCodec},

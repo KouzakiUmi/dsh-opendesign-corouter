@@ -12,6 +12,7 @@ import {
   parseSaveApiKeyRequest,
   parseStartLoginRequest,
   parseStatus,
+  parsePriceCatalog,
   type Status,
 } from '../src/remote.js';
 
@@ -46,10 +47,10 @@ function through(method: string, value: unknown): unknown {
   return descriptor.result.create().parse(value);
 }
 
-test('nine descriptors state every wire fact typert validates', () => {
+test('ten descriptors state every wire fact typert validates', () => {
   const descriptors = openDesignCoRouterRemote.descriptors;
   assert.equal(openDesignCoRouterRemote.package, REMOTE_PACKAGE);
-  assert.deepEqual(descriptors.map(d => d.method), ['status', 'refreshModels', 'refreshQuota', 'refreshQuotaNow', 'startLogin', 'loginStatus', 'cancelLogin', 'openActivationPage', 'saveApiKey']);
+  assert.deepEqual(descriptors.map(d => d.method), ['status', 'refreshModels', 'refreshPrices', 'refreshQuota', 'refreshQuotaNow', 'startLogin', 'loginStatus', 'cancelLogin', 'openActivationPage', 'saveApiKey']);
   for (const descriptor of descriptors) {
     // typert rejects an empty/#-bearing id, a foreign service, and any non-RPC segment.
     assert.equal(descriptor.id, `${REMOTE_PACKAGE}#${REMOTE_SERVICE}/${descriptor.method}`);
@@ -96,6 +97,19 @@ test('status round-trips, and nothing outside the allowlist survives', () => {
   assert.equal('cookie' in sanitized, false);
   assert.equal(JSON.stringify(sanitized).includes('sk-live'), false);
   assert.equal(JSON.stringify(sanitized).includes('secret=1'), false);
+});
+
+test('public price payload is bounded, sanitised and keeps missing rates unknown', () => {
+  const snapshot = { state: 'ok', stale: false, fetchedAt: '2026-10-27T08:00:00Z', secret: 'never-return', models: [{
+    id: 'deepseek-v4.1-flash', hidden: 'ignored', tiers: [{ label: '不按输入长度分档', currency: 'USD', unit: 'per_1m_tokens', input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: null, hidden: 'ignored' }],
+  }] };
+  const parsed = parsePriceCatalog(snapshot);
+  assert.equal(parsed.models[0]?.tiers[0]?.cacheWrite, null);
+  assert.equal(JSON.stringify(parsed).includes('never-return'), false);
+  assert.equal(JSON.stringify(parsed).includes('ignored'), false);
+  assert.throws(() => parsePriceCatalog({ ...snapshot, models: [...snapshot.models, snapshot.models[0]] }), /重复/u);
+  assert.throws(() => parsePriceCatalog({ ...snapshot, models: [{ ...snapshot.models[0], tiers: [{ ...snapshot.models[0]!.tiers[0], input: -1 }] }] }), /价格/u);
+  assert.throws(() => parsePriceCatalog({ ...snapshot, fetchedAt: undefined, stale: true }), /更新时间/u);
 });
 
 test('credential source is an optional credential-free enum and preserves legacy status payloads', () => {

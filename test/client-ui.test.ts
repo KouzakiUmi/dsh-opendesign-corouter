@@ -8,6 +8,9 @@ import {
   LoginApproval,
   QuotaView,
   SettingsPage,
+  formatRefreshCountdown,
+  formatRelativeDeadline,
+  formatWindowCredits,
   formatTime,
   formatUsd,
   modelEnabled,
@@ -15,6 +18,7 @@ import {
   parseNumberInput,
   protocolEndpoint,
   quotaAutoRefresh,
+  quotaStatusView,
   tabAfter,
   writeModelSettings,
   type FormSnapshot,
@@ -197,6 +201,36 @@ test('zero is a real amount rather than an unknown value', () => {
   assert.equal(formatUsd(Number.NaN), '—');
 });
 
+test('refresh countdown reflects the planned instant and handles invalid or due times', () => {
+  const now = Date.parse('2030-01-01T00:00:00.000Z');
+  const inMs = (ms: number) => new Date(now + ms).toISOString();
+  assert.equal(formatRefreshCountdown(inMs(1500), now), '2秒后');
+  assert.equal(formatRefreshCountdown(inMs(61_000), now), '1分1秒后');
+  assert.equal(formatRefreshCountdown(inMs(3_660_000), now), '1小时1分钟后');
+  assert.equal(formatRefreshCountdown(inMs(90_000_000), now), '1天1小时后');
+  assert.equal(formatRefreshCountdown(inMs(0), now), '即将刷新');
+  assert.equal(formatRelativeDeadline(inMs(-1000), now, '已到恢复时间，等待更新'), '已到恢复时间，等待更新');
+  assert.equal(formatRefreshCountdown('invalid', now), '—');
+  assert.equal(formatRefreshCountdown(undefined, now), '—');
+});
+
+test('window status distinguishes healthy, low, exhausted, stale and unknown readings', () => {
+  const now = Date.parse('2026-10-27T00:00:00Z');
+  const window = { durationSeconds: 18000, used: 20, limit: 100, percent: 20 };
+  const base = { ...quota, state: 'ok' as const, eligible: true, windows: [window] };
+  assert.equal(quotaStatusView(base, now).tone, 'good');
+  assert.equal(quotaStatusView({ ...base, windows: [window, { ...window, percent: 80 }] }, now).tone, 'warn');
+  assert.equal(quotaStatusView({ ...base, windows: [{ ...window, percent: 91 }] }, now).title, '赠送窗口额度即将用尽');
+  assert.equal(quotaStatusView({ ...base, windows: [{ ...window, percent: 100 }] }, now).tone, 'critical');
+  assert.equal(quotaStatusView({ ...base, windows: [{ ...window, resetsAt: '2026-10-26T00:00:00Z' }] }, now).title, '等待更新窗口额度');
+  assert.notEqual(quotaStatusView({ ...base, stale: true }, now).tone, 'good');
+  assert.notEqual(quotaStatusView({ ...base, state: 'partial' }, now).tone, 'good');
+  assert.notEqual(quotaStatusView({ ...base, windows: [] }, now).tone, 'good');
+  assert.equal(quotaStatusView({ ...base, state: 'error', stale: true }, now).title, '暂时无法读取额度');
+  assert.equal(formatWindowCredits(177900), '177.9K');
+  assert.equal(formatWindowCredits(450000), '450.0K');
+});
+
 test('subscription end, window resets and the auto refresh are separate timestamps', () => {
   const reset = '2030-01-01T00:00:00.000Z';
   const laterReset = '2030-01-02T00:00:00.000Z';
@@ -236,10 +270,10 @@ test('quota windows separate remaining, usage, recovery and optional technical d
   assert.match(html, /<progress[^>]*value="76"[^>]*aria-label="5 小时赠送窗口剩余额度"/u);
   assert.match(html, /<progress[^>]*value="0"/u);
   assert.equal((html.match(/class="odc-window-usage"/gu) ?? []).length, 2);
-  assert.match(html, /<dt>已用<\/dt><dd>120<\/dd>/u);
-  assert.match(html, /<dt>上限<\/dt><dd>500<\/dd>/u);
-  assert.match(html, /<dt>剩余<\/dt><dd>380<\/dd>/u);
-  assert.match(html, /<dt>剩余<\/dt><dd>—<\/dd>/u, 'a missing remaining amount is not derived');
+  assert.match(html, /已用 120 \/ 总计 500 积分/u);
+  assert.match(html, /aria-label="窗口积分：已用 120，总计 500"/u);
+  assert.match(html, /<dt>接口剩余积分<\/dt><dd>380<\/dd>/u);
+  assert.match(html, /<dt>接口剩余积分<\/dt><dd>—<\/dd>/u, 'a missing remaining amount is not derived');
   assert.match(html, /class="odc-window-reset"/u);
   assert.match(html, /<time dateTime="2030-01-01T00:00:00.000Z"/u);
   assert.match(html, /<details class="odc-window-details"><summary>窗口详情<\/summary>/u);
@@ -264,6 +298,10 @@ test('login-required quota does not claim an automatic refresh and stale data is
   const paused = renderToStaticMarkup(h(QuotaView, { quota: { ...quota, autoRefreshPaused: true, refreshFailures: 6 }, refreshIntervalSeconds: 60 }));
   assert.match(paused, /自动重试已暂停/u);
   assert.doesNotMatch(paused, /每 60 秒自动刷新/u);
+  const busy = renderToStaticMarkup(h(QuotaView, { quota, nextAutoRefreshAt: '2030-01-01T00:00:00Z', busy: true }));
+  assert.match(busy, /刷新中…/u);
+  const pausedBusy = renderToStaticMarkup(h(QuotaView, { quota: { ...quota, autoRefreshPaused: true }, nextAutoRefreshAt: '2030-01-01T00:00:00Z', busy: true }));
+  assert.doesNotMatch(pausedBusy, /刷新中…/u);
 });
 
 test('tab keyboard model wraps and supports Home and End', () => {
