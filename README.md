@@ -32,7 +32,7 @@ dsh plugin --profile web add dsh-opendesign-corouter
 也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
-dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.7.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.8.tgz
 ```
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。
@@ -59,6 +59,8 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.7.tgz
 
 推理协议可选 **OpenAI Chat Completions、OpenAI Responses、Anthropic Messages**。模型发现始终使用当前网关的 OpenAI 兼容 `/models` 接口，不随推理协议切换。
 
+思考档位按精确型号的厂商文档维护，并按当前协议筛选。33 款提供离散档位，4 款为固定思考或开关/预算控制，Muse Wonder 的精确别名尚待确认。旧配置中的无效默认档位可在参数设置中改为“继承默认”。[逐模型来源与网关验证状态](docs/reasoning-evidence.md)
+
 > **分组不等于计费隔离。** 赠送额度耗尽后是否转扣套餐余额或钱包，由服务端和账号权益决定。选择“套餐赠送”不能保证绝不消耗钱包余额。
 
 ### 四层额度，不重复相加
@@ -79,11 +81,11 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.7.tgz
   <img src="docs/previews/theme-light.png" width="1040" alt="连接与登录页，展示桌面优先开关、独立登录按钮和不回填的 API Key 输入框；模拟数据">
 </picture>
 
-### 空轮监控，只作用于赠送模型
+### DeepSeek V4.1 Flash 空回答检测
 
 独立开关，默认开启。参考 [dsh-empty-turn-guard](https://github.com/FYTXY/dsh-empty-turn-guard)，将“正常 stop、没有工具调用、答案为空或只剩协议残渣”的工具对话标成 `EMPTY_RESPONSE`。
 
-检测到空回答后，由 DSH 的重试策略决定是否重试，**重复请求可能额外消耗额度**。该监控仅用于套餐赠送模型的工具对话。
+检测到空回答后，由 DSH 的重试策略决定是否重试，**重复请求可能额外消耗额度**。该附加监控仅用于 DeepSeek V4.1 Flash 的工具对话，识别 DSML、thinking 及 `<rea:tool_calls>` 残留。
 
 ## 使用前先知道
 

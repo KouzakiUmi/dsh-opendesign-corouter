@@ -10,6 +10,7 @@ import { chatMessages, chatTools } from '../conversion.js';
 import { consumeSse } from '../stream.js';
 import { streamHeaders } from './headers.js';
 import { inferenceEndpoint } from '../protocol-options.js';
+import { protocolAcceptsEffort } from '../reasoning.js';
 import type { Protocol, ProtocolContext, WireRequest } from './types.js';
 
 /** 构造 Chat Completions 请求。 */
@@ -26,7 +27,10 @@ export function buildChatCompletionsRequest(ctx: ProtocolContext): WireRequest {
     if (!Number.isSafeInteger(options.maxTokens) || options.maxTokens <= 0) throw new LlmError('maxTokens 必须是正整数', 'INVALID_REQUEST');
     body.max_tokens = options.maxTokens;
   }
-  if (options.reasoningEffort !== undefined) body.reasoning_effort = options.reasoningEffort;
+  if (options.reasoningEffort !== undefined) {
+    if (!protocolAcceptsEffort('chat-completions', options.reasoningEffort)) throw new LlmError('Chat Completions 协议不接受该思考深度', 'UNSUPPORTED_OPTION');
+    body.reasoning_effort = options.reasoningEffort;
+  }
   if (options.stop?.length) body.stop = options.stop;
   return { url: inferenceEndpoint(ctx.baseURL, 'chat-completions'), headers: streamHeaders(ctx.apiKey), body };
 }

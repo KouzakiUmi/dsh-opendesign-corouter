@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { Config, assertBaseURL, readConfig } from '../src/config.js';
+import Schema from '@deepseek-ai/schemastery';
+import { volatileForm } from '../node_modules/@deepseek-ai/dsh-settings/lib/types/schema.js';
 test('configuration rejects unsafe URLs before persistence and exposes live defaults', () => {
   const config = readConfig(Config({}));
   assert.equal(config.emptyTurnGuard, true);
@@ -26,7 +28,7 @@ test('configuration rejects unsafe URLs before persistence and exposes live defa
 type DecodedConfig = (value: Parameters<typeof Config>[0]) => ReturnType<typeof readConfig>;
 
 /** Execute the installed constructor in an isolated realm, including its new Function. */
-function rehydrateInFreshVM(): DecodedConfig {
+function rehydrateInFreshVM(serialized = JSON.stringify(Config.toJSON())): DecodedConfig {
   const require = createRequire(import.meta.url);
   const entry = require.resolve('@deepseek-ai/schemastery');
   return runInNewContext(`${readFileSync(entry, 'utf8')}
@@ -35,9 +37,25 @@ function rehydrateInFreshVM(): DecodedConfig {
     for (const node of Object.values(wire.refs)) delete node.meta.volatile;
     new module.exports(wire);`, {
     module: { exports: {} }, require: createRequire(entry), URL,
-    schemaJSON: JSON.stringify(Config.toJSON()),
+    schemaJSON: serialized,
   }) as DecodedConfig;
 }
+
+test('real Host volatile form projection survives repeated JSON hops before browser validation', () => {
+  const form = volatileForm(Config);
+  assert.ok(form);
+  let current = form;
+  const values = readConfig(Config({ emptyTurnGuard: false, useDesktopCredential: false }));
+  for (let hop = 0; hop < 4; hop++) {
+    const wire = JSON.stringify(current.toJSON());
+    const decoded = rehydrateInFreshVM(wire);
+    assert.deepEqual(JSON.parse(JSON.stringify(decoded(structuredClone(values)))), JSON.parse(JSON.stringify(values)));
+    assert.equal(decoded({ ...values, emptyTurnGuard: true }).emptyTurnGuard, true);
+    assert.throws(() => decoded({ ...values, baseURL: 'https://user:secret@example.com/v1' }));
+    assert.throws(() => decoded({ ...values, modelSettings: { model: { apiKey: 'secret' } } }));
+    current = new Schema(JSON.parse(wire));
+  }
+});
 
 test('JSON-roundtripped settings validate complete checkbox values in a fresh VM', () => {
   const decoded = rehydrateInFreshVM();

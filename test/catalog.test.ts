@@ -1,7 +1,14 @@
 // Tests for src/catalog.ts.
-// 目录事实来自公开页面（https://corouter.open-design.ai/zh/ 套餐卡 + /zh/models/<slug>/ data-model JSON，2026-10-26）；
-// plan 12 款的能力字段来自 Go dsh-opendesign-go 0.1.9 的 MODEL_DEFAULTS（同 amr-link endpoint 部署资料），
-// 能力数值属于部署参考，尚无官网独立佐证；本文件测试固定目录及其元数据。
+// 目录事实来自公开页面（https://corouter.open-design.ai/zh/ 套餐卡 + /zh/models/<slug>/ data-model JSON，2026-10-26）。
+//
+// 两类能力来源分开断言：
+// - 容量/输出/模态：plan 12 款沿用 Go dsh-opendesign-go 0.1.9 的 MODEL_DEFAULTS（同 amr-link endpoint
+//   部署资料），属于部署参考，尚无官网独立佐证；其余型号保持缺省。
+// - 思考档位：按各厂商官方型号文档逐型号取证（见 docs/reasoning-evidence.md）：
+//   OpenAI https://developers.openai.com/api/docs/models/<model>.md 与
+//   https://developers.openai.com/api/docs/guides/latest-model.md ；
+//   Anthropic https://platform.claude.com/docs/en/build-with-claude/effort 。
+//   档位断言写死官方取值，不从实现反推；`ultra` 无任何厂商文档支持，目录中不得出现。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MODELS, findModel, modelsFor } from '../src/catalog.js';
@@ -52,30 +59,94 @@ const PAID_IDS = [
   'muse-wonder',
 ] as const;
 
-const EFFORTS_FULL = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'] as const;
-const EFFORTS_STD = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
-const EFFORTS_LOW_HIGH = ['low', 'high', 'max'] as const;
-
-// Go 0.1.9 MODEL_DEFAULTS 移植值：ctx / out / modalities / efforts。
-const GO_DEFAULTS = new Map<string, {
+/**
+ * Go 0.1.9 MODEL_DEFAULTS 的容量移植值（ctx / out / modalities）。
+ * 思考档位不在此表：它已改为按厂商官方文档逐型号取证，见 EFFORT_MATRIX。
+ */
+const GO_CAPACITY = new Map<string, {
   contextWindow: number;
   maxOutputTokens: number;
   inputModalities: readonly ('text' | 'image')[];
-  reasoningEfforts: readonly string[];
 }>([
-  ['claude-haiku-5.5', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_STD] }],
-  ['deepseek-v4.1-flash', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_FULL] }],
-  ['deepseek-v4-flash', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_FULL] }],
-  ['deepseek-v4-flash-vision-exp', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_FULL] }],
-  ['deepseek-v4-pro', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text'], reasoningEfforts: [...EFFORTS_FULL] }],
-  ['glm-5.3-flash', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_LOW_HIGH] }],
-  ['glm-5.3-flashx', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_LOW_HIGH] }],
-  ['gpt-6-luna', { contextWindow: 1_050_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_FULL] }],
-  ['hy4-preview', { contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: ['text'], reasoningEfforts: [...EFFORTS_STD] }],
-  ['kimi-k2.7-code', { contextWindow: 262_144, maxOutputTokens: 262_144, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_STD] }],
-  ['mimo-v2.6-flash', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_STD] }],
-  ['mimo-v2.6-pro', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'], reasoningEfforts: [...EFFORTS_STD] }],
+  ['claude-haiku-5.5', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'] }],
+  ['deepseek-v4.1-flash', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'] }],
+  ['deepseek-v4-flash', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'] }],
+  ['deepseek-v4-flash-vision-exp', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'] }],
+  ['deepseek-v4-pro', { contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text'] }],
+  ['glm-5.3-flash', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'] }],
+  ['glm-5.3-flashx', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'] }],
+  ['gpt-6-luna', { contextWindow: 1_050_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'] }],
+  ['hy4-preview', { contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: ['text'] }],
+  ['kimi-k2.7-code', { contextWindow: 262_144, maxOutputTokens: 262_144, inputModalities: ['text', 'image'] }],
+  ['mimo-v2.6-flash', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'] }],
+  ['mimo-v2.6-pro', { contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'] }],
 ]);
+
+/**
+ * 全 38 型号的思考档位矩阵（厂商官方文档逐型号取值）。
+ * `[]` = 该型号没有可调的思考档位；`null` = 厂商档位未确认（目录中保持缺省）。
+ */
+const EFFORT_MATRIX = new Map<string, readonly string[] | null>([
+  // OpenAI：`reasoning.effort` 支持集合；GPT-6.1 Sol 与 GPT-6 Astra 官方明文不支持 `none`。
+  ['gpt-6.1-sol', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['gpt-6-astra', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['gpt-6-luna', ['none', 'low', 'medium', 'high', 'xhigh', 'max']],
+  ['gpt-6-sol', ['none', 'low', 'medium', 'high', 'xhigh', 'max']],
+  ['gpt-5.6-luna', ['none', 'low', 'medium', 'high', 'xhigh', 'max']],
+  ['gpt-5.6-sol', ['none', 'low', 'medium', 'high', 'xhigh', 'max']],
+  ['gpt-5.6-terra', ['none', 'low', 'medium', 'high', 'xhigh', 'max']],
+  // Anthropic：`output_config.effort` 只有 low/medium/high/xhigh/max，无 none/minimal。
+  ['claude-fable-5.1', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['claude-fable-5', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['claude-opus-5.5', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['claude-opus-5', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['claude-opus-4.8', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['claude-sonnet-5.5', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['claude-sonnet-5', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['claude-haiku-5.5', ['low', 'medium', 'high', 'xhigh', 'max']],
+  // DeepSeek / Z.ai / Moonshot / Google / xAI / Xiaomi / Tencent / Alibaba。
+  ['deepseek-v4.1-flash', ['low', 'high', 'max']],
+  ['deepseek-v4-pro', ['low', 'high', 'max']],
+  ['deepseek-v4-flash', ['low', 'high', 'max']],
+  ['deepseek-v4-flash-vision-exp', ['low', 'high', 'max']],
+  ['glm-5.3-flashx', ['low', 'high', 'max']],
+  ['glm-5.3-flash', ['low', 'high', 'max']],
+  ['glm-5.2', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
+  ['kimi-k2.7-code', []],
+  ['kimi-k3', ['low', 'high', 'max']],
+  ['kimi-k3.1-pro', ['low', 'high', 'max']],
+  ['gemini-4-argon', ['low', 'medium', 'high']],
+  ['gemini-3.8-flash', ['low', 'medium', 'high']],
+  ['gemini-3.7-flash', ['low', 'medium', 'high']],
+  ['grok-4.7', ['low', 'medium', 'high', 'xhigh']],
+  ['grok-4.6', ['low', 'medium', 'high', 'xhigh']],
+  ['grok-4.5', ['low', 'medium', 'high']],
+  ['mimo-v2.6-pro', []],
+  ['mimo-v2.6-flash', []],
+  ['hy4-preview', ['none', 'high']],
+  ['qwen3.7-max', []],
+  // 官方 API 新增项。
+  ['minimax-m3.1-flash', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['muse-spark-1.3', ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
+  // Muse Wonder 的精确别名尚未确认，档位保持未知。
+  ['muse-wonder', null],
+]);
+
+/** 厂商文档化过的全部思考档位取值；`ultra` 不在其中。 */
+const KNOWN_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+/** 官方明文支持 `none` 的 OpenAI 型号。 */
+const OPENAI_NONE_MODELS = new Set(['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+/** Anthropic 型号：effort 只有 low/medium/high/xhigh/max。 */
+const ANTHROPIC_MODELS = [
+  'claude-fable-5.1',
+  'claude-fable-5',
+  'claude-opus-5.5',
+  'claude-opus-5',
+  'claude-opus-4.8',
+  'claude-sonnet-5.5',
+  'claude-sonnet-5',
+  'claude-haiku-5.5',
+] as const;
 
 test('catalog 收录 38 个目录项：Core 附赠通道 13 + 付费通道 25', () => {
   assert.equal(MODELS.length, 38);
@@ -107,19 +178,18 @@ test('媒体专用模型不进对话目录', () => {
   }
 });
 
-test('plan 12 款能力与 Go 0.1.9 MODEL_DEFAULTS 逐项一致', () => {
-  assert.equal(GO_DEFAULTS.size, PLAN_IDS.length - 1);
+test('plan 12 款的容量/输出/模态与 Go 0.1.9 MODEL_DEFAULTS 逐项一致', () => {
+  assert.equal(GO_CAPACITY.size, PLAN_IDS.length - 1);
   for (const model of modelsFor('plan').filter(model => model.id !== 'minimax-m3.1-flash')) {
-    const expected = GO_DEFAULTS.get(model.id);
-    assert.ok(expected, `${model.id} 缺少 Go defaults 期望值`);
+    const expected = GO_CAPACITY.get(model.id);
+    assert.ok(expected, `${model.id} 缺少 Go capacity 期望值`);
     assert.equal(model.contextWindow, expected.contextWindow, `${model.id} contextWindow`);
     assert.equal(model.maxOutputTokens, expected.maxOutputTokens, `${model.id} maxOutputTokens`);
     assert.deepEqual(model.inputModalities, expected.inputModalities, `${model.id} inputModalities`);
-    assert.deepEqual(model.reasoningEfforts, expected.reasoningEfforts, `${model.id} reasoningEfforts`);
   }
 });
 
-test('付费组及新附赠 M3.1 Flash 的未知能力字段保持缺省', () => {
+test('付费组及新附赠 M3.1 Flash 的容量字段保持缺省', () => {
   const minimax = findModel('minimax-m3.1-flash');
   assert.ok(minimax);
   assert.equal(minimax.group, 'plan');
@@ -127,8 +197,60 @@ test('付费组及新附赠 M3.1 Flash 的未知能力字段保持缺省', () =>
     assert.equal(model.contextWindow, undefined, `${model.id} 不应携带 contextWindow`);
     assert.equal(model.maxOutputTokens, undefined, `${model.id} 不应携带 maxOutputTokens`);
     assert.equal(model.inputModalities, undefined, `${model.id} 不应推断 inputModalities`);
-    assert.equal(model.reasoningEfforts, undefined, `${model.id} 不应携带 reasoningEfforts`);
   }
+});
+
+test('全 38 型号的思考档位矩阵按厂商官方文档逐型号固定', () => {
+  assert.equal(EFFORT_MATRIX.size, 38);
+  assert.deepEqual([...EFFORT_MATRIX.keys()].sort(), MODELS.map(model => model.id).sort());
+  for (const model of MODELS) {
+    const expected = EFFORT_MATRIX.get(model.id);
+    assert.ok(expected !== undefined, `${model.id} 缺少思考档位期望值`);
+    if (expected === null) {
+      // 厂商档位未确认：保持缺省，而不是猜测一个默认集合。
+      assert.equal(model.reasoningEfforts, undefined, `${model.id} 档位未确认时不应携带 reasoningEfforts`);
+      continue;
+    }
+    assert.deepEqual(model.reasoningEfforts, expected, `${model.id} reasoningEfforts`);
+  }
+});
+
+test('思考档位只取厂商文档化的取值，且 none 只出现在官方确认支持的型号上', () => {
+  for (const model of MODELS) {
+    for (const effort of model.reasoningEfforts ?? []) {
+      assert.ok(KNOWN_EFFORTS.has(effort), `${model.id} 含未文档化档位 ${effort}`);
+      assert.notEqual(effort, 'ultra', `${model.id} 不应含无厂商支持的 ultra`);
+    }
+  }
+  for (const model of MODELS) {
+    const supportsNone = (model.reasoningEfforts ?? []).includes('none');
+    if (model.id.startsWith('claude-')) {
+      assert.equal(supportsNone, false, `${model.id} 的 Anthropic effort 不含 none`);
+    }
+    if (model.id === 'gpt-6.1-sol' || model.id === 'gpt-6-astra') {
+      assert.equal(supportsNone, false, `${model.id} 官方明文不支持 none`);
+    }
+    if (model.id.startsWith('gpt-')) {
+      assert.equal(supportsNone, OPENAI_NONE_MODELS.has(model.id), `${model.id} 的 none 支持与官方文档不一致`);
+    }
+  }
+  for (const id of ANTHROPIC_MODELS) {
+    const model = findModel(id);
+    assert.ok(model);
+    assert.deepEqual(model.reasoningEfforts, ['low', 'medium', 'high', 'xhigh', 'max'], `${id} 的 Anthropic 档位集合`);
+    assert.equal((model.reasoningEfforts ?? []).includes('minimal'), false, `${id} 不含 minimal`);
+  }
+});
+
+test('没有可调档位的型号用空集合，档位未确认的型号保持缺省', () => {
+  for (const id of ['kimi-k2.7-code', 'mimo-v2.6-pro', 'mimo-v2.6-flash', 'qwen3.7-max']) {
+    const model = findModel(id);
+    assert.ok(model);
+    assert.deepEqual(model.reasoningEfforts, [], `${id} 应为空档位集合`);
+  }
+  const unknown = findModel('muse-wonder');
+  assert.ok(unknown);
+  assert.equal(unknown.reasoningEfforts, undefined, 'muse-wonder 档位未确认，应保持缺省');
 });
 
 test('findModel 精确匹配，已收录 ID 命中对应分组', () => {

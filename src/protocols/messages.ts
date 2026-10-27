@@ -25,6 +25,7 @@ import { record } from '../util.js';
 import { anthropicError } from './errors.js';
 import { streamHeaders } from './headers.js';
 import { inferenceEndpoint } from '../protocol-options.js';
+import { protocolAcceptsEffort } from '../reasoning.js';
 import { projectContent } from './parts.js';
 import { sseFrames } from './sse.js';
 import { anthropicUsage } from './usage.js';
@@ -34,14 +35,6 @@ import type { Protocol, ProtocolContext, WireRequest } from './types.js';
 export const MESSAGES_DEFAULT_MAX_TOKENS = 4096;
 /** Anthropic 要求的版本头；缺省会 400，即使本网关注释里未出现也必须发送。 */
 const ANTHROPIC_VERSION = '2023-06-01';
-/**
- * 现代 Messages 标准里 `output_config.effort` 的合法档位。
- *
- * 现行参数页把 `low | medium | high | xhigh | max` 列为 effort 取值；`minimal` 与目录里
- * 的扩展档位（如 `ultra`）没有对应值，按不支持显式拒绝，而不是映射到别的档位。
- */
-const THINKING_EFFORTS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-
 const DATA_URL = /^data:([^;,]+);base64,(.*)$/su;
 
 type ContentPart = Record<string, unknown>;
@@ -155,7 +148,7 @@ export function buildMessagesRequest(ctx: ProtocolContext): WireRequest {
     // 思考控制按现代 Messages 标准投影：`thinking.type.adaptive` + `output_config.effort`。
     const effort = String(options.reasoningEffort);
     if (effort === 'none') body.thinking = { type: 'disabled' };
-    else if (THINKING_EFFORTS.includes(effort)) {
+    else if (protocolAcceptsEffort('messages', effort)) {
       body.thinking = { type: 'adaptive' };
       body.output_config = { effort };
     } else throw new LlmError(`Anthropic Messages 协议不接受思考深度「${effort}」`, 'UNSUPPORTED_OPTION');

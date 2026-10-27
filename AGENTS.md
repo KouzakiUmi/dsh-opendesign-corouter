@@ -6,7 +6,7 @@ This package connects OpenDesign CoRouter to DSH with separate Design Plan and p
 
 Required behavior:
 - Settings controls show pending values immediately and roll back rejected saves. Serialize configuration writes, track every pending field, and distinguish namespace readiness from transport writability. Load local status independently of quota reads; background quota refresh must not hold a saved control disabled.
-- Configuration schemas must survive JSON serialization and fresh-browser rehydration. Transform callbacks must be self-contained; validate the shipped schema in the offline browser fixture as well as the Host. Configuration and Remote field limits must agree.
+- Configuration schemas survive the Host's `volatileForm` projection and repeated JSON rehydration. Transform callbacks keep a self-contained JSON serializer after every reconstruction; the browser fixture consumes the real Host-projected schema. Configuration and Remote field limits agree.
 - Settings prioritize actionable connection status and controls; model parameters and explanatory details are progressively disclosed. Disabled controls explain loading, unavailable, or read-only state. Model capacity edits validate output against the effective context budget before saving.
 - Quota displays Design Plan windows, subscription credits, recharge credits, and total balance as distinct amounts. Each window is a separate section: remaining percentage and remaining-capacity bar, labelled used/limit/remaining values, then its own recovery row. Window start/reset mode stay in collapsed details; source and update time are separate labelled rows. Avoid concatenated metadata sentences. Window resets, subscription period end, and the next local refresh are different timestamps. Missing values remain unknown.
 - Desktop authentication is tried first when enabled. A complete saved console session may replace a partial desktop result as one whole snapshot; account data is never combined across identities.
@@ -17,13 +17,15 @@ Required behavior:
 - A fetched model catalog is published to the selector as one update; selector notification failure restores the prior catalog and reports that stage separately, allowing a later refresh to recover.
 - Each model can be enabled or disabled and given explicit generation defaults. Disabling affects both advertised models and direct invocation. Settings are persisted through the host configuration service.
 - Inference supports Chat Completions, Responses, and Messages. Model discovery always uses the configured gateway's OpenAI-compatible `GET /models` endpoint, independently of inference protocol selection. User-facing refresh/source messages say “刷新模型目录” / “当前网关”; protocol compatibility must not imply the models come from OpenAI's own service.
-- The Design Plan empty-turn guard remains a separate setting and does not silently apply to paid models. Model request retries belong to the host retry extension; do not add a second adapter replay loop.
+- Reasoning choices follow the [model evidence](docs/reasoning-evidence.md) and are intersected with the active protocol in Host metadata, settings and request validation. Defaults never create a capability list. Stale defaults remain clearable, do not corrupt model metadata, and fail before credential/network I/O when used. Vendor defaults remain upstream-owned.
+- The empty-turn monitor applies only to `deepseek-v4.1-flash` tool-enabled calls. A stop with no tool calls and no usable visible answer becomes `EMPTY_RESPONSE`, including known REA/DSML/thinking residue. Other models and real answers keep their finish semantics. Model request retries belong to the host retry extension.
 - Manual quota refresh bypasses cached data but shares an in-flight operation. Automatic failed reads back off from 5 to 60 seconds and stop after six consecutive failures; manual refresh or a relevant configuration change starts a new sequence.
 - Unreadable image bytes fall back to a named placeholder; cancellation still terminates the request.
 
 ## Implementation ownership
 
 - `src/config.ts`: validated, volatile configuration; `src/model-settings.ts`: per-model validation and capacity overrides.
+- `src/schema-serialization.ts`: transform callbacks that survive repeated Host/browser serialization; `src/reasoning.ts`: shared model/protocol effort intersection.
 - `src/index.ts`: host service, credential references, quota/model refresh lifetimes, and provider registration.
 - `src/remote.ts`: explicit JSON allowlists for the browser interface. Update them whenever a visible field is added.
 - `src/quota.ts`, `src/desktop-quota.ts`: quota request/normalization; keep source and unit semantics explicit.

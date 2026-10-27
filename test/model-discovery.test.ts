@@ -42,7 +42,13 @@ async function failure(promise: Promise<unknown>): Promise<ModelDiscoveryError> 
 test('GET {base}/models carries Bearer auth, attribution and refuses redirects', async () => {
   const { fetcher, calls } = stub(() => Response.json({ object: 'list', data: [{ id: 'glm-5.2' }] }));
   const rows = await fetchModelCatalog(`${BASE}/`, KEY, undefined, fetcher);
-  assert.deepEqual(rows, [{ id: 'glm-5.2', name: 'GLM-5.2', group: 'paid' }]);
+  // 已知 id 继承目录里的分组与厂商档位（GLM-5.2 的官方取值含 none/minimal）。
+  assert.deepEqual(rows, [{
+    id: 'glm-5.2',
+    name: 'GLM-5.2',
+    group: 'paid',
+    reasoningEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+  }]);
   assert.equal(calls.length, 1);
   const call = calls[0]!;
   assert.equal(call.url, `${BASE}/models`);
@@ -93,12 +99,14 @@ test('known ids inherit catalog grouping and capabilities; new ids are paid rows
   assert.deepEqual(paid, findModel('claude-opus-5'));
   assert.notEqual(paid, findModel('claude-opus-5'));
   assert.equal(paid.group, 'paid');
+  // Anthropic 型号的 effort 只有 low/medium/high/xhigh/max，没有 none/minimal。
+  assert.deepEqual(paid.reasoningEfforts, ['low', 'medium', 'high', 'xhigh', 'max']);
   const plan = rows[1]!;
   assert.deepEqual(plan, findModel('deepseek-v4.1-flash'));
   assert.equal(plan.group, 'plan');
   assert.equal(plan.contextWindow, 1_000_000);
   assert.deepEqual(plan.inputModalities, ['text', 'image']);
-  assert.ok(plan.reasoningEfforts?.includes('ultra'));
+  assert.deepEqual(plan.reasoningEfforts, ['low', 'high', 'max']);
   // 新 id：只保留 id/name 并归 paid，未识别的上游能力字段一律不猜。
   const fresh = rows[2]!;
   assert.deepEqual(fresh, { id: 'brand-new-chat', name: 'Brand New', group: 'paid' });
@@ -110,16 +118,25 @@ test('known ids inherit catalog grouping and capabilities; new ids are paid rows
 
 test('five verified API additions retain their catalog labels without inventing capabilities', async () => {
   const ids = ['gemini-4-argon', 'kimi-k3.1-pro', 'minimax-m3.1-flash', 'muse-spark-1.3', 'muse-wonder'];
+  /** 各型号的厂商档位；Muse Wonder 精确别名未确认，档位保持缺省。 */
+  const efforts: Record<string, readonly string[] | undefined> = {
+    'gemini-4-argon': ['low', 'medium', 'high'],
+    'kimi-k3.1-pro': ['low', 'high', 'max'],
+    'minimax-m3.1-flash': ['low', 'medium', 'high', 'xhigh', 'max'],
+    'muse-spark-1.3': ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    'muse-wonder': undefined,
+  };
   const { fetcher } = stub(() => Response.json({ data: ids.map(id => ({ id })) }));
   const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
   assert.deepEqual(rows.map(row => row.id), ids);
   for (const row of rows) {
     assert.deepEqual(row, findModel(row.id));
     assert.equal(row.group, row.id === 'minimax-m3.1-flash' ? 'plan' : 'paid');
+    // 容量类字段仍无可核实取值，不因发现接口返回了这些 id 就补上。
     assert.equal(row.contextWindow, undefined);
     assert.equal(row.maxOutputTokens, undefined);
     assert.equal(row.inputModalities, undefined);
-    assert.equal(row.reasoningEfforts, undefined);
+    assert.deepEqual(row.reasoningEfforts, efforts[row.id], `${row.id} reasoningEfforts`);
   }
 });
 

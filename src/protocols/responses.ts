@@ -21,20 +21,11 @@ import { record } from '../util.js';
 import { inBandError } from './errors.js';
 import { streamHeaders } from './headers.js';
 import { inferenceEndpoint } from '../protocol-options.js';
+import { protocolAcceptsEffort } from '../reasoning.js';
 import { projectContent, type ImageLookup } from './parts.js';
 import { sseFrames } from './sse.js';
 import { openAiUsage } from './usage.js';
 import type { Protocol, ProtocolContext, WireRequest } from './types.js';
-
-/**
- * Responses 的 `reasoning.effort` 官方取值。
- *
- * 来源：OpenAI OpenAPI 规范 `ReasoningEffort` 枚举（2026-10-26 取自
- * `raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml`）：
- * `none | minimal | low | medium | high | xhigh | max`。
- * 本地目录里的扩展档位（如 `ultra`）不在其中，按不支持处理而不是原样透传。
- */
-const REASONING_EFFORTS: readonly string[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 type InputPart = { type: 'input_text'; text: string } | { type: 'input_image'; image_url: string; detail: 'auto' };
 
@@ -108,7 +99,7 @@ export function buildResponsesRequest(ctx: ProtocolContext): WireRequest {
   }
   if (options.reasoningEffort !== undefined) {
     const effort = String(options.reasoningEffort);
-    if (!REASONING_EFFORTS.includes(effort)) throw new LlmError(`Responses 协议不接受思考深度「${effort}」`, 'UNSUPPORTED_OPTION');
+    if (!protocolAcceptsEffort('responses', effort)) throw new LlmError(`Responses 协议不接受思考深度「${effort}」`, 'UNSUPPORTED_OPTION');
     // 同时请求摘要，才能把推理映射成 reasoning 块；否则推理不可见。
     body.reasoning = { effort, summary: 'auto' };
   }

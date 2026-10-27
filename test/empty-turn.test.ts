@@ -68,6 +68,8 @@ const RESIDUE_CASES: readonly (readonly [string, readonly StreamChunk[]])[] = [
   ['DSML close tag as a delta', [delta('｜｜DSML｜｜ calls>')]],
   ['a tag truncated mid-markup', [textBlock('</｜｜DSML｜｜')]],
   ['an empty thinking pair', [textBlock('\n<thinking> </thinking>\n')]],
+  ['REA tool-call opener', [textBlock('<rea:tool_calls>')]],
+  ['REA tool-call pair', [delta('<rea:'), delta('tool_calls>'), delta('</rea:tool_calls>')]],
   ['an empty presentation tag', [textBlock('<返璞归真></返璞归真>')]],
   ['whitespace only', [textBlock('   \n\t  ')]],
   ['markup plus punctuation', [textBlock('  </thinking> | ')]],
@@ -81,6 +83,8 @@ test('stripProtocolResidue removes known protocol tokens only', () => {
   assert.equal(stripProtocolResidue('</｜｜DSML｜｜'), '', 'a truncated tag leaves only punctuation');
   assert.equal(stripProtocolResidue('   '), '');
   assert.equal(stripProtocolResidue('结论如下。\n<thinking> </thinking>'), '结论如下。', 'real prose survives');
+  assert.equal(stripProtocolResidue('任务已完成。<rea:tool_calls></rea:tool_calls>'), '任务已完成。');
+  assert.equal(stripProtocolResidue('<rea:analysis>正文</rea:analysis>'), '<rea:analysis>正文</rea:analysis>');
   assert.equal(stripProtocolResidue('好的'), '好的');
   assert.equal(stripProtocolResidue('?'), '?');
 });

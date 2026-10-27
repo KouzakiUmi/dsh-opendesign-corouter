@@ -5,6 +5,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { auditTheme } from './theme-audit.mjs';
 import assert from 'node:assert/strict';
 import { MODELS, Config } from '../lib/index.js';
+import { volatileForm } from '../node_modules/@deepseek-ai/dsh-settings/lib/types/schema.js';
+const formSchema = volatileForm(Config);
+assert.ok(formSchema);
 const react = await build({ stdin: { contents: `import * as React from 'react'; import {createRoot} from 'react-dom/client'; import Schema from '@deepseek-ai/schemastery'; window.__Schema=Schema; window.__React=React; window.__mount=(component,props)=>{window.__root=createRoot(document.getElementById('root'));window.__root.render(React.createElement(component,props));};`, resolveDir: process.cwd(), loader: 'js' }, bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"development"' } });
 const client = await readFile('lib/client.js', 'utf8');
 const theme = await readFile('test/fixtures/dsh-theme.css', 'utf8');
@@ -33,10 +36,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
   ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
 }));
   await page.evaluate(({ rawModels, wireSchema }) => {
-    // Rehydrate the shipped schema in the browser, without the Host module's closures.
-    for (const node of Object.values(wireSchema.refs)) {
-      if (node.meta) delete node.meta.volatile;
-    }
+    // Decode the real Host-projected form, including its extra JSON serialization hop.
     const schema = new window.__Schema(wireSchema);
     const validateConfig = value => { schema(structuredClone(value)); };
     const resetAt = new Date(Date.now() + 86_400_000).toISOString();
@@ -159,6 +159,12 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     window.__setModelsFail = value => { window.__modelsFail = value; };
     window.__openActivationCalls = 0;
     window.__setActivationCode = code => { window.__activationCode = code; };
+    window.__setModelEffort = (id, reasoningEffort) => {
+      config = { ...config, modelSettings: { ...config.modelSettings, [id]: { ...config.modelSettings?.[id], reasoningEffort } } };
+      validateConfig(config); syncConfig();
+      snapshot = { ...snapshot, value: config };
+      for (const cb of listeners) cb();
+    };
     window.__setFormState = (state, writable) => {
       snapshot = { ...snapshot, status: state, writable, value: state === 'ready' ? config : undefined };
       for (const cb of listeners) cb();
@@ -189,7 +195,7 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     };
     window.__cleanup = async () => { window.__root.unmount(); for (const off of disposers.reverse()) await off(); };
     window.__plugin.apply(ctx);
-  }, { rawModels: fixtureModels, wireSchema: JSON.parse(JSON.stringify(Config.toJSON())) });
+  }, { rawModels: fixtureModels, wireSchema: JSON.parse(JSON.stringify(formSchema.toJSON())) });
   const config = () => page.evaluate(() => window.__config);
   const modelSettings = () => page.evaluate(() => window.__config.modelSettings ?? {});
   await page.getByRole('heading', { name: '额度概览', exact: true }).waitFor();
@@ -366,6 +372,17 @@ const fixtureModels = MODELS.map(({ id, name, group, contextWindow, maxOutputTok
     const expand = group.getByRole('button', { name: /^显示全部/u });
     if (await expand.count()) await expand.click();
   }
+  // A legacy default on an unknown model can be cleared without inventing support.
+  await page.evaluate(() => window.__setModelEffort('muse-wonder', 'high'));
+  const unknownModel = page.locator('.odc-model-item', { hasText: 'muse-wonder' });
+  await unknownModel.locator('summary').click();
+  const unknownEffort = unknownModel.getByLabel('默认思考深度', { exact: true });
+  assert.equal(await unknownEffort.isEnabled(), true);
+  await unknownModel.getByText('已保存的档位不适用于当前模型或协议，请选择其他档位或继承默认。', { exact: true }).waitFor();
+  assert.equal(await unknownEffort.getAttribute('aria-invalid'), 'true');
+  await unknownEffort.selectOption('');
+  await page.waitForFunction(() => window.__config.modelSettings?.['muse-wonder'] === undefined);
+  assert.equal(await unknownEffort.isDisabled(), true);
   // Discovery success: source, timestamp and the new row become visible.
   await page.getByRole('button', { name: '刷新模型目录', exact: true }).click();
   await page.waitForFunction(() => window.__refreshModelsCalls === 1);

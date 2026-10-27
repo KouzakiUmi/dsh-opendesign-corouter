@@ -12,6 +12,7 @@ import { EmptyTurnTracker } from './empty-turn.js';
 import { applyModelSettings, isModelEnabled, type ModelSettings } from './model-settings.js';
 import { protocolFor } from './protocols/index.js';
 import type { ApiProtocol } from './protocol-options.js';
+import { modelReasoningEfforts } from './reasoning.js';
 
 export interface AdapterOptions {
   config(): RuntimeConfig;
@@ -33,7 +34,8 @@ function outputReserve(model: CatalogModel, protocol: ApiProtocol): number | und
 function metadata(provider: string, row: CatalogModel, config: RuntimeConfig): LlmResolvedModelInfo {
   const setting = config.modelSettings?.[row.id];
   const reserve = setting?.maxTokens ?? outputReserve(row, config.apiProtocol ?? 'chat-completions');
-  const efforts = row.reasoningEfforts ?? (setting?.reasoningEffort ? [setting.reasoningEffort] : undefined);
+  const efforts = modelReasoningEfforts(row, config.apiProtocol ?? 'chat-completions');
+  const defaultEffort = setting?.reasoningEffort !== undefined && efforts?.includes(setting.reasoningEffort) ? setting.reasoningEffort : undefined;
   return {
     provider, id: row.id, name: row.name,
     ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
@@ -41,7 +43,7 @@ function metadata(provider: string, row: CatalogModel, config: RuntimeConfig): L
     ...(reserve === undefined ? {} : { defaultMaxTokens: reserve }),
     ...(efforts?.length ? { reasoning: {
       efforts: efforts.map(id => ({ id: ReasoningEffortId(id), name: ({ none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '较高', ultra: '极高', max: '最高' } as Record<string, string>)[id] ?? id })),
-      ...(setting?.reasoningEffort ? { defaultEffort: ReasoningEffortId(setting.reasoningEffort) } : {}),
+      ...(defaultEffort === undefined ? {} : { defaultEffort: ReasoningEffortId(defaultEffort) }),
     } } : {}),
   };
 }
@@ -83,11 +85,13 @@ export class CoRouterAdapter extends LlmAdapter {
   async *#stream(options: GenerateOptions, config: RuntimeConfig, row: CatalogModel): AsyncGenerator<StreamChunk> {
     const signal = AbortSignal.any([combinedSignal(options.signal, config.requestTimeoutMs), this.#lifetime.signal]);
     signal.throwIfAborted();
+    const setting: ModelSettings = config.modelSettings?.[row.id] ?? {};
+    const protocolId = config.apiProtocol ?? 'chat-completions';
+    const effort = options.reasoningEffort ?? (setting.reasoningEffort ? ReasoningEffortId(setting.reasoningEffort) : undefined);
+    if (effort !== undefined && !modelReasoningEfforts(row, protocolId)?.includes(effort)) throw new LlmError('所选思考深度不适用于当前模型或协议；请修改默认值或选择其他档位', 'UNSUPPORTED_OPTION');
     const raw = await this.options.apiKey(config.apiKeyEnv, config.baseURL);
     if (!raw) throw new LlmError('未配置当前网关的推理凭据；请完成设备授权或配置对应 API Key', 'MISSING_CREDENTIAL');
     const key = assertUsableApiKey(raw, 'dsh-opendesign-corouter', config.apiKeyEnv);
-    const setting: ModelSettings = config.modelSettings?.[row.id] ?? {};
-    const protocolId = config.apiProtocol ?? 'chat-completions';
     const images = new Map<string, string>();
     const attemptedImages = new Set<string>();
     const unreadableImages = new Set<string>();
@@ -124,8 +128,6 @@ export class CoRouterAdapter extends LlmAdapter {
       if (room < 1) throw new LlmError('当前输入没有为输出留下上下文空间', 'CONTEXT_WINDOW_EXCEEDED');
       maxTokens = Math.min(capped, Math.floor(room));
     }
-    const effort = options.reasoningEffort ?? (setting.reasoningEffort ? ReasoningEffortId(setting.reasoningEffort) : undefined);
-    if (effort !== undefined && row.reasoningEfforts && !row.reasoningEfforts.includes(effort)) throw new LlmError('该模型不支持所选思考深度', 'UNSUPPORTED_OPTION');
     const effective: GenerateOptions = {
       ...projectedOptions,
       ...((options.temperature ?? setting.temperature) === undefined ? {} : { temperature: options.temperature ?? setting.temperature }),
@@ -164,11 +166,12 @@ export class CoRouterAdapter extends LlmAdapter {
       throw gatewayError(response.status, error);
     }
     if (!response.body) throw new LlmError('CoRouter 返回空响应', 'EMPTY_RESPONSE');
-    const tracker = new EmptyTurnTracker({ enabled: row.group === 'plan' && config.emptyTurnGuard && Boolean(options.tools?.length), onEmptyTurn: () => this.options.onEmptyTurn?.() });
+    const monitor = row.group === 'plan' && row.id === 'deepseek-v4.1-flash' && config.emptyTurnGuard && Boolean(options.tools?.length);
+    const tracker = new EmptyTurnTracker({ enabled: monitor, onEmptyTurn: () => this.options.onEmptyTurn?.() });
     try {
       for await (const chunk of protocol.stream(response.body, signal, config.streamIdleTimeoutMs)) {
         tracker.observe(chunk);
-        if (chunk.type === 'finish' && row.group === 'plan' && config.emptyTurnGuard) yield { ...chunk, reason: tracker.resolve(chunk.reason) };
+        if (chunk.type === 'finish' && monitor) yield { ...chunk, reason: tracker.resolve(chunk.reason) };
         else yield chunk;
       }
     } catch (error) {

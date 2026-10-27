@@ -59,7 +59,21 @@ test('empty-turn monitor only changes gift chat tool-enabled steps; switch is in
   assert.deepEqual((await collect(adapter.stream({ ...options(PAID_PROVIDER, 'gpt-6-astra'), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'stop' } });
   assert.deepEqual((await collect(adapter.stream(options()))).at(-1), { type: 'finish', reason: { kind: 'stop' } });
   assert.equal(hits, 1);
+  for (const id of ['deepseek-v4-pro', 'deepseek-v4-flash', 'glm-5.3-flash', 'gpt-6-luna']) {
+    assert.deepEqual((await collect(adapter.stream({ ...options(PLAN_PROVIDER, id), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'stop' } });
+  }
 });
+test('DSv4.1 leaked REA markers become EMPTY_RESPONSE only when its monitor and tools are enabled', async () => {
+  let config = { ...base }, hits = 0;
+  const adapter = new CoRouterAdapter({ config: () => config, apiKey: async () => 'fixture-key', onEmptyTurn: () => { hits++; }, fetch: async () => sse('<rea:tool_calls></rea:tool_calls>') });
+  const tool = { name: 'fixture_tool', description: 'fixture', parameters: { type: 'object' } };
+  assert.deepEqual((await collect(adapter.stream({ ...options(), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'error', failure: { code: 'EMPTY_RESPONSE', message: 'OpenDesign：模型回复只剩协议标记，未产生可用内容' } } });
+  assert.equal(hits, 1);
+  config = { ...base, emptyTurnGuard: false };
+  assert.deepEqual((await collect(adapter.stream({ ...options(), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'stop' } });
+  assert.equal(hits, 1);
+});
+
 test('prepareCall binds metadata and dispatch to a single settings generation', async () => {
   let config = { ...base };
   const called: string[] = [];

@@ -44,6 +44,7 @@ const RESIDUE_PATTERNS: readonly RegExp[] = [
   /<\s*\/?\s*｜｜DSML｜｜[^>]*>/gu,
   /｜｜DSML｜｜[^\n<>]*>?/gu,
   /<\s*\/?\s*thinking\s*>/giu,
+  /<\s*\/?\s*rea:tool_calls\s*>/giu,
   /<\s*\/?\s*返璞归真\s*>/gu,
 ];
 

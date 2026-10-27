@@ -195,7 +195,7 @@ test('inference protocol and per-model settings never invalidate the discovered 
     assert.equal(row.name, 'DeepSeek V4.1 Flash');
     assert.equal(row.contextWindow, 1_000_000);
     assert.equal(row.maxOutputTokens, 384_000);
-    assert.ok(row.reasoningEfforts?.includes('ultra'));
+    assert.deepEqual(row.reasoningEfforts, ['low', 'high', 'max']);
     assert.equal(row.enabled, true);
 
     // 只改推理协议：目录来源、时间戳与通知都不变，也不会重新请求。

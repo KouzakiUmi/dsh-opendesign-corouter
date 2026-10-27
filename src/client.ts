@@ -11,6 +11,7 @@ import type { QuotaSnapshot, QuotaWindow } from './quota.js';
 import { inferenceEndpoint, API_PROTOCOL_OPTIONS, type ApiProtocol } from './protocol-options.js';
 import type { ModelSettings, ModelSettingsMap } from './model-settings.js';
 import { validateActivationUrl } from './device-auth.js';
+import { modelReasoningEfforts } from './reasoning.js';
 
 const h = React.createElement;
 const SETTINGS_NS = 'llm-opendesign-corouter';
@@ -563,13 +564,14 @@ function EffortField({ id, model, value, disabled, onChange }: {
   const mounted = useMounted();
   const [error, setError] = React.useState<string | undefined>(undefined);
   const listed = model.reasoningEfforts ?? [];
-  const options = value === undefined || listed.includes(value) ? listed : [...listed, value];
-  const unknown = options.length === 0;
+  const invalidDefault = value !== undefined && !listed.includes(value);
+  const options = invalidDefault ? [...listed, value] : listed;
+  const unavailable = listed.length === 0;
   return h('div', { className: 'odc-field odc-field-compact' },
     h('label', { htmlFor: id }, '默认思考深度'),
     h('select', {
-      id, className: 'odc-input', value: value ?? '', disabled: disabled || unknown,
-      'aria-describedby': `${id}-hint`,
+      id, className: 'odc-input', value: value ?? '', disabled: disabled || (unavailable && !invalidDefault),
+      'aria-describedby': `${id}-hint`, 'aria-invalid': invalidDefault || error !== undefined,
       onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
         const next = event.target.value;
         void (async () => {
@@ -579,13 +581,13 @@ function EffortField({ id, model, value, disabled, onChange }: {
       },
     }, [
       h('option', { key: '', value: '' }, '继承默认'),
-      ...options.map(effort => h('option', { key: effort, value: effort }, effort)),
+      ...options.map(effort => h('option', { key: effort, value: effort, disabled: invalidDefault && effort === value }, invalidDefault && effort === value ? `${effort}（当前不可用）` : effort)),
     ]),
     h('small', {
       className: error === undefined ? 'odc-hint' : 'odc-hint odc-field-error',
       id: `${id}-hint`,
       ...(error === undefined ? {} : { role: 'alert' as const }),
-    }, error ?? (unknown ? '该模型目录未提供思考档位，无法覆盖。' : '只列出该模型已知档位；留空继承默认。')));
+    }, error ?? (invalidDefault ? '已保存的档位不适用于当前模型或协议，请选择其他档位或继承默认。' : unavailable ? '当前模型或协议未提供可调整的思考档位。' : '留空使用服务端默认档位。')));
 }
 
 export interface ModelRowProps {
@@ -743,7 +745,11 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
   };
   const source = status?.modelsSource === 'openai' ? '当前网关' : status?.modelsSource === 'builtin' ? '内置目录' : '尚未确认';
   const updated = status?.modelsUpdatedAt === undefined ? '' : ` · 更新于 ${formatTime(status.modelsUpdatedAt)}`;
-  const models = status?.models ?? [];
+  const protocol = formSnapshot.value?.apiProtocol ?? status?.config.apiProtocol ?? 'chat-completions';
+  const models = (status?.models ?? []).map(model => {
+    const reasoningEfforts = modelReasoningEfforts(model, protocol);
+    return { ...model, ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }) };
+  });
   return h(React.Fragment, null,
     h('div', { className: 'odc-card-head' },
       h('div', null,
@@ -856,7 +862,7 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
   return h(React.Fragment, null,
     h('section', { className: 'odc-card' },
       h('h3', null, '空轮监控'),
-      h('p', { className: 'odc-hint' }, '检测套餐赠送模型在工具对话中返回的空回答。'),
+      h('p', { className: 'odc-hint' }, '检测 DeepSeek V4.1 Flash 工具对话中的空回答或协议标记残留。'),
       h('div', { style: { marginTop: 14 } }, h(Switch, {
         checked: formSnapshot.value?.emptyTurnGuard ?? status?.config.emptyTurnGuard ?? true,
         disabled: !writable || pendingField.includes('emptyTurnGuard'),

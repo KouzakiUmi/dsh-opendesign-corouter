@@ -11,6 +11,7 @@ import { LlmError } from '@deepseek-ai/dsh-llm';
 import { CoRouterAdapter } from './adapter.js';
 import { fetchModelCatalog, ModelDiscoveryError } from './model-discovery.js';
 import { isModelEnabled } from './model-settings.js';
+import { modelReasoningEfforts } from './reasoning.js';
 import type { CatalogModel } from './catalog.js';
 import { Config, SETTINGS_NS, PLAN_PROVIDER, PAID_PROVIDER, readConfig, type LiveConfig } from './config.js';
 import { MODELS } from './catalog.js';
@@ -170,12 +171,16 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       ...(state.keySource ? { apiKeySource: state.keySource } : {}),
       ...(this._quota.source ? { sessionSource: this._quota.source } : {}),
       quota: this._quota, login: this._login.status(), config: state.config, guardedTurns: this.guardedTurns,
-      models: this._models.map(({ id, name, group, contextWindow, maxOutputTokens, reasoningEfforts }) => ({
-        id, name, group, enabled: isModelEnabled(id, state.config.modelSettings),
-        ...(contextWindow === undefined ? {} : { contextWindow }),
-        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
-        ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
-      })),
+      models: this._models.map(row => {
+        const { id, name, group, contextWindow, maxOutputTokens } = row;
+        const reasoningEfforts = modelReasoningEfforts(row, state.config.apiProtocol ?? 'chat-completions');
+        return {
+          id, name, group, enabled: isModelEnabled(id, state.config.modelSettings),
+          ...(contextWindow === undefined ? {} : { contextWindow }),
+          ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+          ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
+        };
+      }),
       modelsSource: this._modelsUpdatedAt ? 'openai' : 'builtin',
       ...(this._modelsUpdatedAt ? { modelsUpdatedAt: this._modelsUpdatedAt } : {}),
       ...(this._modelsError ? { modelsError: this._modelsError } : {}),

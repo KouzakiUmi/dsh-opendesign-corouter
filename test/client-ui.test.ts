@@ -382,6 +382,23 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
   assert.equal((html.match(/<button[^>]*disabled=""[^>]*>重置<\/button>/g) ?? []).length, 2);
 });
 
+test('invalid saved efforts remain clearable and are not presented as supported choices', () => {
+  const html = renderModels(status, { ...snapshot, value: { ...snapshot.value, modelSettings: { 'gpt-6-astra': { reasoningEffort: 'ultra' } } } });
+  const select = [...html.matchAll(/<select([^>]*)>([\s\S]*?)<\/select>/gu)].find(match => match[2]?.includes('ultra（当前不可用）'));
+  assert.ok(select);
+  assert.doesNotMatch(select[1] ?? '', /disabled/u);
+  assert.match(select[1] ?? '', /aria-invalid="true"/u);
+  assert.match(select[2] ?? '', /value=""/u);
+  assert.match(html, /已保存的档位不适用于当前模型或协议/u);
+});
+
+test('settings effort choices also respect the pending protocol selection', () => {
+  const next = { ...status, models: [{ ...models[0]!, reasoningEfforts: ['minimal', 'low', 'ultra'] }] };
+  const html = renderModels(next, { ...snapshot, value: { ...snapshot.value, apiProtocol: 'messages' } });
+  assert.match(html, /<option value="low">low<\/option>/u);
+  assert.doesNotMatch(html, /<option value="(?:minimal|ultra)"/u);
+});
+
 test('an overridden model keeps its reset enabled and its values rendered', () => {
   const html = renderModels(status, {
     ...snapshot,
