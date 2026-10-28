@@ -159,7 +159,8 @@ test('prepareCall binds metadata and dispatch to a single settings generation', 
   config = { ...config, baseURL: 'https://example.com/new' };
   await collect(call.stream(options()));
   assert.equal(called[0], `${base.baseURL}/chat/completions`);
-  assert.equal(call.model.context?.contextWindow, 750000);
+  assert.equal(call.model.context?.contextWindow, 1_000_000);
+  assert.equal(call.model.defaultMaxTokens, 250_000);
 });
 test('credential routing receives the prepared gateway even after configuration changes', async () => {
   let config = { ...base, baseURL: 'https://custom.example/v1' };
@@ -192,7 +193,7 @@ test('saved model parameters affect metadata and the actual request while per-ca
   const wires: Record<string, unknown>[] = [];
   const adapter = new CoRouterAdapter({ config: () => configured, apiKey: async () => 'test-key', fetch: async (_input, init) => { wires.push(JSON.parse(String(init?.body))); return sse('ok'); } });
   const resolved = await adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash');
-  assert.equal(resolved.context?.contextWindow, 7680);
+  assert.equal(resolved.context?.contextWindow, 8192);
   assert.equal(resolved.defaultMaxTokens, 512);
   assert.equal(resolved.reasoning?.defaultEffort, 'low');
   await collect(adapter.stream(options()));
@@ -202,6 +203,19 @@ test('saved model parameters affect metadata and the actual request while per-ca
   assert.equal(wires[0]?.reasoning_effort, 'low');
   await collect(adapter.stream({ ...options(), temperature: 0.6 }));
   assert.equal(wires[1]?.temperature, 0.6);
+});
+
+test('Opus context reports the full reference window, honours overrides, and keeps the Messages output default', async () => {
+  let configured: RuntimeConfig = { ...base, apiProtocol: 'messages' };
+  const adapter = new CoRouterAdapter({ config: () => configured, apiKey: async () => 'test-key' });
+  const initial = await adapter.prepareCall(PAID_PROVIDER, 'claude-opus-5.5');
+  assert.deepEqual(initial.model.context, { contextWindow: 1_000_000 });
+  assert.equal(initial.model.defaultMaxTokens, 4096);
+  configured = { ...configured, modelSettings: { 'claude-opus-5.5': { contextWindow: 200_000, maxTokens: 8_192 } } };
+  const overridden = await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5');
+  assert.deepEqual(overridden.context, { contextWindow: 200_000 });
+  assert.equal(overridden.defaultMaxTokens, 8_192);
+  assert.deepEqual(initial.model.context, { contextWindow: 1_000_000 }, 'prepared calls keep their captured metadata');
 });
 
 test('an explicit output limit is not reduced to the automatic quarter-window default', async () => {

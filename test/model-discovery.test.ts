@@ -47,6 +47,7 @@ test('GET {base}/models carries Bearer auth, attribution and refuses redirects',
     id: 'glm-5.2',
     name: 'GLM-5.2',
     group: 'paid',
+    contextWindow: 1_000_000,
     inputModalities: ['text'],
     reasoningEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   }]);
@@ -127,14 +128,18 @@ test('five verified API additions retain their catalog labels and evidenced capa
     'muse-spark-1.3': ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     'muse-wonder': undefined,
   };
+  const windows: Record<string, number> = {
+    'gemini-4-argon': 1_048_576, 'kimi-k3.1-pro': 1_048_576,
+    'minimax-m3.1-flash': 1_000_000, 'muse-spark-1.3': 1_048_576, 'muse-wonder': 1_048_576,
+  };
   const { fetcher } = stub(() => Response.json({ data: ids.map(id => ({ id })) }));
   const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
   assert.deepEqual(rows.map(row => row.id), ids);
   for (const row of rows) {
     assert.deepEqual(row, findModel(row.id));
     assert.equal(row.group, row.id === 'minimax-m3.1-flash' ? 'plan' : 'paid');
-    // 容量类字段仍无可核实取值，不因发现接口返回了这些 id 就补上。
-    assert.equal(row.contextWindow, undefined);
+    // 已知型号沿用目录的参考窗口；输出上限不因参考窗口补齐而改变。
+    assert.equal(row.contextWindow, windows[row.id]);
     assert.equal(row.maxOutputTokens, undefined);
     assert.deepEqual(row.inputModalities, row.id === 'muse-wonder' ? undefined : ['text', 'image']);
     assert.deepEqual(row.reasoningEfforts, efforts[row.id], `${row.id} reasoningEfforts`);
@@ -149,6 +154,13 @@ test('discovery preserves GPT-6.1 Terra catalog metadata', async () => {
     contextWindow: 1_050_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'],
     reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
   });
+});
+
+test('discovery preserves the adjustable Opus 5.5 reference context without inventing an output default', async () => {
+  const { fetcher } = stub(() => Response.json({ data: [{ id: 'claude-opus-5.5', context_window: 999 }] }));
+  const [model] = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
+  assert.equal(model?.contextWindow, 1_000_000);
+  assert.equal(model?.maxOutputTokens, undefined);
 });
 
 test('drops unusable and duplicate rows instead of inventing models', async () => {

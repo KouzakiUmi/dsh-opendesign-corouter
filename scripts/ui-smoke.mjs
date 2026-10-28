@@ -348,8 +348,39 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await page.locator('.odc-settings').evaluate(element => element.scrollWidth <= element.clientWidth), true, 'narrow embedded pane has no horizontal overflow');
   assert.equal(await page.locator('.odc-model-item code').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 12), true, 'model identifiers remain legible');
   assert.equal(await page.locator('.odc-button-small').first().evaluate(element => element.getBoundingClientRect().height >= 32), true, 'model actions keep a usable target size');
+  const compactImage = await page.locator('.odc-image-toggle:visible').first().evaluate(label => ({
+    labelHeight: label.getBoundingClientRect().height,
+    inputHeight: label.querySelector('input').getBoundingClientRect().height,
+  }));
+  assert.ok(compactImage.labelHeight >= 24 && compactImage.labelHeight <= 32, 'the image label stays compact with an accessible pointer target');
+  assert.ok(compactImage.inputHeight <= 18, 'the native image checkbox does not dominate the model row');
   await page.locator('#root').evaluate(root => { root.style.width = ''; });
   const groupCards = page.locator('.odc-model-groups > section');
+  const planGroup = groupCards.first();
+  const planIds = () => planGroup.locator('.odc-model-item code').allTextContents();
+  const catalogOrder = await page.evaluate(() => window.__lastStatus.models.map(model => model.id));
+
+  // Pending enablement changes reorder every view immediately; rejection restores the accepted order.
+  const flashRow = planGroup.locator('.odc-model-item', { hasText: 'deepseek-v4.1-flash' });
+  const flashSwitch = flashRow.locator('.odc-model-switch input[type=checkbox]');
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await flashSwitch.click();
+  assert.equal(await flashRow.count(), 0, 'a pending disabled model leaves the collapsed enabled first-six view');
+  assert.deepEqual(await planIds(), ['gpt-6-luna', 'claude-haiku-5.5', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flashx']);
+  await planGroup.getByRole('button', { name: '显示全部 13 个模型', exact: true }).click();
+  assert.equal((await planIds()).at(-1), 'deepseek-v4.1-flash', 'expanded results place the pending disabled row after every enabled row');
+  await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('flash');
+  assert.deepEqual(await planIds(), ['deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flashx', 'glm-5.3-flash', 'mimo-v2.6-flash', 'minimax-m3.1-flash', 'deepseek-v4.1-flash'], 'search follows the same enabled-first stable ordering');
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['deepseek-v4.1-flash']), undefined, 'a held save has not changed the accepted configuration');
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
+  assert.deepEqual(await planIds(), ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flashx', 'glm-5.3-flash', 'mimo-v2.6-flash', 'minimax-m3.1-flash'], 'rollback restores catalog order in search results');
+  assert.equal(await flashSwitch.isChecked(), true);
+  assert.deepEqual(await page.evaluate(() => window.__lastStatus.models.map(model => model.id)), catalogOrder, 'display sorting never mutates the Host catalog');
+  await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('');
+  await planGroup.getByRole('button', { name: '收起模型列表', exact: true }).click();
+  assert.equal(await planGroup.locator('.odc-model-item').count(), 6);
+
   await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('no-such-model');
   assert.equal(await groupCards.evaluateAll(cards => cards[0].getBoundingClientRect().height < cards[1].getBoundingClientRect().height), true, 'shorter group does not stretch to its neighbour');
   await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('');
@@ -381,15 +412,18 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await lunaSwitch.uncheck();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.enabled === false);
   await luna.getByText('已禁用', { exact: true }).waitFor();
+  assert.equal((await planIds()).at(-1), 'gpt-6-luna', 'a saved disabled model moves after enabled models immediately');
   // Force a Host status refresh while disabled, so Status.models still claims `enabled: false`.
   await page.getByRole('tab', { name: '概览', exact: true }).click();
   await page.getByRole('tab', { name: '模型', exact: true }).click();
   assert.equal(await page.evaluate(() => window.__lastStatus.models.find(model => model.id === 'gpt-6-luna').enabled), false);
+  await planGroup.getByRole('button', { name: '显示全部 13 个模型', exact: true }).click();
   // Reset deletes the whole map entry; the ready form must win over the now-stale catalog flag.
   await luna.getByRole('button', { name: '重置', exact: true }).click();
   await page.waitForFunction(() => !('gpt-6-luna' in (window.__config.modelSettings ?? {})));
   assert.equal(await lunaSwitch.isChecked(), true);
   assert.equal(await luna.getByText('已禁用', { exact: true }).count(), 0);
+  assert.equal((await planIds())[0], 'gpt-6-luna', 'reset restores the model to its original enabled position');
   // Image input stays outside the collapsed parameter editor and saves as a whole-map override.
   const imageInput = luna.getByRole('checkbox', { name: 'GPT-6 Luna 图片输入', exact: true });
   const restoreImage = luna.getByRole('button', { name: 'GPT-6 Luna 恢复图片输入自动', exact: true });
@@ -398,7 +432,8 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await luna.locator('details').evaluate(element => element.open), false, 'advanced model parameters start collapsed');
   assert.equal(await luna.getByText('自动 · 支持图片', { exact: true }).isVisible(), true, 'the source remains visible without expanding parameters');
   await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
-  await imageInput.uncheck();
+  await imageInput.focus();
+  await imageInput.press('Space');
   assert.equal(await imageInput.isChecked(), false, 'a pending image override is visible immediately');
   assert.equal(await imageInput.isDisabled(), true, 'the image switch locks while its map save is pending');
   assert.equal(await restoreImage.isDisabled(), true, 'restore-auto also locks during the same save');
@@ -421,7 +456,8 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   const topP = luna.getByLabel('Top P', { exact: true });
   const maxTokens = luna.getByLabel('最大输出（tokens）', { exact: true });
   const contextWindow = luna.getByLabel('上下文预算（tokens）', { exact: true });
-  const effort = luna.getByLabel('默认思考深度', { exact: true });
+  const effortEditor = luna.locator('.odc-effort');
+  const editEffort = luna.getByRole('button', { name: '编辑默认思考深度', exact: true });
   await temperature.fill('0.7');
   await temperature.blur();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.temperature === 0.7);
@@ -440,7 +476,54 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await page.evaluate(() => window.__config.modelSettings['gpt-6-luna'].contextWindow), 200000);
   await contextWindow.fill('200000');
   await contextWindow.blur();
+  assert.equal(await effortEditor.getAttribute('data-mode'), 'summary');
+  assert.equal(await effortEditor.locator('.odc-effort-value').innerText(), '继承默认');
+  const savesBeforeEffort = await page.evaluate(() => window.__saveCalls.length);
+  await editEffort.click();
+  let effort = luna.getByLabel('默认思考深度', { exact: true });
+  await page.locator('#root').evaluate(root => { root.style.width = '320px'; });
+  assert.equal(await effortEditor.evaluate(element => element.scrollWidth <= element.clientWidth), true, 'the effort editor fits a narrow settings pane');
+  assert.equal(await effortEditor.locator('.odc-effort-actions').evaluate(element => [...element.children].every(button => button.getBoundingClientRect().height >= 32)), true);
+  await page.locator('#root').evaluate(root => { root.style.width = ''; });
   await effort.selectOption('high');
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.reasoningEffort), undefined, 'draft selection never writes configuration');
+  await effort.press('Escape');
+  assert.equal(await effortEditor.getAttribute('data-mode'), 'summary');
+  assert.equal(await page.evaluate(() => window.__saveCalls.length), savesBeforeEffort, 'Escape cancels without a Host write');
+
+  await editEffort.click();
+  await effort.selectOption('high');
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await luna.getByRole('button', { name: '保存默认思考深度', exact: true }).click();
+  assert.equal(await effort.isDisabled(), true);
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.reasoningEffort), undefined, 'a held save has not changed accepted configuration');
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await effortEditor.getByText('设置未保存，已保留当前草稿，请重试。', { exact: true }).waitFor();
+  assert.equal(await effort.inputValue(), 'high', 'rejection preserves the local draft');
+  assert.equal(await effortEditor.getAttribute('data-mode'), 'editing');
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.reasoningEffort), undefined, 'rejection rolls back accepted configuration');
+
+  await page.evaluate(() => window.__setModelEffort('gpt-6-luna', 'low'));
+  await effortEditor.getByText('设置未保存，已保留当前草稿，请重试。', { exact: true }).waitFor();
+  await effortEditor.getByText('配置已从其他位置更新；取消可查看最新值，保存将使用当前草稿。', { exact: true }).waitFor();
+  assert.equal(await effort.getAttribute('aria-describedby').then(ids => ids.split(/\s+/u).length), 2, 'the select is associated with both the conflict hint and save error');
+  assert.equal(await effort.inputValue(), 'high', 'an external update does not overwrite the draft');
+  await luna.getByRole('button', { name: '取消编辑默认思考深度', exact: true }).click();
+  assert.equal(await effortEditor.locator('.odc-effort-value').innerText(), 'low', 'cancel reveals the latest accepted value');
+
+  await editEffort.click();
+  await effort.selectOption('high');
+  await luna.getByRole('button', { name: '保存默认思考深度', exact: true }).click();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.reasoningEffort === 'high');
+  assert.equal(await effortEditor.getAttribute('data-mode'), 'summary', 'only a successful Host save exits edit mode');
+  await editEffort.click();
+  await effort.selectOption('');
+  await luna.getByRole('button', { name: '保存默认思考深度', exact: true }).click();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.reasoningEffort === undefined);
+  assert.equal(await effortEditor.locator('.odc-effort-value').innerText(), '继承默认', 'inherit deletes the saved default');
+  await editEffort.click();
+  await effort.selectOption('high');
+  await luna.getByRole('button', { name: '保存默认思考深度', exact: true }).click();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.reasoningEffort === 'high');
   await restoreImage.click();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.imageInput === undefined);
@@ -466,13 +549,22 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.evaluate(() => window.__setModelEffort('muse-wonder', 'high'));
   const unknownModel = page.locator('.odc-model-item', { hasText: 'muse-wonder' });
   await unknownModel.locator('summary').click();
+  const unknownEffortEditor = unknownModel.locator('.odc-effort');
+  assert.equal(await unknownEffortEditor.locator('.odc-effort-value').innerText(), 'high（当前不可用）');
+  const unknownEdit = unknownModel.getByRole('button', { name: '编辑默认思考深度', exact: true });
+  assert.equal(await unknownEdit.isEnabled(), true);
+  await unknownEdit.click();
   const unknownEffort = unknownModel.getByLabel('默认思考深度', { exact: true });
   assert.equal(await unknownEffort.isEnabled(), true);
-  await unknownModel.getByText('已保存的档位不适用于当前模型或协议，请选择其他档位或继承默认。', { exact: true }).waitFor();
+  await unknownModel.getByText('当前草稿不适用于此模型或协议，请选择其他档位或继承默认。', { exact: true }).waitFor();
   assert.equal(await unknownEffort.getAttribute('aria-invalid'), 'true');
+  assert.equal(await unknownEffort.locator('option[value=high]').isDisabled(), true);
   await unknownEffort.selectOption('');
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['muse-wonder']?.reasoningEffort), 'high', 'clearing a stale draft still requires an explicit save');
+  await unknownModel.getByRole('button', { name: '保存默认思考深度', exact: true }).click();
   await page.waitForFunction(() => window.__config.modelSettings?.['muse-wonder'] === undefined);
-  assert.equal(await unknownEffort.isDisabled(), true);
+  assert.equal(await unknownEffortEditor.locator('.odc-effort-value').innerText(), '继承默认');
+  assert.equal(await unknownEdit.isDisabled(), true);
   // Discovery success: source, timestamp and the new row become visible.
   await page.getByRole('button', { name: '刷新模型目录', exact: true }).click();
   await page.waitForFunction(() => window.__refreshModelsCalls === 1);
@@ -663,8 +755,9 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     }
     await page.getByRole('tab', { name: '模型', exact: true }).click();
-    const modelDetails = page.locator('.odc-model-details').filter({ has: page.getByRole('combobox', { name: '默认思考深度', includeHidden: true }) }).first();
+    const modelDetails = page.locator('.odc-model-details').first();
     await modelDetails.locator('summary').click();
+    await modelDetails.getByRole('button', { name: '编辑默认思考深度', exact: true }).click();
     assert.equal(await modelDetails.getByRole('combobox', { name: '默认思考深度' }).isEnabled(), true);
     reports.push(await auditTheme(page, `${index + 1}-${mode}-model-options`));
     if (mode === 'dark') await page.screenshot({ path: join(previewDir, 'models-dark.png'), fullPage: true });
@@ -694,6 +787,18 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   reports.push(await auditTheme(page, 'forced-colors-connection'));
   await page.getByRole('tab', { name: '高级', exact: true }).click();
   reports.push(await auditTheme(page, 'forced-colors-protocol-options'));
+  await page.getByRole('tab', { name: '模型', exact: true }).click();
+  reports.push(await auditTheme(page, 'forced-colors-compact-image-controls'));
+  const forcedImageInput = page.locator('.odc-image-toggle:visible input').first();
+  await page.keyboard.press('Tab');
+  await forcedImageInput.focus();
+  assert.equal(await forcedImageInput.evaluate(element => element.matches(':focus-visible') && getComputedStyle(element).outlineStyle === 'solid' && parseFloat(getComputedStyle(element).outlineWidth) >= 2), true, 'forced colors retain a visible keyboard focus indicator');
+  const forcedEffortDetails = page.locator('.odc-model-details').first();
+  await forcedEffortDetails.locator('summary').click();
+  await forcedEffortDetails.getByRole('button', { name: '编辑默认思考深度', exact: true }).click();
+  reports.push(await auditTheme(page, 'forced-colors-effort-editor'));
+  await forcedEffortDetails.getByLabel('默认思考深度', { exact: true }).press('Escape');
+  assert.equal(await forcedEffortDetails.locator('.odc-effort').getAttribute('data-mode'), 'summary');
   await switchTheme('dark');
   await page.getByRole('tab', { name: '概览', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 900 });
@@ -728,5 +833,5 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await page.locator('style[data-opendesign-corouter]').count(), 0);
   assert.equal(await page.evaluate(() => window.__remoteDisposed), true);
   assert.deepEqual(errors, []);
-  console.log(`Offline UI smoke passed: 4 tabs, ${fixtureModels.length} models, price tiers and stale fallback, model enable/edit/reset persistence, protocol selection, quota timing and auto-refresh scheduling, 10 RPCs, credential input, guard switch, keyboard navigation, disposal; ${reports.length} official light/dark/forced-color audits, minimum measured text contrast ${Math.min(...reports.map(report => report.minimum))}:1.`);
+  console.log(`Offline UI smoke passed: 4 tabs, ${fixtureModels.length} models, price tiers and stale fallback, stable enablement ordering, compact keyboard-accessible image controls, model enable/edit/reset persistence, protocol selection, quota timing and auto-refresh scheduling, 10 RPCs, credential input, guard switch, keyboard navigation, disposal; ${reports.length} official light/dark/forced-color audits, minimum measured text contrast ${Math.min(...reports.map(report => report.minimum))}:1.`);
 } finally { await browser.close(); }

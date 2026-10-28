@@ -258,6 +258,21 @@ test('inference protocol and per-model settings never invalidate the discovered 
   } finally { await dispose(); }
 });
 
+test('Opus 5.5 reference context survives Host model refresh and remains separately overridable', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  const { service, dispose } = await host(current, hostDependencies(calls, () => list('claude-opus-5.5')));
+  try {
+    await saveFixtureKey(service);
+    const refreshed = await service.refreshModels();
+    assert.equal(refreshed.models[0]?.contextWindow, 1_000_000);
+    assert.equal(refreshed.models[0]?.maxOutputTokens, undefined);
+    current.modelSettings = { 'claude-opus-5.5': { contextWindow: 200_000 } };
+    const updated = await service.status();
+    assert.equal(updated.models[0]?.contextWindow, 1_000_000, 'catalog reference remains unchanged');
+    assert.equal(updated.config.modelSettings?.['claude-opus-5.5']?.contextWindow, 200_000);
+  } finally { await dispose(); }
+});
+
 test('an API key change aborts the in-flight request and its late result never commits', async () => {
   const current = runtimeConfig(), calls: Wire[] = [];
   const gate = deferred<void>();

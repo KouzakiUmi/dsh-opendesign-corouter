@@ -21,6 +21,7 @@ import {
   protocolEndpoint,
   quotaAutoRefresh,
   quotaStatusView,
+  sortModelsByEnabled,
   tabAfter,
   writeModelSettings,
   type FormSnapshot,
@@ -173,6 +174,7 @@ test('model discovery wording names the configured gateway, not OpenAI as the pr
   assert.match(html, />刷新模型目录<\/button>/u);
   assert.match(html, /title="从当前配置的网关读取可用模型目录"/u);
   assert.match(html, /来源：当前网关/u);
+  assert.match(html, /上下文容量为目录参考，网关限制可能不同，可在模型设置中覆盖/u);
   assert.doesNotMatch(html, /从 OpenAI 刷新模型|OpenAI \/models 发现/u);
 });
 
@@ -342,6 +344,33 @@ test('form overrides decide enablement before the host catalog value', () => {
   assert.equal(modelEnabled(models[2]!, undefined, false), true);
 });
 
+test('model display sorting is stable, non-mutating and applied before the first-six limit', () => {
+  const mixed: StatusModel[] = [
+    { id: 'disabled-a', name: 'Disabled A', group: 'plan', enabled: false },
+    { id: 'enabled-a', name: 'Enabled A', group: 'plan', enabled: true },
+    { id: 'disabled-b', name: 'Disabled B', group: 'plan', enabled: false },
+    { id: 'enabled-b', name: 'Enabled B', group: 'plan', enabled: true },
+  ];
+  const originalIds = mixed.map(model => model.id);
+  assert.deepEqual(sortModelsByEnabled(mixed, {}, false).map(model => model.id), ['enabled-a', 'enabled-b', 'disabled-a', 'disabled-b']);
+  assert.deepEqual(mixed.map(model => model.id), originalIds, 'the catalog array is not sorted in place');
+  assert.deepEqual(sortModelsByEnabled(mixed, {
+    'disabled-a': { enabled: true },
+    'enabled-a': { enabled: false },
+  }, false).map(model => model.id), ['disabled-a', 'enabled-b', 'enabled-a', 'disabled-b']);
+
+  const paged = Array.from({ length: 8 }, (_, index): StatusModel => ({
+    id: `paged-${index}`, name: `Paged ${index}`, group: 'plan', enabled: true,
+  }));
+  const html = renderModels({ ...status, models: paged }, {
+    ...snapshot,
+    value: { ...snapshot.value, modelSettings: { 'paged-0': { enabled: false } } },
+  });
+  assert.deepEqual([...html.matchAll(/<code>(paged-\d)<\/code>/gu)].map(match => match[1]), ['paged-1', 'paged-2', 'paged-3', 'paged-4', 'paged-5', 'paged-6']);
+  assert.match(html, /7 \/ 8 已启用/u);
+  assert.match(html, /显示全部 8 个模型/u);
+});
+
 test('image input distinguishes manual overrides, catalog facts and unknown-attempt automatic mode', () => {
   assert.equal(modelImageInput(models[0]!, {}), true);
   assert.equal(modelImageInput(models[0]!, { imageInput: false }), false);
@@ -356,6 +385,12 @@ test('image input distinguishes manual overrides, catalog facts and unknown-atte
   const unknown = row(models[2]!, {});
   assert.match(unknown, /自动 · 未知，尝试发送/u);
   assert.doesNotMatch(unknown, /自动 · 支持图片/u);
+  assert.match(unknown, /<label class="odc-image-toggle">/u);
+  assert.doesNotMatch(unknown.match(/<div class="odc-model-image">([\s\S]*?)<\/div>/u)?.[1] ?? '', /odc-switch/u, 'the compact image row does not reuse the full-width switch');
+  const imageCheckbox = unknown.match(/<input[^>]*aria-label="GPT-6\.1 Sol 图片输入"[^>]*>/u)?.[0] ?? '';
+  const imageStateId = imageCheckbox.match(/aria-describedby="([^"]+)"/u)?.[1];
+  assert.ok(imageStateId);
+  assert.match(unknown, new RegExp(`<small class="odc-image-state" id="${imageStateId}">自动 · 未知，尝试发送</small>`, 'u'));
   assert.ok(unknown.indexOf('图片输入') < unknown.indexOf('<details'), 'image policy stays outside advanced parameters');
   assert.match(unknown, /<details class="odc-model-details">/u, 'advanced parameters start collapsed');
   assert.doesNotMatch(unknown, />恢复自动<\/button>/u, 'unchanged defaults do not add a disabled action');
@@ -405,6 +440,23 @@ test('Claude Messages sampling shows compatible values and marks stale values cl
   }));
   assert.match(opus, /厂商默认关闭思考，选择思考深度可启用/u);
   assert.match(opus, /默认最大输出 4096/u);
+});
+
+test('Claude Opus 5.5 labels the vendor context reference without changing the output default', () => {
+  const html = renderToStaticMarkup(h(ModelRow, {
+    model: { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', group: 'paid', contextWindow: 1_000_000 },
+    settings: {}, authoritative: true, writable: true, pending: false, protocol: 'messages', onCommit: async () => true,
+  }));
+  assert.match(html, /上下文 1,000,000 为厂商参考，网关实际容量未验证；可通过上下文预算覆盖。/u);
+  assert.match(html, /Messages 默认最大输出 4096/u);
+});
+
+test('Muse Wonder identifies its unverified mapping as a tentative reference', () => {
+  const html = renderToStaticMarkup(h(ModelRow, {
+    model: { id: 'muse-wonder', name: 'Muse Wonder', group: 'paid', contextWindow: 1_048_576 },
+    settings: {}, authoritative: true, writable: true, pending: false, protocol: 'chat-completions', onCommit: async () => true,
+  }));
+  assert.match(html, /上下文 1,048,576 为暂定参考，网关型号映射及实际容量未验证；可通过上下文预算覆盖。/u);
 });
 
 test('numeric settings accept inherit, bounds and integers only', () => {
@@ -473,9 +525,12 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
   assert.equal((html.match(/type="checkbox"/g) ?? []).length, 6);
   assert.equal((html.match(/type="checkbox"[^>]*checked=""/g) ?? []).length, 4);
   assert.equal((html.match(/<summary[^>]*>参数设置 · (?:已自定义|使用默认值)<\/summary>/g) ?? []).length, 3);
-  for (const label of ['温度', 'Top P', '最大输出（tokens）', '上下文预算（tokens）', '默认思考深度']) {
+  for (const label of ['温度', 'Top P', '最大输出（tokens）', '上下文预算（tokens）']) {
     assert.match(html, new RegExp(`<label for="[^"]+">${label}</label>`));
   }
+  assert.equal((html.match(/aria-label="编辑默认思考深度"/g) ?? []).length, 3);
+  assert.equal((html.match(/class="odc-effort-value">继承默认<\/p>/g) ?? []).length, 3);
+  assert.doesNotMatch(html, /<label for="[^"]+">默认思考深度<\/label>/u, 'the effort selector appears only after entering edit mode');
   assert.match(html, /GPT-6 Astra/u);
   assert.match(html, /已禁用/u);
   assert.match(html, /1 \/ 2 已启用/u);
@@ -489,19 +544,19 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
 
 test('invalid saved efforts remain clearable and are not presented as supported choices', () => {
   const html = renderModels(status, { ...snapshot, value: { ...snapshot.value, modelSettings: { 'gpt-6-astra': { reasoningEffort: 'ultra' } } } });
-  const select = [...html.matchAll(/<select([^>]*)>([\s\S]*?)<\/select>/gu)].find(match => match[2]?.includes('ultra（当前不可用）'));
-  assert.ok(select);
-  assert.doesNotMatch(select[1] ?? '', /disabled/u);
-  assert.match(select[1] ?? '', /aria-invalid="true"/u);
-  assert.match(select[2] ?? '', /value=""/u);
+  assert.match(html, /<p class="odc-effort-value">ultra（当前不可用）<\/p>/u);
+  const edit = html.match(/<button[^>]*aria-label="编辑默认思考深度"[^>]*>编辑<\/button>/u)?.[0] ?? '';
+  assert.doesNotMatch(edit, /disabled/u);
   assert.match(html, /已保存的档位不适用于当前模型或协议/u);
+  assert.match(html, /继承默认/u);
 });
 
 test('settings effort choices also respect the pending protocol selection', () => {
   const next = { ...status, models: [{ ...models[0]!, reasoningEfforts: ['minimal', 'low', 'ultra'] }] };
   const html = renderModels(next, { ...snapshot, value: { ...snapshot.value, apiProtocol: 'messages' } });
-  assert.match(html, /<option value="low">low<\/option>/u);
-  assert.doesNotMatch(html, /<option value="(?:minimal|ultra)"/u);
+  assert.match(html, /思考档位 low/u);
+  assert.doesNotMatch(html, /minimal|ultra/u);
+  assert.match(html, /aria-label="编辑默认思考深度"/u);
 });
 
 test('an overridden model keeps its reset enabled and its values rendered', () => {
@@ -511,7 +566,8 @@ test('an overridden model keeps its reset enabled and its values rendered', () =
   });
   assert.match(html, /value="0.7"/u);
   assert.match(html, /value="4096"/u);
-  assert.equal((html.match(/<option value="high" selected="">high<\/option>/g) ?? []).length, 1);
+  assert.match(html, /<p class="odc-effort-value">high<\/p>/u);
+  assert.match(html, /aria-label="编辑默认思考深度"/u);
   assert.equal((html.match(/>重置<\/button>/g) ?? []).length, 3);
   assert.equal((html.match(/<button[^>]*disabled=""[^>]*>重置<\/button>/g) ?? []).length, 2);
 });
@@ -538,6 +594,20 @@ test('models fall back to the host settings mirror before the form is ready', ()
   );
   assert.match(html, /2 \/ 2 已启用/u);
   assert.doesNotMatch(html, /已禁用/u);
+  assert.match(html, /正在载入配置，无法编辑。/u);
+});
+
+test('effort editing explains read-only, unavailable and pending states', () => {
+  const readOnly = renderModels(status, { ...snapshot, writable: false });
+  assert.match(readOnly, /当前设置为只读，无法编辑。/u);
+  const unavailable = renderModels(status, { status: 'unavailable', writable: true, value: undefined });
+  assert.match(unavailable, /配置暂不可用，无法编辑。/u);
+  const pending = renderToStaticMarkup(h(Models, {
+    status, formSnapshot: snapshot, setFormField: async () => true, pendingField: ['modelSettings'],
+    onRefreshModels: () => {}, refreshingModels: false, notice: null,
+  }));
+  assert.match(pending, /正在保存模型设置，完成后可继续编辑。/u);
+  assert.equal((pending.match(/<button[^>]*disabled=""[^>]*aria-label="编辑默认思考深度"/g) ?? []).length, models.length);
 });
 
 test('advanced offers three protocols, a read-only gateway and real timeout fields', () => {

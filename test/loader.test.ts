@@ -86,7 +86,7 @@ test('official Loader mounts the built package, typert-loader auto-registers its
       await assert.rejects(ctx.llm.resolveModelInfo(PLAN_PROVIDER, 'deepseek-v4.1-flash'), { code: 'MODEL_DISABLED' });
       const configured = await ctx.llm.resolveModelInfo(PLAN_PROVIDER, 'gpt-6-luna');
       assert.equal(configured.defaultMaxTokens, 1024);
-      assert.equal(configured.context?.contextWindow, 7168);
+      assert.equal(configured.context?.contextWindow, 8192, 'the Loader exposes the full combined context window');
       assert.deepEqual(configured.inputModalities, ['text']);
       assert.deepEqual((await ctx.llm.listModels(PLAN_PROVIDER)).find(model => model.id === 'gpt-6-luna')?.inputModalities, ['text']);
       assert.deepEqual((await ctx.llm.listModels(PAID_PROVIDER)).find(model => model.id === 'muse-wonder')?.inputModalities, ['text', 'image']);

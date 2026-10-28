@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyModelSettings, isModelEnabled, parseModelSettingsMap } from '../src/model-settings.js';
-import { findModel } from '../src/catalog.js';
+import { findModel, type CatalogModel } from '../src/catalog.js';
 
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'] as const;
 const MAX_ENTRIES = 512;
@@ -124,9 +124,8 @@ test('applyModelSettings overrides capacity on a copy and never mutates the cata
   assert.deepEqual(applyModelSettings(row, { temperature: 0.3, topP: 0.8, reasoningEffort: 'low' }), row);
   assert.equal(applyModelSettings(row, { contextWindow: 200_000 }).maxOutputTokens, row.maxOutputTokens);
   assert.equal(applyModelSettings(row, { maxTokens: 8_000 }).contextWindow, row.contextWindow);
-  // 目录里没有容量字段的 paid 行可由用户显式补上，仍然不推断其它能力。
-  const paid = findModel('claude-opus-5');
-  assert.ok(paid);
+  // 动态发现且无容量的模型可由用户显式补上，仍然不推断其它能力。
+  const paid: CatalogModel = { id: 'future-model', name: 'Future model', group: 'paid' };
   const tuned = applyModelSettings(paid, { contextWindow: 300_000, maxTokens: 16_000 });
   assert.deepEqual(tuned, { ...paid, contextWindow: 300_000, maxOutputTokens: 16_000 });
   assert.equal(paid.contextWindow, undefined);

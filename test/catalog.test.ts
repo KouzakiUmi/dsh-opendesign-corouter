@@ -191,21 +191,29 @@ test('plan 12 款的容量/输出保留 Go 参考，模态采用当前证据', (
   }
 });
 
-test('付费组及新附赠 M3.1 Flash 的容量字段保持缺省，唯 GPT-6.1 Terra 用厂商型号文档取值', () => {
-  const minimax = findModel('minimax-m3.1-flash');
-  assert.ok(minimax);
-  assert.equal(minimax.group, 'plan');
-  for (const model of [...modelsFor('paid').filter(model => model.id !== 'gpt-6.1-terra'), minimax]) {
-    assert.equal(model.contextWindow, undefined, `${model.id} 不应携带 contextWindow`);
-    assert.equal(model.maxOutputTokens, undefined, `${model.id} 不应携带 maxOutputTokens`);
-  }
-  // GPT-6.1 Terra 的容量与模态取自厂商型号文档，网关侧未实测。
-  const terra = findModel('gpt-6.1-terra');
-  assert.ok(terra);
-  assert.equal(terra.group, 'paid');
-  assert.equal(terra.contextWindow, 1_050_000);
-  assert.equal(terra.maxOutputTokens, 128_000);
-  assert.deepEqual(terra.inputModalities, ['text', 'image']);
+test('39 个模型的上下文参考值按来源逐项记录，不改变既有输出默认值', () => {
+  const windows = new Map<string, number>([
+    ['gpt-6.1-sol', 1_050_000], ['gpt-6.1-terra', 1_050_000], ['gpt-6-astra', 1_050_000],
+    ['gpt-6-luna', 1_050_000], ['gpt-6-sol', 1_050_000], ['gpt-5.6-luna', 1_050_000],
+    ['gpt-5.6-sol', 1_050_000], ['gpt-5.6-terra', 1_050_000],
+    ['claude-fable-5.1', 1_000_000], ['claude-fable-5', 1_000_000], ['claude-opus-5.5', 1_000_000],
+    ['claude-opus-5', 1_000_000], ['claude-opus-4.8', 1_000_000], ['claude-sonnet-5.5', 1_000_000],
+    ['claude-sonnet-5', 1_000_000], ['claude-haiku-5.5', 1_000_000],
+    ['deepseek-v4.1-flash', 1_000_000], ['deepseek-v4-pro', 1_000_000], ['deepseek-v4-flash', 1_000_000],
+    ['deepseek-v4-flash-vision-exp', 1_000_000], ['glm-5.3-flashx', 1_000_000], ['glm-5.3-flash', 1_000_000], ['glm-5.2', 1_000_000],
+    ['kimi-k2.7-code', 262_144], ['kimi-k3', 1_048_576], ['kimi-k3.1-pro', 1_048_576],
+    ['gemini-4-argon', 1_048_576], ['gemini-3.8-flash', 1_048_576], ['gemini-3.7-flash', 1_048_576],
+    ['grok-4.7', 500_000], ['grok-4.6', 500_000], ['grok-4.5', 500_000],
+    ['mimo-v2.6-pro', 1_000_000], ['mimo-v2.6-flash', 1_000_000], ['hy4-preview', 1_000_000],
+    ['qwen3.7-max', 1_000_000], ['minimax-m3.1-flash', 1_000_000],
+    ['muse-spark-1.3', 1_048_576], ['muse-wonder', 1_048_576],
+  ]);
+  assert.equal(windows.size, 39);
+  assert.deepEqual([...windows.keys()].sort(), MODELS.map(row => row.id).sort());
+  for (const row of MODELS) assert.equal(row.contextWindow, windows.get(row.id), row.id);
+  for (const row of modelsFor('paid').filter(model => model.id !== 'gpt-6.1-terra')) assert.equal(row.maxOutputTokens, undefined, row.id);
+  assert.equal(findModel('gpt-6.1-terra')?.maxOutputTokens, 128_000);
+  assert.equal(findModel('minimax-m3.1-flash')?.maxOutputTokens, undefined);
 });
 
 test('图片输入能力采用逐型号证据，未确认模型保持未知', () => {

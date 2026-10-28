@@ -47,7 +47,7 @@ function metadata(provider: string, row: CatalogModel, config: RuntimeConfig): L
   return {
     provider, id: row.id, name: row.name,
     ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
-    ...(row.contextWindow === undefined ? {} : { context: { contextWindow: row.contextWindow - (reserve ?? 0) } }),
+    ...(row.contextWindow === undefined ? {} : { context: { contextWindow: row.contextWindow } }),
     ...(reserve === undefined ? {} : { defaultMaxTokens: reserve }),
     ...(efforts?.length ? { reasoning: {
       efforts: efforts.map(id => ({ id: ReasoningEffortId(id), name: ({ none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '较高', ultra: '极高', max: '最高' } as Record<string, string>)[id] ?? id })),
@@ -244,7 +244,10 @@ export class CoRouterAdapter extends LlmAdapter {
     } catch (error) {
       if (options.signal?.aborted || this.#lifetime.signal.aborted) signal.throwIfAborted();
       if (signal.aborted) throw new LlmError('CoRouter 请求超过总超时', 'TIMEOUT');
-      if (monitor && !tracker.sawToolCall && error instanceof PrematureEndError) throw new LlmError(error.message, 'TRANSPORT');
+      // A missing terminal is recoverable before any tool block; leave retry limits and
+      // cancellation to the Host, and keep all other malformed responses unchanged.
+      const retryOpusMessages = protocolId === 'messages' && row.group === 'paid' && row.id === 'claude-opus-5.5';
+      if ((monitor || retryOpusMessages) && !tracker.sawToolCall && error instanceof PrematureEndError) throw new LlmError(error.message, 'TRANSPORT');
       if (monitor && !tracker.sawToolCall && error instanceof LlmError && error.code === 'EMPTY_RESPONSE') {
         reportEmptyTurn();
         throw new LlmError(error.message, OPENDESIGN_EOT);
