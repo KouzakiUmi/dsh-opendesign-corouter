@@ -934,10 +934,16 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await page.locator('#conversation-input').evaluate(element => element.scrollWidth <= element.clientWidth), true, 'the quick switch fits a narrow chat pane');
   await quickButton.click();
   await quickPanel.waitFor();
-  assert.equal(await quickPanel.evaluate(element => {
+  await page.waitForFunction(() => {
+    const panel = document.querySelector('#conversation-input .odc-quick-panel');
+    return panel?.matches(':popover-open') === true && panel.style.left !== '' && panel.style.left !== '-9999px';
+  }, null, { timeout: 5000 });
+  const narrowBox = await quickPanel.evaluate(element => {
     const rect = element.getBoundingClientRect();
-    return rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth;
-  }), true, 'the popover keeps its left and right bounds in a narrow chat pane');
+    return { left: rect.left, right: rect.right, innerWidth: window.innerWidth, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
+  });
+  assert.ok(narrowBox.left >= 0 && narrowBox.right <= narrowBox.innerWidth, `the popover keeps its left and right bounds in a narrow chat pane: ${JSON.stringify(narrowBox)}`);
+  assert.ok(narrowBox.scrollWidth <= narrowBox.clientWidth, `the popover content does not overflow horizontally: ${JSON.stringify(narrowBox)}`);
   await page.keyboard.press('Escape');
   await quickPanel.waitFor({ state: 'hidden' });
   await page.locator('#conversation-input').evaluate(element => { element.style.width = ''; element.style.maxWidth = ''; });
