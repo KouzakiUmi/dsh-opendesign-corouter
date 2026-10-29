@@ -14,7 +14,9 @@ export const Config = Schema.object({
   apiProtocol: Schema.union(API_PROTOCOL_IDS).default('chat-completions').description('网关支持的推理协议；模型目录通过该网关的兼容接口读取').volatile(),
   modelSettings: Schema.transform(Schema.dict(Schema.any<unknown>()), serializableTransform(parseModelSettingsMap)).default({}).description('逐模型启用状态、图片输入和请求参数').volatile(),
   useDesktopCredential: Schema.boolean().default(true).description('优先读取 OpenDesign 桌面端登录态查询额度').volatile(),
-  emptyTurnGuard: Schema.boolean().default(true).description('检测 DeepSeek V4.1 Flash 工具对话的空回答和异常结束；持续重试直到成功或取消，可能误判并额外消耗额度').volatile(),
+  emptyTurnGuard: Schema.boolean().default(true).description('保护 DeepSeek V4.1 Flash 工具对话：恢复空回答，并在结束前进行有界的结构化收尾核验').volatile(),
+  turnReviewMaxContinuations: Schema.natural().min(1).max(10).default(3).description('每轮任务的收尾核验最多续办次数').volatile(),
+  turnReviewNoProgressLimit: Schema.natural().min(1).max(5).default(2).description('连续缺少新成功工具结果时停止收尾续办的次数').volatile(),
   quotaRefreshSeconds: Schema.natural().min(5).max(3600).default(60).description('额度自动刷新间隔（秒）').volatile(),
   requestTimeoutMs: Schema.natural().min(1000).max(3600000).default(1800000).description('推理请求总超时（毫秒）').volatile(),
   streamIdleTimeoutMs: Schema.natural().min(1000).max(1800000).default(300000).description('流式响应无数据超时（毫秒）').volatile(),
@@ -27,6 +29,8 @@ export interface RuntimeConfig {
   modelSettings?: ModelSettingsMap;
   quotaRefreshSeconds?: number;
   maxRequestImageBytes?: number;
+  turnReviewMaxContinuations?: number;
+  turnReviewNoProgressLimit?: number;
 }
 // Schemastery serializes transform callbacks as source; keep this function closure-free.
 export function assertBaseURL(raw: string): string {
@@ -47,5 +51,6 @@ export function readConfig(config: LiveConfig): RuntimeConfig {
     useDesktopCredential: config.useDesktopCredential.get(), emptyTurnGuard: config.emptyTurnGuard.get(),
     requestTimeoutMs: config.requestTimeoutMs.get(), streamIdleTimeoutMs: config.streamIdleTimeoutMs.get(),
     maxRequestImageBytes: config.maxRequestImageBytes.get(),
+    turnReviewMaxContinuations: config.turnReviewMaxContinuations.get(), turnReviewNoProgressLimit: config.turnReviewNoProgressLimit.get(),
   };
 }

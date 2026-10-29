@@ -11,6 +11,8 @@ import { LlmError } from '@deepseek-ai/dsh-llm';
 import { CoRouterAdapter } from './adapter.js';
 import { ReplayKeyStore } from './replay-key.js';
 import { installEotRecovery } from './eot-recovery.js';
+import { installTurnMonitor } from './turn-monitor.js';
+import type { TurnMonitorStatus } from './turn-monitor-status.js';
 import { fetchModelCatalog, ModelDiscoveryError } from './model-discovery.js';
 import { fetchPricingSnapshot } from './pricing.js';
 import { applyModelSettings, isModelEnabled } from './model-settings.js';
@@ -73,6 +75,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   private _quotaPending: Promise<QuotaSnapshot> | undefined;
   private _quotaController: AbortController | undefined;
   guardedTurns: number = 0;
+  turnMonitorStatus: (() => TurnMonitorStatus) | undefined;
   private _models: readonly CatalogModel[] = MODELS;
   private _modelsUpdatedAt: string | undefined;
   private _modelsError: string | undefined;
@@ -177,6 +180,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       ...(state.keySource ? { apiKeySource: state.keySource } : {}),
       ...(this._quota.source ? { sessionSource: this._quota.source } : {}),
       quota: this._quota, login: this._login.status(), config: state.config, guardedTurns: this.guardedTurns,
+      ...(this.turnMonitorStatus ? { turnMonitor: this.turnMonitorStatus() } : {}),
       models: this._models.map(row => {
         const { id, name, group, contextWindow, maxOutputTokens, inputModalities } = row;
         const reasoningEfforts = modelReasoningEfforts(row, state.config.apiProtocol ?? 'chat-completions');
@@ -395,10 +399,12 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 export function apply(ctx: Context, config: LiveConfig): void {
   const current = () => readConfig(config);
   current();
-  installEotRecovery(ctx, () => current().emptyTurnGuard);
   ctx.inject(['settings'], scope => scope.effect(() => scope.settings.configure({ auto: false }, ctx.fiber)));
   let modelsChanged = () => {};
   const service = new OpenDesignCoRouterService(ctx, current, { resolveSession, readQuota, readDesktopQuota, modelsChanged: () => modelsChanged() });
+  const turnMonitor = installTurnMonitor(ctx, current);
+  service.turnMonitorStatus = () => turnMonitor.status();
+  installEotRecovery(ctx, () => current().emptyTurnGuard, () => turnMonitor.requestRetried());
   const replayKeys = new ReplayKeyStore(() => ctx.get('credentials'));
   const adapter = new CoRouterAdapter({
     config: current, models: () => service.modelCatalog(), apiKey: (ref, baseURL) => service.resolveApiKey(ref, baseURL), onEmptyTurn: () => { service.guardedTurns++; },

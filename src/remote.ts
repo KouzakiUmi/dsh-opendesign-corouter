@@ -6,6 +6,7 @@ import { validateActivationUrl } from './device-auth.js';
 import { API_PROTOCOL_IDS, type ApiProtocol } from './protocol-options.js';
 import { parseModelSettingsMap, type ModelSettingsMap } from './model-settings.js';
 import { MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES } from './image-budget.js';
+import { REVIEW_DECISIONS, REVIEW_REASONS, type TurnMonitorStatus } from './turn-monitor-status.js';
 
 // Type-only: browser imports must not pull in quota.ts runtime dependencies.
 export type { QuotaSnapshot, QuotaWindow, SessionSource } from './quota.js';
@@ -44,6 +45,8 @@ export interface StatusConfig {
   streamIdleTimeoutMs?: number;
   quotaRefreshSeconds?: number;
   maxRequestImageBytes?: number;
+  turnReviewMaxContinuations?: number;
+  turnReviewNoProgressLimit?: number;
 }
 
 /** One selectable model; `group` selects which of the two Providers owns it. */
@@ -104,6 +107,7 @@ export interface Status {
   config: StatusConfig;
   /** Turns the empty-turn guard actually intercepted since process start. */
   guardedTurns: number;
+  turnMonitor?: TurnMonitorStatus;
   models: readonly StatusModel[];
   modelsSource?: 'builtin' | 'openai';
   modelsUpdatedAt?: string;
@@ -319,6 +323,8 @@ function parseStatusConfig(value: unknown): StatusConfig {
     ...(value.streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs: positiveInteger(value.streamIdleTimeoutMs, '流空闲超时', 1_800_000, 1000) }),
     ...(value.quotaRefreshSeconds === undefined ? {} : { quotaRefreshSeconds: positiveInteger(value.quotaRefreshSeconds, '自动刷新间隔', 3600, 5) }),
     ...(value.maxRequestImageBytes === undefined ? {} : { maxRequestImageBytes: positiveInteger(value.maxRequestImageBytes, '请求图片预算', MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES) }),
+    ...(value.turnReviewMaxContinuations === undefined ? {} : { turnReviewMaxContinuations: positiveInteger(value.turnReviewMaxContinuations, '收尾续办次数', 10) }),
+    ...(value.turnReviewNoProgressLimit === undefined ? {} : { turnReviewNoProgressLimit: positiveInteger(value.turnReviewNoProgressLimit, '无进展次数', 5) }),
   };
 }
 
@@ -345,11 +351,21 @@ export function parseStatus(value: unknown): Status {
     login: parseLoginState(value.login),
     config: parseStatusConfig(value.config),
     guardedTurns: count(value.guardedTurns, '已拦截空轮数'),
+    ...(value.turnMonitor === undefined ? {} : { turnMonitor: parseTurnMonitor(value.turnMonitor) }),
     models: parsed,
     ...(value.modelsSource === undefined ? {} : { modelsSource: member(value.modelsSource, ['builtin', 'openai'] as const, '模型目录来源') }),
     ...(value.modelsUpdatedAt === undefined ? {} : { modelsUpdatedAt: isoTime(value.modelsUpdatedAt, '模型更新时间') }),
     ...(value.modelsError === undefined ? {} : { modelsError: text(value.modelsError, '模型更新提示', MAX_MESSAGE) }),
   };
+}
+
+function parseTurnMonitor(value: unknown): TurnMonitorStatus {
+  if (!record(value)) throw new Error('结束核验状态必须是对象');
+  const last = value.last;
+  if (last !== undefined && !record(last)) throw new Error('最近结束核验必须是对象');
+  return { available: flag(value.available, '收尾核验是否可用'), checks: count(value.checks, '收尾核验次数'),
+    continuations: count(value.continuations, '任务续办次数'), requestRetries: count(value.requestRetries, '请求重试次数'),
+    ...(record(last) ? { last: { at: isoTime(last.at, '收尾核验时间'), decision: member(last.decision, REVIEW_DECISIONS, '收尾核验决定'), reason: member(last.reason, REVIEW_REASONS, '收尾核验原因') } } : {}) };
 }
 
 /** `{ expectedRevision }`: the revision the UI saw before the user started a login. */

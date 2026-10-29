@@ -66,6 +66,17 @@ test('disabling the monitor during backoff prevents the next request', async () 
   } finally { await recovery.dispose(); }
 });
 
+test('retry telemetry counts admitted retries only, never a cancelled backoff', async () => {
+  let retries = 0;
+  const admitted = new EotRecovery(() => true, async () => true, () => { retries++; });
+  try { await admitted.handle(fixture().payload, async () => undefined); assert.equal(retries, 1); }
+  finally { await admitted.dispose(); }
+  const { payload, controller } = fixture();
+  const cancelled = new EotRecovery(() => true, async () => { controller.abort(); return false; }, () => { retries++; });
+  try { await cancelled.handle(payload, async () => undefined); assert.equal(retries, 1); }
+  finally { await cancelled.dispose(); }
+});
+
 test('failure to persist a planned retry never starts another request', async () => {
   const { payload } = fixture();
   payload.agent.session.append = () => { throw new Error('fixture log failure'); };

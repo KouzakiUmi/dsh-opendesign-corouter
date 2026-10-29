@@ -29,6 +29,8 @@ import {
   type SettingsProps,
 } from '../src/client.js';
 import type { Status, StatusModel } from '../src/remote.js';
+import type { TurnMonitorStatus } from '../src/turn-monitor-status.js';
+import { TurnMonitorView } from '../src/client.js';
 import type { QuotaSnapshot } from '../src/quota.js';
 
 const h = React.createElement;
@@ -92,6 +94,23 @@ const quota: QuotaSnapshot = {
   note: '桌面权限不足时，将整体使用已保存的完整独立会话。',
 };
 
+const turnMonitor: TurnMonitorStatus = {
+  available: true, checks: 7, continuations: 2, requestRetries: 1,
+  last: { at: '2026-10-26T10:00:00.000Z', decision: 'limited', reason: 'continuation-limit' },
+};
+
+/** Build a TurnMonitorStatus without the optional `last` field, keeping omission a real absence. */
+function omitLast(base: TurnMonitorStatus, available: boolean): TurnMonitorStatus {
+  const { last: _last, ...rest } = base;
+  return { ...rest, available };
+}
+
+/** A Status without the optional `turnMonitor` field, matching a Host older than the monitor. */
+function omitTurnMonitor(base: Status): Status {
+  const { turnMonitor: _turnMonitor, ...rest } = base;
+  return rest;
+}
+
 const status: Status = {
   revision: 'revision-for-test',
   apiKeyConfigured: false,
@@ -109,6 +128,7 @@ const status: Status = {
     streamIdleTimeoutMs: 300_000,
   },
   guardedTurns: 2,
+  turnMonitor,
   models,
   modelsSource: 'openai',
   modelsUpdatedAt: '2026-10-26T09:30:00.000Z',
@@ -132,6 +152,8 @@ let snapshot: FormSnapshot = {
     quotaRefreshSeconds: 60,
     requestTimeoutMs: 1_800_000,
     streamIdleTimeoutMs: 300_000,
+    turnReviewMaxContinuations: 3,
+    turnReviewNoProgressLimit: 2,
   },
 };
 const form: SettingsProps['form'] = {
@@ -621,14 +643,80 @@ test('advanced offers three protocols, a read-only gateway and real timeout fiel
   assert.doesNotMatch(html, /type="url"/u);
   assert.doesNotMatch(html, /保存 Base URL/u);
   assert.match(html, /API Key 环境变量 \/ 凭据引用名/u);
-  for (const label of ['单次请求图片预算（MiB）', '请求总超时（毫秒）', '流式空闲超时（毫秒）', '额度自动刷新间隔（秒）']) {
+  for (const label of ['单次请求图片预算（MiB）', '请求总超时（毫秒）', '流式空闲超时（毫秒）', '额度自动刷新间隔（秒）', '收尾核验最大续办次数', '无进展停止上限']) {
     assert.match(html, new RegExp(`<label for="[^"]+">${label}</label>`));
   }
   assert.match(html, /启用异常结束监控/u);
-  assert.match(html, /已检测到 2 次异常回答/u);
-  assert.match(html, /持续重试，直到成功或取消/u);
-  assert.match(html, /可能额外消耗额度/u);
+  assert.match(html, /已累计 2 次空响应或残留拦截/u);
+  assert.match(html, /持续到成功或取消/u);
+  assert.match(html, /收尾核验有界/u);
+  assert.doesNotMatch(html, /所有命中无限重试|文字识别可能误判|旧统计/u);
   assert.match(html, /type="checkbox"[^>]*checked=""/u);
+  // The two review limits are real numeric fields bound to the saved form values.
+  const continuations = html.match(/<input[^>]*id="odc-turn-continuations"[^>]*>/u)?.[0] ?? '';
+  assert.match(continuations, /value="3"/u);
+  assert.match(continuations, /min="1"/u);
+  assert.match(continuations, /max="10"/u);
+  const noProgress = html.match(/<input[^>]*id="odc-turn-no-progress"[^>]*>/u)?.[0] ?? '';
+  assert.match(noProgress, /value="2"/u);
+  assert.match(noProgress, /min="1"/u);
+  assert.match(noProgress, /max="5"/u);
+});
+
+test('turn monitor card separates the recovery layers without inventing zeros', () => {
+  // The protocol intercept count comes from `guardedTurns` and is deliberately distinct
+  // from `turnMonitor.continuations`, so a wiring mix-up shows up as wrong numbers.
+  const full = renderToStaticMarkup(h(TurnMonitorView, { turnMonitor, guardedTurns: 4 }));
+  for (const label of ['空响应／残留拦截', '请求重试', '结束核验', '任务续办']) assert.match(full, new RegExp(label));
+  assert.match(full, /<dt title="空回答或协议标记残留的拦截次数[^"]*">空响应／残留拦截<\/dt><dd><strong class="odc-metric-value">4<\/strong><\/dd>/u);
+  assert.match(full, /<dd><strong class="odc-metric-value">1<\/strong><\/dd>/u);
+  assert.match(full, /<dd><strong class="odc-metric-value">7<\/strong><\/dd>/u);
+  assert.match(full, /最近决定/u);
+  assert.match(full, /达到上限 · 达到续办上限/u);
+  assert.doesNotMatch(full, /limited|continuation-limit/u, 'model-facing identifiers stay out of the UI');
+  assert.match(full, /<time class="odc-hint" dateTime="2026-10-26T10:00:00\.000Z"/u);
+  assert.match(full, /title="最近决定时间：/u);
+  assert.match(full, /aria-label="最近决定：达到上限/u);
+  // The time is independently accessible via the native element even in dense layouts.
+  const timeHtml = full.match(/<time[^>]*>[^<]*<\/time>/u)?.[0] ?? '';
+  assert.match(timeHtml, /2026\/10\/26|2026-10-26/u);
+
+  const unavailable = renderToStaticMarkup(h(TurnMonitorView, { turnMonitor: omitLast(turnMonitor, false), guardedTurns: 4 }));
+  assert.match(unavailable, /仅协议保护可用；收尾核验未启用。/u);
+  const disabled = renderToStaticMarkup(h(TurnMonitorView, { turnMonitor, guardedTurns: 4, enabled: false }));
+  assert.match(disabled, /监控已关闭/u);
+  assert.doesNotMatch(disabled, /收尾核验可用|两层恢复已运行/u);
+
+  // Legacy status without the optional monitor keeps only the known protocol counter.
+  const legacy = renderToStaticMarkup(h(TurnMonitorView, { guardedTurns: 5 }));
+  assert.match(legacy, /<dt title="空回答或协议标记残留的拦截次数[^"]*">空响应／残留拦截<\/dt><dd><strong class="odc-metric-value">5<\/strong><\/dd>/u);
+  assert.equal((legacy.match(/>—</g) ?? []).length, 4);
+  assert.doesNotMatch(legacy, /class="odc-metric-value">0</u);
+  assert.match(legacy, /仅协议拦截计数可用/u);
+  // Neither value known stays unknown everywhere.
+  const empty = renderToStaticMarkup(h(TurnMonitorView, {}));
+  assert.equal((empty.match(/>—</g) ?? []).length, 5);
+  assert.doesNotMatch(empty, /class="odc-metric-value">0</u);
+  assert.match(empty, /暂无监控数据/u);
+});
+
+test('turn monitor limits save through the host form with rollback', async () => {
+  const saved: Array<[string, unknown]> = [];
+  const setFormField = async (field: string, value: unknown): Promise<boolean> => {
+    saved.push([field, value]);
+    return false;
+  };
+  const html = renderToStaticMarkup(h(Advanced, {
+    status, formSnapshot: snapshot, setFormField, pendingField: ['turnReviewMaxContinuations'],
+  }));
+  assert.match(html, /<input[^>]*id="odc-turn-continuations"[^>]*disabled=""/u);
+  assert.equal(saved.length, 0, 'server rendering must not write configuration');
+  const unbound = renderToStaticMarkup(h(Advanced, {
+    status: omitTurnMonitor(status), formSnapshot: { status: 'loading', writable: false, value: undefined }, setFormField: async () => true, pendingField: [],
+  }));
+  // Without form or host values the defaults render as the editable starting point.
+  assert.match(unbound.match(/<input[^>]*id="odc-turn-continuations"[^>]*>/u)?.[0] ?? '', /value="3"/u);
+  assert.match(unbound.match(/<input[^>]*id="odc-turn-no-progress"[^>]*>/u)?.[0] ?? '', /value="2"/u);
 });
 
 test('unavailable writable forms cannot expose editable controls', () => {
@@ -663,6 +751,6 @@ test('an unconfigured form snapshot keeps the guard on its host value', () => {
     { status: 'loading', writable: false, value: undefined },
   );
   assert.doesNotMatch(html, /type="checkbox"[^>]*checked=""/u);
-  assert.match(html, /已检测到 2 次异常回答/u);
+  assert.match(html, /已累计 2 次空响应或残留拦截/u);
 });
 

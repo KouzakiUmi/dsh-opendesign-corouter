@@ -32,7 +32,7 @@ dsh plugin --profile web add dsh-opendesign-corouter
 也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
-dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.14.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.15.tgz
 ```
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。
@@ -83,9 +83,9 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.14.tg
 
 ### DeepSeek V4.1 Flash 异常结束检测
 
-独立开关，默认开启。参考 [dsh-empty-turn-guard](https://github.com/FYTXY/dsh-empty-turn-guard)，在工具对话中将“stop 且没有工具调用、回答为空或只剩协议残渣”以及短操作前言、简短进度后说明下一步但没有工具调用的情况标成异常 EOT。文字识别属于启发式判断，可能漏检或误判。
+独立开关，默认开启。协议保护参考 [dsh-empty-turn-guard](https://github.com/FYTXY/dsh-empty-turn-guard)，仅将“stop 且没有工具调用、回答为空或只剩协议残留”标成异常 EOT。包含正常正文的操作前言保留为成功响应，转由 Agent 结束检查点进行结构化收尾，不再按句式重发原请求。
 
-检测到异常 EOT 后，在同一 Agent 步骤内持续重试，直到成功或取消，**没有次数上限，重复请求可能额外消耗额度**。其他错误仍遵循 DSH 的原有重试策略。附加监控仅用于 DeepSeek V4.1 Flash 的工具对话；未收到流终态且工具调用尚未开始时，按可重试的传输中断处理。
+异常 EOT 在同一步骤内持续重试，直到成功或取消；其他错误遵循宿主策略。任务收尾核验则有界：默认最多追加 3 步，连续 2 次没有新成功工具结果时停止，可在高级页调整。模型报告完成、等待用户、等待后台工作、阻塞或继续执行；做过工具工作时，完成声明需引用成功结果。已有未完成 Goal、后台等待、取消与截断保留原有控制。首次收尾核验通常增加一次模型步骤，引用校验不等于独立证明全部任务要求已满足。[两层机制、计数与验证边界](docs/empty-turn-evidence.md)
 
 ## 使用前先知道
 

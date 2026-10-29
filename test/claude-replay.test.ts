@@ -276,21 +276,29 @@ test('overlapping native blocks preserve start order even when close events are 
   assert.deepEqual(wire(request([saved]))[0]?.content, [{ type: 'thinking', thinking: 'first', signature: 'a' }, { type: 'text', text: 'later' }]);
 });
 
-test('post-stream empty-turn classification removes an otherwise successful signed envelope', async () => {
+test('post-stream guard discards signed replay for residue but preserves prose for Agent review', async () => {
   const monitored: CatalogModel = { id: 'deepseek-v4.1-flash', name: 'Fixture', group: 'plan' };
+  for (const [text, rejected] of [['<rea:tool_calls></rea:tool_calls>', true], ['让我核对项目配置的完整情况。', false]] as const) {
   const adapter = new CoRouterAdapter({ config: () => ({ ...config, emptyTurnGuard: true }), models: () => [monitored],
     apiKey: async () => 'fixture-key', fetch: async () => new Response(body([
       start(0, { type: 'thinking', thinking: 'read next', signature: 'fixture-signature' }), stop(0),
-      start(1, { type: 'text', text: '让我核对项目配置的完整情况。' }), stop(1), ...finish('end_turn'),
+      start(1, { type: 'text', text }), stop(1), ...finish('end_turn'),
     ])) });
   try {
     const chunks = await collect(adapter.stream({ ...request(), provider: PLAN_PROVIDER, model: monitored.id,
       tools: [{ name: 'read', description: 'fixture', parameters: { type: 'object' } }] }));
     const terminal = chunks.at(-1);
-    assert.ok(terminal?.type === 'finish' && terminal.reason.kind === 'error');
-    assert.equal(terminal.replayState, undefined);
-    assert.equal(assemble(chunks).replayState, undefined);
+    assert.ok(terminal?.type === 'finish');
+    assert.equal(terminal.reason.kind, rejected ? 'error' : 'stop');
+    if (rejected) {
+      assert.equal(terminal.replayState, undefined);
+      assert.equal(assemble(chunks).replayState, undefined);
+    } else {
+      assert.ok(terminal.replayState);
+      assert.ok(assemble(chunks).replayState);
+    }
   } finally { adapter.dispose(); }
+  }
 });
 
 test('aggregate private replay size and native block count have bounded failure paths', async () => {

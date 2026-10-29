@@ -16,6 +16,7 @@ import { validateActivationUrl } from './device-auth.js';
 import { modelReasoningEfforts } from './reasoning.js';
 import { CLAUDE_MESSAGES_MAX_OUTPUT, claudeOutputError, claudeSamplingError, hasRestrictedClaudeSampling } from './claude-capabilities.js';
 import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES } from './image-budget.js';
+import type { ReviewDecision, ReviewReason } from './turn-monitor-status.js';
 
 const h = React.createElement;
 const SETTINGS_NS = 'llm-opendesign-corouter';
@@ -38,6 +39,13 @@ const MAX_REQUEST_TIMEOUT_MS = 3_600_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
 const MIN_STREAM_IDLE_TIMEOUT_MS = 1_000;
 const MAX_STREAM_IDLE_TIMEOUT_MS = 1_800_000;
+/** 与 Host 配置校验保持一致的收尾核验续办边界。 */
+const DEFAULT_TURN_REVIEW_MAX_CONTINUATIONS = 3;
+const MIN_TURN_REVIEW_MAX_CONTINUATIONS = 1;
+const MAX_TURN_REVIEW_MAX_CONTINUATIONS = 10;
+const DEFAULT_TURN_REVIEW_NO_PROGRESS_LIMIT = 2;
+const MIN_TURN_REVIEW_NO_PROGRESS_LIMIT = 1;
+const MAX_TURN_REVIEW_NO_PROGRESS_LIMIT = 5;
 /** Client wait per RPC. The Host's slowest operation (one activation open) budgets less. */
 const RPC_TIMEOUT_MS = 30_000;
 /** 与 model-settings.ts 的容量上限保持一致，避免界面先接受再被 Host 拒绝。 */
@@ -57,6 +65,8 @@ export interface FormValues {
   requestTimeoutMs?: number;
   streamIdleTimeoutMs?: number;
   maxRequestImageBytes?: number;
+  turnReviewMaxContinuations?: number;
+  turnReviewNoProgressLimit?: number;
 }
 export interface FormSnapshot {
   status: 'loading' | 'ready' | 'unavailable';
@@ -123,6 +133,37 @@ const QUOTA_LABELS: Record<QuotaSnapshot['state'], string> = {
   error: '暂时无法读取额度',
 };
 
+/** 结束核验决定与原因的固定中文映射；模型原文不进入界面。 */
+const REVIEW_DECISION_LABELS: Record<ReviewDecision, string> = {
+  continued: '已续办',
+  completed: '已完成',
+  'waiting-user': '等待用户',
+  'waiting-work': '等待执行',
+  blocked: '受阻',
+  limited: '达到上限',
+  skipped: '未核验',
+  unverified: '无法确认',
+};
+const REVIEW_REASON_LABELS: Record<ReviewReason, string> = {
+  'missing-outcome': '尚未报告收尾状态',
+  'pending-action': '尚有待执行事项',
+  'reported-complete': '已报告完成',
+  'needs-user': '需要用户补充',
+  'work-running': '任务仍在进行',
+  'reported-blocked': '已报告阻塞',
+  'continuation-limit': '达到续办上限',
+  'no-progress': '无进展',
+  'goal-owned': '由现有目标状态控制',
+  'service-unavailable': '服务暂不可用',
+  cancelled: '已取消',
+  truncated: '回答被截断',
+  'request-failed': '请求失败',
+  disabled: '监控未启用',
+  superseded: '被新任务取代',
+  'invalid-evidence': '证据不可用',
+  'tool-concluded': '工具已结束本轮',
+};
+
 function installStyles(): () => void {
   const style = document.createElement('style');
   style.dataset.opendesignCorouter = '';
@@ -149,6 +190,7 @@ function installStyles(): () => void {
 .odc-switch{display:flex;align-items:center;gap:12px;min-height:44px;padding:6px 2px;cursor:pointer}.odc-switch input{appearance:auto;width:20px;height:20px;flex:none;margin:0;cursor:inherit;accent-color:var(--dsw-alias-brand-primary,Highlight)}.odc-switch>span{display:grid;gap:4px;min-width:0}.odc-switch:has(input:disabled){cursor:not-allowed;opacity:.6}.odc-divider{height:1px;border:0;background:var(--dsw-alias-border-l4,transparent);margin:2px 0}.odc-link{color:var(--dsw-alias-brand-primary,inherit);text-underline-offset:3px}
 .odc-readonly{display:grid;gap:10px;margin-top:14px;padding:10px 12px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent)}.odc-code{display:block;min-width:0;color:var(--dsw-alias-label-primary,inherit);font-family:ui-monospace,'Cascadia Mono',Consolas,monospace;font-size:11px;line-height:1.6;overflow-wrap:anywhere}
 .odc-timing{padding:12px 0;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-timing .odc-metric{min-height:0}.odc-settings>.odc-notice{margin-bottom:14px}.odc-model-details>summary{min-height:32px;padding:6px 0}
+.odc-turn-monitor{display:grid;gap:0;margin:12px 0 0}.odc-turn-monitor>div:first-child{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:0 0 6px}.odc-turn-monitor>div:first-child dt{font-size:12px;font-weight:600}.odc-turn-monitor-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;min-width:0;min-height:0;padding:6px 0;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-turn-monitor-row dt{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,inherit);min-width:0}.odc-turn-monitor-row dd{margin:0;min-width:0;text-align:right}.odc-turn-monitor-row .odc-metric-value{font-size:13px;font-variant-numeric:tabular-nums}.odc-turn-monitor-last dd{display:grid;gap:3px;justify-items:end}.odc-turn-monitor-verdict{font-size:12px;font-weight:600;overflow-wrap:anywhere;text-align:right}.odc-turn-monitor-last time{font-size:11px;font-variant-numeric:tabular-nums}
 .odc-field-error{color:var(--dsw-alias-state-error-primary,inherit);color:color-mix(in srgb,var(--dsw-alias-state-error-primary,CanvasText) 85%,var(--dsw-alias-label-primary,CanvasText))}
 .odc-model-groups{align-items:start}.odc-label,.odc-hint,.odc-meta,.odc-window dt,.odc-quota-footer dt,.odc-quota-footer dd,.odc-window-details>summary,.odc-model-details>summary,.odc-model-item code,.odc-model-meta,.odc-model-count,.odc-code{font-size:12px}.odc-field-compact .odc-input,.odc-button-small{font-size:12px}.odc-button-small{min-height:32px}.odc-chip{font-size:11px}
 .odc-settings{--odc-accent:var(--dsw-alias-brand-primary-new-colorprimary-new-color,#4176e6);max-width:720px;padding:16px;line-height:1.6}
@@ -469,6 +511,39 @@ export function QuotaView({ quota, nextAutoRefreshAt, refreshIntervalSeconds, bu
       h('summary', null, '如何理解这些额度？'),
       h('p', { className: 'odc-hint' }, '赠送窗口显示周期内的使用量。套餐余额和充值 / 赠送金额是钱包的不同分池，总额度是钱包合计。— 表示暂无数据。')),
     quota.note !== undefined ? h('p', { className: 'odc-notice', 'data-kind': quota.state === 'error' ? 'error' : 'status', role: quota.state === 'error' ? 'alert' : 'status' }, quota.note) : null);
+}
+
+/** 异常结束监控卡片：协议拦截与新监控计数分列，未知值保持未知，不补零；计数均从插件加载起累计。 */
+export function TurnMonitorView({ turnMonitor, guardedTurns, enabled = true }: { turnMonitor?: Status['turnMonitor']; guardedTurns?: number | undefined; enabled?: boolean | undefined }) {
+  const metrics = [
+    { label: '空响应／残留拦截', hint: '空回答或协议标记残留的拦截次数，从插件加载起累计', value: guardedTurns === undefined ? '—' : String(guardedTurns) },
+    { label: '请求重试', hint: '本插件空响应错误恢复中已开始的重试次数，从插件加载起累计', value: turnMonitor === undefined ? '—' : String(turnMonitor.requestRetries) },
+    { label: '结束核验', hint: '任务收尾的有界核验次数，从插件加载起累计', value: turnMonitor === undefined ? '—' : String(turnMonitor.checks) },
+    { label: '任务续办', hint: '结束检查点追加的核验或任务步骤次数，从插件加载起累计', value: turnMonitor === undefined ? '—' : String(turnMonitor.continuations) },
+  ];
+  const last = turnMonitor?.last;
+  const lastAt = last === undefined || !Number.isFinite(Date.parse(last.at)) ? undefined : last.at;
+  const lastDecision = last === undefined ? undefined : REVIEW_DECISION_LABELS[last.decision];
+  const lastReason = last === undefined ? undefined : REVIEW_REASON_LABELS[last.reason];
+  return h('dl', { className: 'odc-card odc-turn-monitor', 'aria-label': '异常结束监控' },
+    h('div', null, h('dt', null, '监控指标'),
+      h('span', { className: 'odc-hint', role: 'status' },
+        !enabled ? '监控已关闭；以下为本次加载的累计记录。' : turnMonitor === undefined
+          ? guardedTurns === undefined ? '暂无监控数据' : '仅协议拦截计数可用'
+          : turnMonitor.available
+            ? `收尾核验可用，已核验 ${turnMonitor.checks} 次。`
+            : '仅协议保护可用；收尾核验未启用。')),
+    metrics.map(metric => h('div', { className: 'odc-turn-monitor-row', key: metric.label },
+      h('dt', { title: metric.hint }, metric.label),
+      h('dd', null, h('strong', { className: 'odc-metric-value' }, metric.value)))),
+    h('div', { className: 'odc-turn-monitor-row odc-turn-monitor-last', key: 'last' },
+      h('dt', null, '最近决定'),
+      h('dd', null,
+        lastDecision === undefined || lastReason === undefined || lastAt === undefined
+          ? h('span', { className: 'odc-hint' }, '—')
+          : h(React.Fragment, null,
+            h('span', { className: 'odc-turn-monitor-verdict' }, `${lastDecision} · ${lastReason}`),
+            h('time', { className: 'odc-hint', dateTime: lastAt, title: `最近决定时间：${formatTime(lastAt)}`, 'aria-label': `最近决定：${lastDecision}，原因：${lastReason}，时间：${formatTime(lastAt)}` }, formatTime(lastAt))))));
 }
 
 /** Whole-map model settings writer: absent entry means "inherit every default". */
@@ -1116,6 +1191,8 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
   const streamIdleTimeout = formSnapshot.value?.streamIdleTimeoutMs ?? status?.config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   const refreshSeconds = formSnapshot.value?.quotaRefreshSeconds ?? status?.config.quotaRefreshSeconds ?? DEFAULT_QUOTA_REFRESH_SECONDS;
   const imageBudget = formSnapshot.value?.maxRequestImageBytes ?? status?.config.maxRequestImageBytes ?? DEFAULT_MAX_REQUEST_IMAGE_BYTES;
+  const turnContinuations = formSnapshot.value?.turnReviewMaxContinuations ?? status?.config.turnReviewMaxContinuations ?? DEFAULT_TURN_REVIEW_MAX_CONTINUATIONS;
+  const turnNoProgress = formSnapshot.value?.turnReviewNoProgressLimit ?? status?.config.turnReviewNoProgressLimit ?? DEFAULT_TURN_REVIEW_NO_PROGRESS_LIMIT;
   const selected = API_PROTOCOL_OPTIONS.find(option => option.id === protocol);
   const saveKeyRef = async () => {
     const value = apiKeyEnv.trim();
@@ -1134,14 +1211,27 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
   return h(React.Fragment, null,
     h('section', { className: 'odc-card' },
       h('h3', null, '异常结束监控'),
-      h('p', { className: 'odc-hint' }, '检测 DeepSeek V4.1 Flash 工具对话中的空回答、协议标记残留或说明下一步后未执行的提前结束。文字识别可能误判。'),
+      h('p', { className: 'odc-hint' }, '检测 DeepSeek V4.1 Flash 工具对话中的空回答、协议标记残留或说明下一步后未执行的提前结束。'),
       h('div', { style: { marginTop: 14 } }, h(Switch, {
         checked: formSnapshot.value?.emptyTurnGuard ?? status?.config.emptyTurnGuard ?? true,
         disabled: !writable || pendingField.includes('emptyTurnGuard'),
         label: '启用异常结束监控',
-        hint: `已检测到 ${status?.guardedTurns ?? '—'} 次异常回答。命中后持续重试，直到成功或取消；可能额外消耗额度。`,
+        hint: `已累计 ${status?.guardedTurns ?? '—'} 次空响应或残留拦截。协议空响应恢复持续到成功或取消；收尾核验有界，可能额外消耗额度。`,
         onChange: checked => { void setFormField('emptyTurnGuard', checked); },
-      }))),
+      })),
+      h(TurnMonitorView, { turnMonitor: status?.turnMonitor, guardedTurns: status?.guardedTurns, enabled: formSnapshot.value?.emptyTurnGuard ?? status?.config.emptyTurnGuard ?? true }),
+      h(NumberField, {
+        id: 'odc-turn-continuations', label: '收尾核验最大续办次数', hint: `核验未完成时最多自动续办的次数，${MIN_TURN_REVIEW_MAX_CONTINUATIONS}–${MAX_TURN_REVIEW_MAX_CONTINUATIONS}；默认 ${DEFAULT_TURN_REVIEW_MAX_CONTINUATIONS} 次。`,
+        value: turnContinuations, min: MIN_TURN_REVIEW_MAX_CONTINUATIONS, max: MAX_TURN_REVIEW_MAX_CONTINUATIONS, integer: true,
+        disabled: !writable || pendingField.includes('turnReviewMaxContinuations'),
+        onCommit: value => setFormField('turnReviewMaxContinuations', value),
+      }),
+      h(NumberField, {
+        id: 'odc-turn-no-progress', label: '无进展停止上限', hint: `连续无进展的核验达到该次数即停止续办，${MIN_TURN_REVIEW_NO_PROGRESS_LIMIT}–${MAX_TURN_REVIEW_NO_PROGRESS_LIMIT}；默认 ${DEFAULT_TURN_REVIEW_NO_PROGRESS_LIMIT} 次。`,
+        value: turnNoProgress, min: MIN_TURN_REVIEW_NO_PROGRESS_LIMIT, max: MAX_TURN_REVIEW_NO_PROGRESS_LIMIT, integer: true,
+        disabled: !writable || pendingField.includes('turnReviewNoProgressLimit'),
+        onCommit: value => setFormField('turnReviewNoProgressLimit', value),
+      })),
     h('section', { className: 'odc-card' },
       h('h3', null, '推理协议'),
       h('p', { className: 'odc-hint' }, '选择当前网关支持的推理协议。模型目录始终从该网关读取。'),

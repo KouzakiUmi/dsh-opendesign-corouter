@@ -62,8 +62,11 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
     let config = {
       emptyTurnGuard: true, useDesktopCredential: true, baseURL: 'https://amr-link.open-design.ai/v1', apiKeyEnv: 'COROUTER_API_KEY',
       apiProtocol: 'chat-completions', modelSettings: {}, quotaRefreshSeconds: 60, requestTimeoutMs: 1800000, streamIdleTimeoutMs: 300000,
+      turnReviewMaxContinuations: 3, turnReviewNoProgressLimit: 2,
     };
     validateConfig(config);
+    let turnMonitor = { available: true, checks: 4, continuations: 5, requestRetries: 1,
+      last: { at: new Date(Date.now() - 3_600_000).toISOString(), decision: 'continued', reason: 'pending-action' } };
     let models = rawModels.map(model => ({ ...model, enabled: true }));
     let modelsSource = 'builtin';
     let modelsUpdatedAt;
@@ -85,6 +88,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
     const status = () => {
       const value = {
         revision: 'fixture-revision', apiKeyConfigured: true, apiKeySource, sessionSource: 'login', quota, login, config, guardedTurns: 2,
+        ...(turnMonitor === undefined ? {} : { turnMonitor }),
         models: models.map(model => ({ ...model, enabled: config.modelSettings?.[model.id]?.enabled ?? model.enabled ?? true })),
         modelsSource,
         ...(modelsUpdatedAt === undefined ? {} : { modelsUpdatedAt }),
@@ -171,6 +175,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
       login = { ...login, state, message: state === 'success' ? '设备授权已完成并保存' : '设备授权已过期，请重新开始' };
     };
     window.__setQuotaPaused = () => { quota = { ...quota, state: 'partial', autoRefreshPaused: true, refreshFailures: 6, nextRefreshAt: undefined }; };
+    window.__setTurnMonitor = value => { turnMonitor = value; };
     window.__setModelsFail = value => { window.__modelsFail = value; };
     window.__openActivationCalls = 0;
     window.__setActivationCode = code => { window.__activationCode = code; };
@@ -685,7 +690,51 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.getByRole('tab', { name: '高级', exact: true }).click();
   const guard = page.getByRole('checkbox', { name: /启用异常结束监控/u });
   assert.equal(await guard.isChecked(), true);
-  await page.getByText('已检测到 2 次异常回答。', { exact: false }).waitFor();
+  await page.getByText('已累计 2 次空响应或残留拦截。', { exact: false }).waitFor();
+  // The monitor card reports each labelled recovery layer with its own counter; the protocol
+  // row reads `guardedTurns` (2) and is deliberately distinct from continuations (5).
+  const monitor = page.getByLabel('异常结束监控', { exact: true });
+  await monitor.getByText('已续办 · 尚有待执行事项', { exact: true }).waitFor();
+  assert.equal(await monitor.locator('.odc-turn-monitor-row .odc-metric-value').first().innerText(), '2');
+  assert.deepEqual(await monitor.locator('.odc-turn-monitor-row .odc-metric-value').allTextContents(), ['2', '1', '4', '5'], 'protocol intercepts stay separate from the new monitor counters');
+  assert.match(await monitor.locator('time').getAttribute('title'), /最近决定时间：\d{4}\//u);
+  await page.evaluate(() => window.__setTurnMonitor({ available: false, checks: 0, continuations: 1, requestRetries: 0 }));
+  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await page.getByRole('tab', { name: '高级', exact: true }).click();
+  await monitor.getByText('仅协议保护可用；收尾核验未启用。', { exact: true }).waitFor();
+  // Legacy status without the optional block keeps only the known protocol counter.
+  await page.evaluate(() => window.__setTurnMonitor(undefined));
+  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await page.getByRole('tab', { name: '高级', exact: true }).click();
+  await monitor.getByText('仅协议拦截计数可用', { exact: true }).waitFor();
+  assert.deepEqual(await monitor.locator('.odc-metric-value').allTextContents(), ['2', '—', '—', '—'], 'legacy status shows the protocol counter only, never invented zeros');
+  assert.equal(await monitor.locator('.odc-turn-monitor-last dd').innerText(), '—', 'the absent decision stays unknown separately');
+  await page.evaluate(() => window.__setTurnMonitor({ available: true, checks: 3, continuations: 1, requestRetries: 2, last: { at: new Date().toISOString(), decision: 'completed', reason: 'reported-complete' } }));
+  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await page.getByRole('tab', { name: '高级', exact: true }).click();
+  await monitor.getByText('已完成 · 已报告完成', { exact: true }).waitFor();
+  // Both review limits persist through the real form write path, including rollback.
+  const turnContinuations = page.getByLabel('收尾核验最大续办次数', { exact: true });
+  const turnNoProgress = page.getByLabel('无进展停止上限', { exact: true });
+  assert.equal(await turnContinuations.inputValue(), '3');
+  assert.equal(await turnNoProgress.inputValue(), '2');
+  await turnContinuations.fill('5');
+  await turnContinuations.blur();
+  await page.waitForFunction(() => window.__config.turnReviewMaxContinuations === 5);
+  await turnNoProgress.fill('4');
+  await turnNoProgress.blur();
+  await page.waitForFunction(() => window.__config.turnReviewNoProgressLimit === 4);
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await turnContinuations.fill('11');
+  await turnContinuations.blur();
+  await page.locator('.odc-field-error').first().waitFor();
+  assert.equal(await page.evaluate(() => window.__config.turnReviewMaxContinuations), 5, 'an out-of-range value never persists');
+  await turnContinuations.fill('6');
+  await turnContinuations.blur();
+  assert.equal(await turnContinuations.inputValue(), '6', 'the pending limit is visible while held');
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelector('#odc-turn-continuations')?.value === '5');
   await guard.uncheck();
   await page.waitForFunction(() => window.__config.emptyTurnGuard === false);
   await guard.check();

@@ -42,7 +42,7 @@ export class EotRecovery {
   readonly #lifetime = new AbortController();
   readonly #states = new WeakMap<object, RetryState>();
   readonly #active = new Set<Promise<RecoveryAction>>();
-  constructor(readonly enabled: () => boolean, readonly wait = cancellableDelay) {}
+  constructor(readonly enabled: () => boolean, readonly wait = cancellableDelay, readonly onRetry?: () => void) {}
 
   readonly handle: RecoveryListener = (payload, next) => {
     if (payload.provider !== PLAN_PROVIDER || payload.failure.code !== OPENDESIGN_EOT || !this.enabled()) return next();
@@ -66,6 +66,7 @@ export class EotRecovery {
     agent.session.append('llm/retry', { retryId: state.retryId, turn, step, provider, mode: 'always', policyKey: POLICY_KEY, retry: state.retry, delayMs, failure });
     if (!await this.wait(delayMs, fused) || fused.aborted || !this.enabled()) return;
     agent.session.append('llm/retry-started', { retryId: state.retryId, turn, step, retry: state.retry });
+    try { this.onRetry?.(); } catch { /* Telemetry cannot change an admitted retry. */ }
     return { kind: 'retry' };
   }
 
@@ -76,8 +77,8 @@ export class EotRecovery {
 }
 
 /** Register against the host's documented scoped recovery waterfall. */
-export function installEotRecovery(ctx: Context, enabled: () => boolean): void {
-  const recovery = new EotRecovery(enabled);
+export function installEotRecovery(ctx: Context, enabled: () => boolean, onRetry?: () => void): void {
+  const recovery = new EotRecovery(enabled, cancellableDelay, onRetry);
   // dsh-agent is an optional host service, not an installation requirement for provider-only use.
   const events = ctx as unknown as RecoveryEvents;
   const remove = events.on('agent/request-error', recovery.handle, { prepend: true });

@@ -107,6 +107,24 @@ test('status round-trips, and nothing outside the allowlist survives', () => {
   assert.equal(JSON.stringify(sanitized).includes('secret=1'), false);
 });
 
+test('completion monitoring transports only counters and fixed decisions, with legacy payload support', () => {
+  const turnMonitor = { available: true, checks: 5, continuations: 2, requestRetries: 1,
+    last: { at: '2026-10-29T10:00:00Z', decision: 'limited', reason: 'no-progress' } };
+  assert.deepEqual((through('status', { ...status, turnMonitor }) as Status).turnMonitor, turnMonitor);
+  assert.equal(parseStatus(status).turnMonitor, undefined);
+  const sanitized = parseStatus({ ...status, turnMonitor: { ...turnMonitor, modelText: 'private-output',
+    last: { ...turnMonitor.last, explanation: 'private-output' } } });
+  assert.equal(JSON.stringify(sanitized).includes('private-output'), false);
+  for (const turnMonitor of [null, { available: true, checks: -1, continuations: 0, requestRetries: 0 },
+    { available: true, checks: 0, continuations: 0, requestRetries: 0, last: { at: 'invalid', decision: 'limited', reason: 'no-progress' } },
+    { available: true, checks: 0, continuations: 0, requestRetries: 0, last: { at: '2026-10-29T10:00:00Z', decision: 'private-output', reason: 'no-progress' } }]) {
+    assert.throws(() => parseStatus({ ...status, turnMonitor }));
+  }
+  for (const config of [{ turnReviewMaxContinuations: 0 }, { turnReviewMaxContinuations: 11 }, { turnReviewNoProgressLimit: 6 }]) {
+    assert.throws(() => parseStatus({ ...status, config: { ...status.config, ...config } }));
+  }
+});
+
 test('public price payload is bounded, sanitised and keeps missing rates unknown', () => {
   const snapshot = { state: 'ok', stale: false, fetchedAt: '2026-10-27T08:00:00Z', secret: 'never-return', models: [{
     id: 'deepseek-v4.1-flash', hidden: 'ignored', tiers: [{ label: '不按输入长度分档', currency: 'USD', unit: 'per_1m_tokens', input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: null, hidden: 'ignored' }],

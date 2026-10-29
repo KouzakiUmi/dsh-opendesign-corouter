@@ -2,8 +2,8 @@
 //
 // Every case runs against synthetic chunks and a bare reason object; the guard has no host,
 // network, or timer to involve. What matters is the decision: a `stop` whose visible answer is
-// nothing but protocol residue must become the provider-neutral EMPTY_RESPONSE the host's retry
-// policy already knows, and everything a real answer looks like must keep its exact reason.
+// nothing but protocol residue must become the scoped OPENDESIGN_EOT failure, and everything
+// a real answer looks like must keep its exact reason.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -12,9 +12,7 @@ import { OPENDESIGN_EOT } from '../src/eot-code.js';
 
 import {
   EMPTY_TURN_MESSAGE,
-  INCOMPLETE_TURN_MESSAGE,
   EmptyTurnTracker,
-  isPendingActionTurn,
   isMarkupOnlyStop,
   isResidueOnly,
   stripProtocolResidue,
@@ -122,7 +120,7 @@ test('a stop with no channel content at all is an empty turn', () => {
   assertEmptyTurn(decide([delta('  ')]), 'blank delta');
 });
 
-test('pending actions and concise progress updates become retryable failures', () => {
+test('pending-action prose never becomes a protocol request failure', () => {
   for (const text of [
     '让我核对项目配置的完整情况。',
     '好的，我来看看这个文件。',
@@ -137,17 +135,16 @@ test('pending actions and concise progress updates become retryable failures', (
     '本轮检查已通过。现在查看当前目录的配置。',
     '已更新构建。设置与接口已同步。现在核验发布与配置。',
   ]) {
-    assert.equal(isPendingActionTurn(text), true, text);
     const tracker = track([textBlock(text)]);
-    assert.equal(tracker.inspect().pendingAction, true);
-    assert.deepEqual(tracker.resolve(STOP), { kind: 'error', failure: { code: OPENDESIGN_EOT, message: INCOMPLETE_TURN_MESSAGE } });
+    assert.equal(tracker.inspect().markupOnly, false);
+    assertPassthrough(tracker.resolve(STOP), STOP, 'the Agent checkpoint owns task completion');
     assertPassthrough(track([textBlock(text), toolStart]).resolve(STOP), STOP, 'tool-call protects a preamble');
     assertPassthrough(track([textBlock(text)], { enabled: false }).resolve(STOP), STOP, 'switch off');
     assertPassthrough(track([textBlock(text)]).resolve(MAX_TOKENS), MAX_TOKENS, 'max-tokens is not a stop');
   }
 });
 
-test('preamble heuristic leaves answers, completed actions and multi-sentence text alone', () => {
+test('answers, completed actions and multi-sentence text keep their protocol finish', () => {
   for (const text of [
     '好的', '?', '这是一个正常的回答，包含标点。',
     '我先查看了日志。', '我先检查一下，结果是正常。', '让我核对一下。结果正常。',
@@ -156,7 +153,49 @@ test('preamble heuristic leaves answers, completed actions and multi-sentence te
     'The configuration is correct.', '我先检查以下内容：配置正确。',
     '检查通过。现在查看了日志，发现配置正常。', '检查通过。现在系统可以正常启动。',
   ]) {
-    assert.equal(isPendingActionTurn(text), false, text);
+    assertPassthrough(decide([textBlock(text)]), STOP, text);
+  }
+});
+
+test('pre-delivery prose is preserved for structured Agent review instead of re-requested', () => {
+  for (const text of [
+    '端到端验证已通过。提交前再确认一遍：没有二进制文件被误纳入提交，也没有真实凭据。',
+    '端到端验证已通过。提交前再确认一遍：没有二进制文件被误纳入提交，也没有真实凭据。<rea:tool_calls></rea:tool_calls>',
+    '**端到端验证已通过。提交前再确认一遍：没有二进制文件被误纳入提交，也没有真实凭据。**',
+    '端到端验证已通过。\n提交前再确认一遍：没有二进制文件被误纳入提交，也没有真实凭据。',
+    '构建已通过。发布前再核对产物和版本。',
+    '测试已通过。交付前再检查配置是否正常。',
+    '准备工作已完成。合并之前再验证测试是否通过。',
+    '最后再检查一遍：没有真实凭据。',
+    '最后再核对测试结果。',
+    '现在核对依赖是否正常。',
+    '本轮检查已通过。接下来确认构建是否通过。',
+  ]) {
+    for (const chunks of [[textBlock(text)], [delta(text.slice(0, 12)), delta(text.slice(12))]]) {
+      assertPassthrough(decide(chunks), STOP, text);
+      assertPassthrough(track([...chunks, toolStart]).resolve(STOP), STOP, 'a real tool protects the attempt');
+      assertPassthrough(track(chunks, { enabled: false }).resolve(STOP), STOP, 'disabled monitor');
+      assertPassthrough(track(chunks).resolve(MAX_TOKENS), MAX_TOKENS, 'truncation');
+    }
+  }
+});
+
+test('completed checks, user instructions and delivered explanations remain successful prose', () => {
+  for (const text of [
+    '端到端验证已通过。提交前已确认：没有二进制文件被误纳入提交，也没有真实凭据。',
+    '端到端验证已通过。提交前再确认了一遍：没有二进制文件被误纳入提交，也没有真实凭据。',
+    '端到端验证已通过。提交前再确认一遍的结果是：没有二进制文件被误纳入提交，也没有真实凭据。',
+    '发布前再核对的结果显示版本正确。',
+    '提交前请再确认一遍：没有真实凭据。',
+    '你可以在提交前再确认一遍：没有真实凭据。',
+    '建议提交前再确认一遍。',
+    '端到端验证已通过。提交前再确认一遍吗？',
+    '提交前再确认一遍：没有真实凭据。结果已记录，检查完成。',
+    '```text\n提交前再确认一遍：没有真实凭据。\n```',
+    '操作说明：\n- 提交前再确认一遍：没有真实凭据。',
+    '端到端验证已通过。没有二进制文件被误纳入提交，也没有真实凭据。',
+    '检查通过。现在查看了日志，发现配置正常。',
+  ]) {
     assertPassthrough(decide([textBlock(text)]), STOP, text);
   }
 });
@@ -252,7 +291,7 @@ test('telemetry reports counts only and can never break the stream', async (t) =
     assertEmptyTurn(tracker.resolve(STOP), 'rewrite');
     assert.equal(seen.length, 1, 'one report per rewrite');
     const evidence = seen[0] as Record<string, unknown>;
-    assert.deepEqual(Object.keys(evidence).sort(), ['markupOnly', 'pendingAction', 'reasoningLength', 'sawToolCall', 'textLength']);
+    assert.deepEqual(Object.keys(evidence).sort(), ['markupOnly', 'reasoningLength', 'sawToolCall', 'textLength']);
     assert.equal(typeof evidence.textLength, 'number', 'a length, not the text');
     assert.equal(JSON.stringify(evidence).includes('thinking'), false, 'no model output in the report');
   });

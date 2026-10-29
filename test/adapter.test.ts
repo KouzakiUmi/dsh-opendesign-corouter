@@ -4,7 +4,7 @@ import { CoRouterAdapter } from '../src/adapter.js';
 import { PLAN_PROVIDER, PAID_PROVIDER, type RuntimeConfig } from '../src/config.js';
 import { ReasoningEffortId, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm';
 import { AttachmentId, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
-import { EMPTY_TURN_MESSAGE, INCOMPLETE_TURN_MESSAGE } from '../src/empty-turn.js';
+import { EMPTY_TURN_MESSAGE } from '../src/empty-turn.js';
 import { OPENDESIGN_EOT } from '../src/eot-code.js';
 const base: RuntimeConfig = { apiKeyEnv: 'FIXTURE_KEY', baseURL: 'https://amr-link.open-design.ai/v1', useDesktopCredential: false, emptyTurnGuard: true, requestTimeoutMs: 10000, streamIdleTimeoutMs: 1000 };
 const options = (provider = PLAN_PROVIDER, model = 'deepseek-v4.1-flash'): GenerateOptions => ({ provider, model, messages: [{ role: 'user', content: [{ type: 'text', text: 'fixture' }] }] });
@@ -76,11 +76,16 @@ test('DSv4.1 leaked REA markers become EOT failures only when its monitor and to
   assert.equal(hits, 1);
 });
 
-test('standalone action preamble is intercepted for the monitored tool call across protocols', async () => {
-  const text = '让我核对项目配置的完整情况。';
+test('pending and completed prose remain successful responses for the Agent checkpoint across protocols', async () => {
   const tool = { name: 'fixture_tool', description: 'fixture', parameters: { type: 'object' } };
   const frames = (events: unknown[]) => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
-  for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
+  for (const [text] of [
+    ['让我核对项目配置的完整情况。', true],
+    ['端到端验证已通过。提交前再确认一遍：没有二进制文件被误纳入提交，也没有真实凭据。', true],
+    ['**端到端验证已通过。**\n提交前再确认一遍：没有二进制文件被误纳入提交，也没有真实凭据。', true],
+    ['端到端验证已通过。提交前再确认了一遍：没有二进制文件被误纳入提交，也没有真实凭据。', false],
+    ['提交前请再确认一遍：没有真实凭据。', false],
+  ] as const) for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
     const events = protocol === 'chat-completions' ? [
       { choices: [{ delta: { content: text } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] },
     ] : protocol === 'responses' ? [
@@ -94,10 +99,29 @@ test('standalone action preamble is intercepted for the monitored tool call acro
     let hits = 0;
     const adapter = new CoRouterAdapter({ config: () => ({ ...base, apiProtocol: protocol }), apiKey: async () => 'fixture-key', onEmptyTurn: () => { hits++; }, fetch: async () => frames(events) });
     const result = await collect(adapter.stream({ ...options(), tools: [tool] }));
-    assert.deepEqual(result.at(-1), { type: 'finish', reason: { kind: 'error', failure: { code: OPENDESIGN_EOT, message: INCOMPLETE_TURN_MESSAGE } } }, protocol);
-    assert.equal(hits, 1);
+    assert.deepEqual(result.at(-1), { type: 'finish', reason: { kind: 'stop' } }, `${protocol}: ${text}`);
+    assert.equal(hits, 0);
     assert.deepEqual((await collect(adapter.stream(options()))).at(-1), { type: 'finish', reason: { kind: 'stop' } }, 'no tools');
+    assert.equal(hits, 0, 'prose never increments the protocol-failure counter');
+    adapter.dispose();
   }
+});
+
+test('a pre-delivery response is preserved and never retried inside the adapter', async () => {
+  const text = '端到端验证已通过。提交前再确认一遍：没有二进制文件被误纳入提交，也没有真实凭据。';
+  let hits = 0, calls = 0;
+  const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'fixture-key', onEmptyTurn: () => { hits++; }, fetch: async () => {
+    calls++;
+    return sse(text);
+  } });
+  const request = { ...options(), tools: [{ name: 'fixture_tool', description: 'fixture', parameters: { type: 'object' } }] };
+  try {
+    const result = await collect(adapter.stream(request));
+    assert.deepEqual(result.at(-1), { type: 'finish', reason: { kind: 'stop' } });
+    assert.ok(result.some(chunk => chunk.type === 'block-end' && chunk.block.type === 'text' && chunk.block.text === text));
+    assert.equal(calls, 1);
+    assert.equal(hits, 0);
+  } finally { adapter.dispose(); }
 });
 
 test('premature stream termination is retryable only for the monitored call before any tool block', async () => {
