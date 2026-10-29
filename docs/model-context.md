@@ -1,6 +1,6 @@
 # 模型上下文窗口参考
 
-目录中的上下文窗口用于宿主的占用监控和自动压缩预算。以下为厂商公开规格、同一网关的既有部署参考或明确标出的暂定值，**不是 CoRouter 网关实测上限**；账号、协议或网关可能有更低限制。可在模型设置中逐项覆盖。数值单位为 token；输出额度与上下文窗口分别配置，补充窗口不会自动提高默认最大输出。
+目录中的上下文窗口用于宿主的占用监控和自动压缩预算。以下为厂商公开规格、同一网关的既有部署参考或明确标出的暂定值，**不是 CoRouter 网关实测上限**；账号、协议或网关可能有更低限制。刷新模型目录后，网关显式报告的较小窗口会降低参考预算；手动覆盖优先。数值单位为 token；输出能力参考与上下文窗口分别配置，自动输出预留可能随窗口变化。
 
 ## 厂商型号参考
 
@@ -20,8 +20,14 @@
 
 ## 既有部署参考
 
-`claude-haiku-5.5`、`gpt-6-luna`、`deepseek-v4.1-flash`、`deepseek-v4-pro`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、`glm-5.3-flashx`、`glm-5.3-flash`、`kimi-k2.7-code`、`mimo-v2.6-pro`、`mimo-v2.6-flash` 和 `hy4-preview` 的原有数值沿用同一网关部署资料 [dsh-opendesign-go 0.1.9](https://github.com/EliteOtaku/dsh-opendesign-go)，其中厂商有同名规格的型号同时列于上表。部署参考不保证当前网关有效。
+`claude-haiku-5.5`、`gpt-6-luna`、`deepseek-v4.1-flash`、`deepseek-v4-pro`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、`glm-5.3-flashx`、`glm-5.3-flash`、`kimi-k2.7-code`、`mimo-v2.6-pro`、`mimo-v2.6-flash` 和 `hy4-preview` 的原有数值沿用同网关客户端 [dsh-opendesign-go 0.1.9 的模型表](https://github.com/EliteOtaku/dsh-opendesign-go/blob/v0.1.9/src/model-params.ts#L45-L94)；该表将数字标为厂商参考，并非逐项网关实测。同项目的[独立实验记录](https://github.com/EliteOtaku/dsh-opendesign-go/blob/15ac4ba144e914fe9eef56dbef8d0acbee56b5b9/CHANGELOG.md#L5-L23)描述了 DeepSeek 请求的输入加输出限制，不能外推到其他模型、账户或协议。
 
-例如，[DeepSeek 官方列表](https://api-docs.deepseek.com/zh-cn/api/list-models)对原生 V4.1 Flash / V4 Pro 给出 1,048,576，而既有 CoRouter 部署参考使用 1,000,000；本次保留较保守的既有网关参考，不将原生 API 的数值冒充 CoRouter 的实测结果。
+例如，[DeepSeek 官方价格表](https://api-docs.deepseek.com/zh-cn/quick_start/pricing)对原生 V4.1 Flash / V4 Pro 写为 1M 上下文、最大 384K 输出，并未在该处给出精确窗口整数。目录的 1,000,000 / 384,000 是既有部署参考；[官方请求参数](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion)将 384K 的参数上界写为 393,216。这里不把二者当作已验证的 CoRouter 硬限制。
 
-动态发现的新 ID 若没有已核实的目录参考，仍保持未知，不按名字推断容量。
+Kimi K2.7 Code 的[厂商说明](https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart.md)给出 256K 共用窗口；目录的 262,144 窗口和输出上限来自部署参考，而非厂商声明的精确整数。输入与输出不能同时占满该窗口；插件默认输出预留小于窗口。
+
+## 网关发现与字节限制
+
+OpenDesign 的 [Vela 模型解析](https://github.com/nexu-io/open-design/blob/c6bb5a8b8190e17b7e9c546c731814ffe10d4f67/apps/daemon/src/runtimes/defs/amr.ts#L202-L235)识别可选的上下文窗口字段；同网关第三方客户端的[历史模型响应样本](https://github.com/EliteOtaku/dsh-opendesign-go/blob/15ac4ba144e914fe9eef56dbef8d0acbee56b5b9/.tmpw/models.json)另含 `metadata.context_limit`，[Pi 客户端](https://github.com/Lokeraar/pi-opendesign-bridge/blob/8641954aa11629db61d855ee91e254ab5eec5c35/opendesign-live.ts#L370-L384)也将其解释为窗口。刷新时，插件接受有界正整数窗口字段，并取它们与内置参考中较小的值；新 ID 仅在网关提供明确窗口字段时获得参考。`context_budget` 和 `output_budget` 的网关语义尚不足以证明是硬上限，因此不用于替代窗口或输出限制。不同来源的报告仍可能不准确，用户覆盖优先。
+
+HTTP 413 是请求体大小限制，不等于 token 窗口限制。[Anthropic 错误文档](https://platform.claude.com/docs/en/api/errors)对其直接 Messages API 给出 32 MB 请求上限；CoRouter 或其他协议可能不同。图片编码后的字节预算和 413 恢复见[排障指南](troubleshooting.md)。

@@ -7,12 +7,12 @@
  * - group：官网首页套餐卡 `https://corouter.open-design.ai/zh/` 的
  *   `data-model-module="design-plan"` 12 款归 `plan`；其余在售对话模型归 `paid`。
  * - `plan` 原有 12 款的 contextWindow / maxOutputTokens 与原模态
- *   来自 Go 侧 `dsh-opendesign-go` 0.1.9 的 MODEL_DEFAULTS（同一 `amr-link` endpoint 部署资料），
- *   作为部署参考，尚无官网能力数值的独立佐证；图片模态按最新证据单独核验。
+ *   来自同网关客户端 `dsh-opendesign-go` 0.1.9 的 MODEL_DEFAULTS；该表标为厂商资料，
+ *   不能当作网关实测上限。图片模态按最新证据单独核验。
  * - 其余上下文窗口采用厂商公开资料或明确标注的暂定参考，逐型号来源见
  *   docs/model-context.md；CoRouter 实际限制未验证，可以通过模型设置覆盖。
  * - `gpt-6.1-terra` 的 maxOutputTokens / inputModalities 取自厂商型号文档；
- *   仅补充其他型号的上下文，不改变最大输出默认值。
+ *   其余型号仅补充上下文参考，不新增目录最大输出能力字段。
  * - 客户端桌面安装（Open Design 0.26.1）不内联 CoRouter 目录；其
  *   `vela model preset --format json` 只有 11 个旧预设 id（见 docs/client-evidence.md），
  *   与本表不同代，故不用于本目录。

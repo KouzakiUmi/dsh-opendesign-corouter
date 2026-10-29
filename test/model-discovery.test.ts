@@ -91,7 +91,7 @@ test('known ids inherit catalog grouping and capabilities; new ids are paid rows
     data: [
       { id: 'claude-opus-5', object: 'model', name: 'api-supplied-name' },
       { id: 'deepseek-v4.1-flash', object: 'model', name: 'api-supplied-name' },
-      { id: 'brand-new-chat', object: 'model', name: '  Brand New  ', context_window: 999999, capabilities: { vision: true }, architecture: { output_modalities: ['image'] } },
+      { id: 'brand-new-chat', object: 'model', name: '  Brand New  ', context_budget: 999999, capabilities: { vision: true }, architecture: { output_modalities: ['image'] } },
     ],
   }));
   const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
@@ -157,10 +157,26 @@ test('discovery preserves GPT-6.1 Terra catalog metadata', async () => {
 });
 
 test('discovery preserves the adjustable Opus 5.5 reference context without inventing an output default', async () => {
-  const { fetcher } = stub(() => Response.json({ data: [{ id: 'claude-opus-5.5', context_window: 999 }] }));
+  const { fetcher } = stub(() => Response.json({ data: [{ id: 'claude-opus-5.5', context_window: 2_000_000 }] }));
   const [model] = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
   assert.equal(model?.contextWindow, 1_000_000);
   assert.equal(model?.maxOutputTokens, undefined);
+});
+
+test('explicit gateway windows conservatively lower references without interpreting ambiguous budgets', async () => {
+  const { fetcher } = stub(() => Response.json({ data: [
+    { id: 'kimi-k2.7-code', metadata: { context_limit: 262_000, context_budget: 20_000, output_budget: 2_000 } },
+    { id: 'claude-opus-5.5', context_length: 500_000, contextWindow: 600_000 },
+    { id: 'new-sized', metadata: { context_window_tokens: 96_000 } },
+    { id: 'new-invalid', context_window: -1, metadata: { context_limit: 100_000_001, context_budget: 20_000, output_budget: 2_000 } },
+  ] }));
+  const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
+  assert.equal(rows[0]?.contextWindow, 262_000);
+  assert.equal(rows[0]?.maxOutputTokens, 262_144, 'gateway output_budget is not an output limit');
+  assert.equal(rows[1]?.contextWindow, 500_000, 'the more conservative explicit value wins');
+  assert.equal(rows[1]?.maxOutputTokens, undefined);
+  assert.equal(rows[2]?.contextWindow, 96_000);
+  assert.equal(rows[3]?.contextWindow, undefined);
 });
 
 test('drops unusable and duplicate rows instead of inventing models', async () => {

@@ -57,7 +57,7 @@ Authorization: Bearer <工作空间 API Key>
 
 ## 能力元数据
 
-原有 12 个套餐模型的上下文和输出上限保留同一推理端点的 [dsh-opendesign-go 0.1.9](https://github.com/EliteOtaku/dsh-opendesign-go) 部署参考；其余上下文参考取自厂商公开规格或明确标注的暂定值，详见[型号窗口参考](model-context.md)。网关侧容量尚未实测，可在模型设置中覆盖。仅增加上下文不会改变原有最大输出默认值。图片模态按[型号能力证据](model-capabilities.md)维护，存在来源冲突或型号映射不确定时保持未知。思考档位按[厂商逐型号文档](reasoning-evidence.md)维护，与容量证据分别记录。
+原有 12 个套餐模型的上下文和输出上限保留同网关客户端 [dsh-opendesign-go 0.1.9](https://github.com/EliteOtaku/dsh-opendesign-go) 收录的厂商参考；其余上下文参考取自厂商公开规格或明确标注的暂定值，详见[型号窗口参考](model-context.md)。刷新目录时，明确的网关窗口字段可提供更小的参考预算；网关侧硬限制尚未实测，可在模型设置中覆盖。增加上下文参考不会新增目录输出能力字段，但自动输出预留可能随上下文预算变化。图片模态按[型号能力证据](model-capabilities.md)维护，存在来源冲突或型号映射不确定时保持未知。思考档位按[厂商逐型号文档](reasoning-evidence.md)维护，与容量证据分别记录。
 
 其余缺乏证据的容量和模态保持未知；图片输入可逐型号手动覆盖，未知模态不应被自动当作仅文本。思考能力区分离散档位、无离散控制与未知别名；Host 选择器和设置页使用同一协议交集，历史默认值不作为能力来源。目录与元数据由[目录测试](../test/catalog.test.ts)、[图片能力回归](../test/image-capabilities.test.ts)及[宿主档位回归](../test/reasoning.test.ts)约束。
 

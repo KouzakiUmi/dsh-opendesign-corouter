@@ -5,6 +5,7 @@ import { record } from './util.js';
 import { validateActivationUrl } from './device-auth.js';
 import { API_PROTOCOL_IDS, type ApiProtocol } from './protocol-options.js';
 import { parseModelSettingsMap, type ModelSettingsMap } from './model-settings.js';
+import { MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES } from './image-budget.js';
 
 // Type-only: browser imports must not pull in quota.ts runtime dependencies.
 export type { QuotaSnapshot, QuotaWindow, SessionSource } from './quota.js';
@@ -42,6 +43,7 @@ export interface StatusConfig {
   requestTimeoutMs?: number;
   streamIdleTimeoutMs?: number;
   quotaRefreshSeconds?: number;
+  maxRequestImageBytes?: number;
 }
 
 /** One selectable model; `group` selects which of the two Providers owns it. */
@@ -316,6 +318,7 @@ function parseStatusConfig(value: unknown): StatusConfig {
     ...(value.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: positiveInteger(value.requestTimeoutMs, '请求超时', 3_600_000, 1000) }),
     ...(value.streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs: positiveInteger(value.streamIdleTimeoutMs, '流空闲超时', 1_800_000, 1000) }),
     ...(value.quotaRefreshSeconds === undefined ? {} : { quotaRefreshSeconds: positiveInteger(value.quotaRefreshSeconds, '自动刷新间隔', 3600, 5) }),
+    ...(value.maxRequestImageBytes === undefined ? {} : { maxRequestImageBytes: positiveInteger(value.maxRequestImageBytes, '请求图片预算', MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES) }),
   };
 }
 

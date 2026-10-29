@@ -418,6 +418,19 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.getByRole('tab', { name: '模型', exact: true }).click();
   assert.equal(await page.evaluate(() => window.__lastStatus.models.find(model => model.id === 'gpt-6-luna').enabled), false);
   await planGroup.getByRole('button', { name: '显示全部 13 个模型', exact: true }).click();
+  // The catalog's maximum output is not the adapter's smaller automatic reserve.
+  const kimi = planGroup.locator('.odc-model-item').filter({ hasText: 'kimi-k2.7-code' });
+  await kimi.locator('summary').click();
+  const kimiTemperature = kimi.getByLabel('温度', { exact: true });
+  await kimiTemperature.fill('0.3');
+  await kimiTemperature.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['kimi-k2.7-code']?.temperature === 0.3);
+  const kimiContext = kimi.getByLabel('上下文预算（tokens）', { exact: true });
+  await kimiContext.fill('200000');
+  await kimiContext.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['kimi-k2.7-code']?.contextWindow === 200000);
+  await kimi.getByRole('button', { name: '重置', exact: true }).click();
+  await page.waitForFunction(() => !('kimi-k2.7-code' in (window.__config.modelSettings ?? {})));
   // Reset deletes the whole map entry; the ready form must win over the now-stale catalog flag.
   await luna.getByRole('button', { name: '重置', exact: true }).click();
   await page.waitForFunction(() => !('gpt-6-luna' in (window.__config.modelSettings ?? {})));
@@ -717,6 +730,27 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   const requestTimeout = page.getByLabel('请求总超时（毫秒）', { exact: true });
   const idleTimeout = page.getByLabel('流式空闲超时（毫秒）', { exact: true });
   const refreshSeconds = page.getByLabel('额度自动刷新间隔（秒）', { exact: true });
+  const imageBudget = page.getByLabel('单次请求图片预算（MiB）', { exact: true });
+  assert.equal(await imageBudget.inputValue(), '20');
+  await imageBudget.fill('12');
+  await imageBudget.blur();
+  await page.waitForFunction(() => window.__config.maxRequestImageBytes === 12 * 1024 * 1024);
+  await imageBudget.fill('0');
+  await imageBudget.blur();
+  await page.locator('.odc-field-error').first().waitFor();
+  assert.equal(await page.evaluate(() => window.__config.maxRequestImageBytes), 12 * 1024 * 1024);
+  await imageBudget.fill('12');
+  await imageBudget.blur();
+  await page.locator('.odc-field-error').waitFor({ state: 'detached' });
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await imageBudget.fill('16');
+  await imageBudget.blur();
+  assert.equal(await imageBudget.inputValue(), '16', 'the pending image budget is visible');
+  assert.equal(await imageBudget.isDisabled(), true, 'a pending image-budget save locks its field');
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelector('#odc-image-budget')?.value === '12');
+  assert.equal(await page.evaluate(() => window.__config.maxRequestImageBytes), 12 * 1024 * 1024);
   await requestTimeout.fill('900000');
   await requestTimeout.blur();
   await page.waitForFunction(() => window.__config.requestTimeoutMs === 900000);

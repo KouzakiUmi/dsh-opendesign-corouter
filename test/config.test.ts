@@ -14,6 +14,7 @@ test('configuration rejects unsafe URLs before persistence and exposes live defa
   assert.equal(config.apiProtocol, 'chat-completions');
   assert.deepEqual(config.modelSettings, {});
   assert.equal(config.quotaRefreshSeconds, 60);
+  assert.equal(config.maxRequestImageBytes, 20 * 1024 * 1024);
   assert.equal(assertBaseURL('https://example.com/v1/'), 'https://example.com/v1');
   for (const baseURL of ['https://user:password@example.com/v1', 'https://example.com/v1?secret=fixture', 'https://example.com/v1#fragment', 'http://example.com/v1', 'not a URL']) assert.throws(() => Config({ baseURL }));
   assert.equal(readConfig(Config({ baseURL: 'http://127.0.0.1:8080/v1' })).baseURL, 'http://127.0.0.1:8080/v1');
@@ -23,6 +24,9 @@ test('configuration rejects unsafe URLs before persistence and exposes live defa
   assert.throws(() => Reflect.apply(Config, undefined, [{ apiProtocol: 'not-a-protocol' }]));
   assert.throws(() => Config({ modelSettings: { 'gpt-6-luna': { apiKey: 'must-not-persist' } } }));
   assert.throws(() => Config({ quotaRefreshSeconds: 0 }));
+  assert.equal(readConfig(Config({ maxRequestImageBytes: 8 * 1024 * 1024 })).maxRequestImageBytes, 8 * 1024 * 1024);
+  assert.throws(() => Config({ maxRequestImageBytes: 1024 * 1024 - 1 }));
+  assert.throws(() => Config({ maxRequestImageBytes: 100 * 1024 * 1024 + 1 }));
 });
 
 type DecodedConfig = (value: Parameters<typeof Config>[0]) => ReturnType<typeof readConfig>;

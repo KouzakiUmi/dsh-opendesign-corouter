@@ -49,6 +49,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   RATE_LIMIT: 'OpenDesign：请求过于频繁，请稍后重试',
   TIMEOUT: 'OpenDesign：请求超时，请稍后重试',
   SERVER: 'OpenDesign：上游服务暂不可用，请稍后重试',
+  REQUEST_TOO_LARGE: 'OpenDesign：请求内容超过上游大小限制，请压缩历史、减少图片或缩小输入后重试',
   INVALID_REQUEST: 'OpenDesign：请求被上游拒绝',
   INVALID_RESPONSE: 'OpenDesign：上游响应格式无效',
 };
@@ -152,6 +153,7 @@ function classifyStatus(status: number | undefined): string | undefined {
   if (status === 401) return 'AUTH';
   if (status === 403) return 'PERMISSION';
   if (status === 402) return QUOTA_EXCEEDED_CODE;
+  if (status === 413) return 'REQUEST_TOO_LARGE';
   if (status === 429) return 'RATE_LIMIT';
   if (status === 408 || status === 504) return 'TIMEOUT';
   if (status >= 500) return 'SERVER';

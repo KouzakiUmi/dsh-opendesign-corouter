@@ -20,6 +20,7 @@ const FIXED = {
   rate: 'OpenDesign：请求过于频繁，请稍后重试',
   timeout: 'OpenDesign：请求超时，请稍后重试',
   server: 'OpenDesign：上游服务暂不可用，请稍后重试',
+  tooLarge: 'OpenDesign：请求内容超过上游大小限制，请压缩历史、减少图片或缩小输入后重试',
 } as const;
 
 /** 分类结果必须只含固定中文文案与结构化状态，绝不带任何上游字符串。 */
@@ -98,6 +99,12 @@ test('上下文、超时、服务端保持稳定分类，背景词不误判', ()
   // “上下文/额度”只是正文背景时不得改判。
   check(gatewayError(400, { error: { message: 'context is required for this tool; quota field missing' } }), 'INVALID_REQUEST', 'OpenDesign：请求被上游拒绝', 400);
   check(anthropicError(400, { type: 'error', error: { type: 'invalid_request_error', message: '模型上下文缓存配置无效' } }), 'INVALID_REQUEST', 'OpenDesign：请求被上游拒绝', 400);
+});
+
+test('HTTP 413 reports a request-size limit without claiming a token-window overflow', () => {
+  check(gatewayError(413, {}), 'REQUEST_TOO_LARGE', FIXED.tooLarge, 413);
+  check(anthropicError(413, { type: 'error', error: { type: 'request_too_large', message: SECRET } }), 'REQUEST_TOO_LARGE', FIXED.tooLarge, 413);
+  check(gatewayError(413, { error: { code: 'context_length_exceeded', message: SECRET } }), 'CONTEXT_WINDOW_EXCEEDED', FIXED.context, 413);
 });
 
 test('中文/英文/未知代码都落到固定分类，未知文案按状态兜底', () => {

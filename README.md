@@ -32,7 +32,7 @@ dsh plugin --profile web add dsh-opendesign-corouter
 也可打开 [Actions → CI](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/workflows/ci.yml)，从成功构建下载 **`dsh-opendesign-corouter-build`** artifact。登录 GitHub 后解压 ZIP，取得 `.tgz` 与 `.sha256`，再安装本地包：
 
 ```console
-dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.13.tgz
+dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.14.tgz
 ```
 
 `web` 只是示例，请替换为目标 Profile。Desktop 使用桌面安装器提供的 `dsh` 入口；独立公共 CLI 不能代管保留的 `desktop` Profile。安装后的启用与重载按目标 DSH 的管理流程进行。

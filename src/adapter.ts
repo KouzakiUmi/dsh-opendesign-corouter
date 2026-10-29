@@ -1,11 +1,11 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import {
-  LlmAdapter, LlmError, ReasoningEffortId, assertUsableApiKey,
-  type GenerateOptions, type LlmModelInfo, type LlmResolvedModelInfo, type PreparedAdapterCall, type StreamChunk,
+  IMAGE_OFFLOAD_REQUIRED_CODE, LlmAdapter, LlmError, ReasoningEffortId, assertUsableApiKey, requiredImageOffload,
+  type GenerateOptions, type ImageBlock, type LlmModelInfo, type LlmResolvedModelInfo, type PreparedAdapterCall, type StreamChunk,
 } from '@deepseek-ai/dsh-llm';
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
 import { MODELS, type CatalogModel } from './catalog.js';
-import { PLAN_PROVIDER, PAID_PROVIDER, type RuntimeConfig } from './config.js';
+import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, PLAN_PROVIDER, PAID_PROVIDER, type RuntimeConfig } from './config.js';
 import { chatMessages, chatTools, estimateTokens } from './conversion.js';
 import { gatewayError } from './stream.js';
 import { combinedSignal } from './util.js';
@@ -162,6 +162,15 @@ export class CoRouterAdapter extends LlmAdapter {
         unreadableImages.add(block.attachment.attachmentId);
       }
     }
+    signal.throwIfAborted();
+    // Keep zero-byte/unreadable occurrences in order: the Host offloads the oldest
+    // surface occurrences, not just the attachments this request could read.
+    const imageMessages = options.messages.filter(message => message.role === 'user' || message.role === 'tool');
+    const imageBytes = (block: ImageBlock): number => Buffer.byteLength(images.get(block.attachment.attachmentId) ?? '', 'utf8');
+    // The URL already includes base64 encoding; do not expand its byte count again.
+    const offloadCount = (maxBytes: number): number => requiredImageOffload(imageMessages, { representation: 'raw', maxBytes }, imageBytes);
+    const overBudget = offloadCount(config.maxRequestImageBytes ?? DEFAULT_MAX_REQUEST_IMAGE_BYTES);
+    if (overBudget > 0) throw new LlmError('OpenDesign：图片请求超出字节预算，需要退载较早图片后重试', IMAGE_OFFLOAD_REQUIRED_CODE, { offloadImages: overBudget });
     const projectedOptions: GenerateOptions = unreadableImages.size === 0 ? options : {
       ...options,
       messages: options.messages.map(message => message.role !== 'user' && message.role !== 'tool' ? message : {
@@ -217,7 +226,17 @@ export class CoRouterAdapter extends LlmAdapter {
         } catch { /* Untrusted non-JSON errors are not projected. */ }
         finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
       }
-      throw gatewayError(response.status, error);
+      signal.throwIfAborted();
+      const failure = gatewayError(response.status, error);
+      if (response.status === 413 && failure.code === 'REQUEST_TOO_LARGE') {
+        const totalImageBytes = imageMessages.reduce((total, message) => total + message.content.reduce((sum, block) =>
+          sum + (block.type === 'image' && !block.offloaded ? imageBytes(block) : 0), 0), 0);
+        if (totalImageBytes > 0) {
+          const offloadImages = offloadCount(Math.max(0, totalImageBytes - 4 * 1024 * 1024));
+          if (offloadImages > 0) throw new LlmError('OpenDesign：请求体过大，需要退载较早图片后重试', IMAGE_OFFLOAD_REQUIRED_CODE, { status: 413, offloadImages });
+        }
+      }
+      throw failure;
     }
     const monitor = row.group === 'plan' && row.id === 'deepseek-v4.1-flash' && config.emptyTurnGuard && Boolean(options.tools?.length);
     const reportEmptyTurn = () => {

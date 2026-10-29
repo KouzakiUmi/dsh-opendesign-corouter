@@ -174,7 +174,7 @@ test('model discovery wording names the configured gateway, not OpenAI as the pr
   assert.match(html, />刷新模型目录<\/button>/u);
   assert.match(html, /title="从当前配置的网关读取可用模型目录"/u);
   assert.match(html, /来源：当前网关/u);
-  assert.match(html, /上下文容量为目录参考，网关限制可能不同，可在模型设置中覆盖/u);
+  assert.match(html, /上下文为参考预算；刷新后会采用网关报告的较小窗口，实际限制可能不同，可在模型设置中覆盖/u);
   assert.doesNotMatch(html, /从 OpenAI 刷新模型|OpenAI \/models 发现/u);
 });
 
@@ -621,7 +621,7 @@ test('advanced offers three protocols, a read-only gateway and real timeout fiel
   assert.doesNotMatch(html, /type="url"/u);
   assert.doesNotMatch(html, /保存 Base URL/u);
   assert.match(html, /API Key 环境变量 \/ 凭据引用名/u);
-  for (const label of ['请求总超时（毫秒）', '流式空闲超时（毫秒）', '额度自动刷新间隔（秒）']) {
+  for (const label of ['单次请求图片预算（MiB）', '请求总超时（毫秒）', '流式空闲超时（毫秒）', '额度自动刷新间隔（秒）']) {
     assert.match(html, new RegExp(`<label for="[^"]+">${label}</label>`));
   }
   assert.match(html, /启用异常结束监控/u);
@@ -642,11 +642,12 @@ test('unavailable writable forms cannot expose editable controls', () => {
 test('all concurrently pending fields stay disabled', () => {
   const html = renderToStaticMarkup(h(Advanced, {
     status, formSnapshot: snapshot, setFormField: async () => true,
-    pendingField: ['emptyTurnGuard', 'apiProtocol', 'apiKeyEnv'],
+    pendingField: ['emptyTurnGuard', 'apiProtocol', 'apiKeyEnv', 'maxRequestImageBytes'],
   }));
   assert.match(html, /type="checkbox" disabled=""/u);
   assert.match(html, /<select[^>]*id="odc-api-protocol"[^>]*disabled=""/u);
   assert.match(html, /<input[^>]*id="odc-api-key-env"[^>]*disabled=""/u);
+  assert.match(html, /<input[^>]*id="odc-image-budget"[^>]*disabled=""/u);
 });
 
 test('advanced shows the selected protocol path from the form snapshot', () => {

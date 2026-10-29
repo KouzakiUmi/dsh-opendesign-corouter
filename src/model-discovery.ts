@@ -6,7 +6,7 @@
  *   `redirect: 'error'`，20 秒上限，响应体上限 2 MiB。
  * - 与推理协议解耦：本函数不接受 protocol 参数，也不根据协议挑选路径。
  * - 归一化只接受 `data[]` 中可用且有界的 id；已知 id 继承 catalog 的分组与能力，
- *   新 id 一律归 `paid` 且**不**凭名称推断能力（未识别的上游能力字段直接忽略）。
+ *   新 id 归 `paid`。显式上下文容量只作为保守参考，不凭名称推断能力。
  * - 媒体输出模型（图像/视频/语音，走 `/api/v1/media/*`）不进对话目录。
  * - 所有失败折叠为 `ModelDiscoveryError` 的固定分类与固定文字，不回显凭据、
  *   请求头或响应体。
@@ -26,6 +26,7 @@ export const MAX_DISCOVERY_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_MODELS = 512;
 const MAX_MODEL_ID_LENGTH = 128;
 const MAX_MODEL_NAME_LENGTH = 128;
+const MAX_CONTEXT_WINDOW = 100_000_000;
 const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/u;
 /**
  * 显式媒体输出模型的 id 前缀：官网证据里这些模型走 `/api/v1/media/*`，
@@ -109,9 +110,19 @@ async function boundedJson(response: Response, signal: AbortSignal | undefined, 
 
 /**
  * Normalize an OpenAI list body. Rows without a usable id are dropped, duplicates keep
- * their first occurrence, and no capability is invented: a known id is copied from the
- * catalog, an unknown id becomes a `paid` row with only its id and name.
+ * their first occurrence, and no capability is invented. Explicit gateway window fields
+ * may lower a catalog reference, or supply a reference for a previously unknown id.
  */
+function gatewayContext(value: Record<string, unknown>): number | undefined {
+  const metadata = record(value.metadata) ? value.metadata : {};
+  const candidates = [
+    metadata.context_limit, metadata.contextWindowTokens, metadata.context_window_tokens,
+    value.contextWindowTokens, value.context_window_tokens, value.contextLength, value.context_length,
+    value.contextWindow, value.context_window,
+  ].filter((item): item is number => typeof item === 'number' && Number.isSafeInteger(item) && item > 0 && item <= MAX_CONTEXT_WINDOW);
+  return candidates.length === 0 ? undefined : Math.min(...candidates);
+}
+
 function normalize(body: unknown): readonly CatalogModel[] {
   if (!record(body) || !Array.isArray(body.data)) throw new ModelDiscoveryError('response');
   if (body.data.length > MAX_MODELS) throw new ModelDiscoveryError('response');
@@ -122,10 +133,16 @@ function normalize(body: unknown): readonly CatalogModel[] {
     if (MEDIA_MODEL_ID.test(value.id) || seen.has(value.id)) continue;
     seen.add(value.id);
     const known = findModel(value.id);
-    if (known) { rows.push({ ...known }); continue; }
+    const offeredContext = gatewayContext(value);
+    if (known) {
+      const contextWindow = offeredContext === undefined ? known.contextWindow
+        : known.contextWindow === undefined ? offeredContext : Math.min(known.contextWindow, offeredContext);
+      rows.push({ ...known, ...(contextWindow === undefined ? {} : { contextWindow }) });
+      continue;
+    }
     const offered = typeof value.name === 'string' ? value.name.trim() : '';
     const name = offered !== '' && offered.length <= MAX_MODEL_NAME_LENGTH ? offered : value.id;
-    rows.push({ id: value.id, name, group: 'paid' });
+    rows.push({ id: value.id, name, group: 'paid', ...(offeredContext === undefined ? {} : { contextWindow: offeredContext }) });
   }
   return rows;
 }

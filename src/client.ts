@@ -15,6 +15,7 @@ import type { ModelSettings, ModelSettingsMap } from './model-settings.js';
 import { validateActivationUrl } from './device-auth.js';
 import { modelReasoningEfforts } from './reasoning.js';
 import { CLAUDE_MESSAGES_MAX_OUTPUT, claudeOutputError, claudeSamplingError, hasRestrictedClaudeSampling } from './claude-capabilities.js';
+import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES } from './image-budget.js';
 
 const h = React.createElement;
 const SETTINGS_NS = 'llm-opendesign-corouter';
@@ -55,6 +56,7 @@ export interface FormValues {
   quotaRefreshSeconds?: number;
   requestTimeoutMs?: number;
   streamIdleTimeoutMs?: number;
+  maxRequestImageBytes?: number;
 }
 export interface FormSnapshot {
   status: 'loading' | 'ready' | 'unavailable';
@@ -836,7 +838,9 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
       const reason = claudeOutputError(model.id, protocol, value);
       if (reason !== undefined) { setError(reason); return false; }
     }
-    const output = next.maxTokens ?? model.maxOutputTokens;
+    // Without an explicit override the adapter reserves at most a quarter of the
+    // window; the catalog's maximum output capability is not the sent default.
+    const output = next.maxTokens;
     const context = next.contextWindow ?? model.contextWindow;
     if (output !== undefined && context !== undefined && output >= context) {
       setError('最大输出必须小于上下文预算；请先增大上下文预算或减小最大输出。');
@@ -1015,7 +1019,7 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
     h('div', { className: 'odc-card-head' },
       h('div', null,
         h('h3', null, '可用模型'),
-        h('p', { className: 'odc-hint' }, '按分组搜索模型，设置启用状态与默认参数。上下文容量为目录参考，网关限制可能不同，可在模型设置中覆盖。')),
+        h('p', { className: 'odc-hint' }, '按分组搜索模型，设置启用状态与默认参数。上下文为参考预算；刷新后会采用网关报告的较小窗口，实际限制可能不同，可在模型设置中覆盖。')),
       h('div', { className: 'odc-actions' },
         h('span', { className: 'odc-label', role: 'status' }, `来源：${source}${updated}`),
         h('button', {
@@ -1111,6 +1115,7 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
   const requestTimeout = formSnapshot.value?.requestTimeoutMs ?? status?.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const streamIdleTimeout = formSnapshot.value?.streamIdleTimeoutMs ?? status?.config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   const refreshSeconds = formSnapshot.value?.quotaRefreshSeconds ?? status?.config.quotaRefreshSeconds ?? DEFAULT_QUOTA_REFRESH_SECONDS;
+  const imageBudget = formSnapshot.value?.maxRequestImageBytes ?? status?.config.maxRequestImageBytes ?? DEFAULT_MAX_REQUEST_IMAGE_BYTES;
   const selected = API_PROTOCOL_OPTIONS.find(option => option.id === protocol);
   const saveKeyRef = async () => {
     const value = apiKeyEnv.trim();
@@ -1170,6 +1175,15 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
       h('div', { className: 'odc-actions', style: { marginTop: 10 } },
         h('button', { className: 'odc-button', type: 'button', disabled: !writable || pendingField.includes('apiKeyEnv'), onClick: () => { void saveKeyRef(); } }, '保存引用名')),
       h(NoticeView, { notice: keyNotice })),
+    h('section', { className: 'odc-card' },
+      h('h3', null, '图片请求预算'),
+      h('p', { className: 'odc-hint' }, '历史图片超出预算时，由宿主将最旧图片替换为占位符并重试；原附件保留。摘要请求也使用此预算。'),
+      h(NumberField, {
+        id: 'odc-image-budget', label: '单次请求图片预算（MiB）', hint: '1–100 MiB；网关限制较低时可调小。',
+        value: imageBudget / (1024 * 1024), min: MIN_REQUEST_IMAGE_BYTES / (1024 * 1024), max: MAX_REQUEST_IMAGE_BYTES / (1024 * 1024), integer: false,
+        disabled: !writable || pendingField.includes('maxRequestImageBytes'),
+        onCommit: value => setFormField('maxRequestImageBytes', Math.round(value * 1024 * 1024)),
+      })),
     h('section', { className: 'odc-card' },
       h('h3', null, '请求时限与自动刷新'),
       h('p', { className: 'odc-hint' }, '输入有效范围内的整数，离开输入框后保存。'),

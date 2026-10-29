@@ -2,6 +2,8 @@ import Schema from '@deepseek-ai/schemastery';
 import { API_PROTOCOL_IDS, type ApiProtocol } from './protocol-options.js';
 import { parseModelSettingsMap, type ModelSettingsMap } from './model-settings.js';
 import { serializableTransform } from './schema-serialization.js';
+import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES } from './image-budget.js';
+export { DEFAULT_MAX_REQUEST_IMAGE_BYTES } from './image-budget.js';
 export const SETTINGS_NS = 'llm-opendesign-corouter';
 export const PLAN_PROVIDER = 'opendesign-corouter-plan';
 export const PAID_PROVIDER = 'opendesign-corouter-paid';
@@ -16,6 +18,7 @@ export const Config = Schema.object({
   quotaRefreshSeconds: Schema.natural().min(5).max(3600).default(60).description('额度自动刷新间隔（秒）').volatile(),
   requestTimeoutMs: Schema.natural().min(1000).max(3600000).default(1800000).description('推理请求总超时（毫秒）').volatile(),
   streamIdleTimeoutMs: Schema.natural().min(1000).max(1800000).default(300000).description('流式响应无数据超时（毫秒）').volatile(),
+  maxRequestImageBytes: Schema.natural().min(MIN_REQUEST_IMAGE_BYTES).max(MAX_REQUEST_IMAGE_BYTES).default(DEFAULT_MAX_REQUEST_IMAGE_BYTES).description('单次请求的内联图片预算（字节）').volatile(),
 });
 export type LiveConfig = ReturnType<typeof Config>;
 export interface RuntimeConfig {
@@ -23,6 +26,7 @@ export interface RuntimeConfig {
   apiProtocol?: ApiProtocol;
   modelSettings?: ModelSettingsMap;
   quotaRefreshSeconds?: number;
+  maxRequestImageBytes?: number;
 }
 // Schemastery serializes transform callbacks as source; keep this function closure-free.
 export function assertBaseURL(raw: string): string {
@@ -42,5 +46,6 @@ export function readConfig(config: LiveConfig): RuntimeConfig {
     quotaRefreshSeconds: config.quotaRefreshSeconds.get(),
     useDesktopCredential: config.useDesktopCredential.get(), emptyTurnGuard: config.emptyTurnGuard.get(),
     requestTimeoutMs: config.requestTimeoutMs.get(), streamIdleTimeoutMs: config.streamIdleTimeoutMs.get(),
+    maxRequestImageBytes: config.maxRequestImageBytes.get(),
   };
 }

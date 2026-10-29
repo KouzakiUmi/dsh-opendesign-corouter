@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import { Context } from '@deepseek-ai/cordis';
 import { CredentialProvider, type CredentialKey, type CredentialRecord, type CredentialRef } from '@deepseek-ai/dsh-credentials';
 import { OpenDesignCoRouterService, type HostDependencies } from '../src/index.js';
-import type { RuntimeConfig } from '../src/config.js';
+import { CoRouterAdapter } from '../src/adapter.js';
+import { PAID_PROVIDER, type RuntimeConfig } from '../src/config.js';
 import { fetchModelCatalog } from '../src/model-discovery.js';
 import { MODELS } from '../src/catalog.js';
 import { ConsoleError, type QuotaSnapshot } from '../src/quota.js';
@@ -256,6 +257,24 @@ test('inference protocol and per-model settings never invalidate the discovered 
     // 目录行本身保留证据值：用户覆盖只影响请求侧，不写回发现缓存。
     assert.equal(service.modelCatalog()[0]?.contextWindow, 1_000_000);
   } finally { await dispose(); }
+});
+
+test('a lower gateway window reaches resolved Host metadata while saved overrides remain authoritative', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  const { service, dispose } = await host(current, hostDependencies(calls, () => Response.json({ data: [
+    { id: 'claude-opus-5.5', context_length: 500_000, metadata: { output_budget: 2_000 } },
+  ] })));
+  const adapter = new CoRouterAdapter({ config: () => current, models: () => service.modelCatalog(), apiKey: async () => KEY });
+  try {
+    await saveFixtureKey(service);
+    const refreshed = await service.refreshModels();
+    assert.equal(refreshed.models[0]?.contextWindow, 500_000);
+    assert.equal((await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5')).context?.contextWindow, 500_000);
+    assert.equal(refreshed.models[0]?.maxOutputTokens, undefined);
+    current.modelSettings = { 'claude-opus-5.5': { contextWindow: 200_000 } };
+    assert.equal((await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5')).context?.contextWindow, 200_000);
+    assert.equal(service.modelCatalog()[0]?.contextWindow, 500_000);
+  } finally { adapter.dispose(); await dispose(); }
 });
 
 test('Opus 5.5 reference context survives Host model refresh and remains separately overridable', async () => {

@@ -85,6 +85,14 @@ test('the Host contribution reuses the mountable table verbatim', () => {
   assert.equal(openDesignCoRouterHost.invocations, openDesignCoRouterRemote.descriptors);
 });
 
+test('status validates the configurable per-request image budget', () => {
+  const withBudget = { ...status, config: { ...status.config, maxRequestImageBytes: 20 * 1024 * 1024 } };
+  assert.equal(parseStatus(withBudget).config.maxRequestImageBytes, 20 * 1024 * 1024);
+  for (const maxRequestImageBytes of [0, 1024 * 1024 - 1, 100 * 1024 * 1024 + 1, 1.5]) {
+    assert.throws(() => parseStatus({ ...status, config: { ...status.config, maxRequestImageBytes } }));
+  }
+});
+
 test('status round-trips, and nothing outside the allowlist survives', () => {
   const parsed = through('status', status) as Status;
   assert.deepEqual(parsed, status);
