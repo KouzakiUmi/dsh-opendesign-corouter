@@ -55,7 +55,11 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.15.tg
 | `opendesign-corouter-plan` | 13 | Core / Design Plan 附赠通道，含预检确认覆盖的 MiniMax M3.1 Flash |
 | `opendesign-corouter-paid` | 26 | Plan 套餐模型及其他钱包付费模型 |
 
-上表为内置目录。模型页可通过当前配置网关的 OpenAI 兼容 `/models` 接口刷新目录，逐个启用或停用模型、控制图片输入，并配置温度、top-p、默认输出上限、上下文预算及思考深度。高级参数默认折叠，图片输入可手动覆盖或恢复自动。未知模态保持未知并尝试发送图片；实际支持情况由网关决定。[图片能力证据](docs/model-capabilities.md)。
+上表为内置目录。模型页可通过当前配置网关的 OpenAI 兼容 `/models` 接口刷新目录，逐个启用或停用模型、控制图片输入，并配置温度、top-p、默认输出上限、上下文窗口档位及思考深度。高级参数默认折叠，图片输入可手动覆盖或恢复自动。未知模态保持未知并尝试发送图片；实际支持情况由网关决定。[图片能力证据](docs/model-capabilities.md)。
+
+上下文窗口按 **默认 272K / 扩展 500K / 最大 872K** 三个互斥档位选择，均为输入与输出合计的工作总窗口；有效窗口取档位与该模型已知参考中的较小值，超过参考的档位不可选。输出仍在这段窗口内预留，自动预留最多为总窗口的 1/4 且不超过模型输出上限。[窗口与档位口径](docs/model-context.md)
+
+聊天窗口的模型选择框旁有上下文快捷按钮，当前会话使用本插件模型时出现，显示该模型生效的总窗口，点开可直接切三档。它与设置页写的是同一份全局模型默认，同一模型的其他会话会同步生效。
 
 推理协议可选 **OpenAI Chat Completions、OpenAI Responses、Anthropic Messages**。模型发现始终使用当前网关的 OpenAI 兼容 `/models` 接口，不随推理协议切换。
 
@@ -83,9 +87,9 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.15.tg
 
 ### DeepSeek V4.1 Flash 异常结束检测
 
-独立开关，默认开启。协议保护参考 [dsh-empty-turn-guard](https://github.com/FYTXY/dsh-empty-turn-guard)，仅将“stop 且没有工具调用、回答为空或只剩协议残留”标成异常 EOT。包含正常正文的操作前言保留为成功响应，转由 Agent 结束检查点进行结构化收尾，不再按句式重发原请求。
+两者都只作用于本插件 Plan Provider 的 DeepSeek V4.1 Flash 工具对话，其它模型和 Provider 不受影响。协议保护是独立开关，默认开启；结束回合核验是另一个开关，默认关闭。协议保护参考 [dsh-empty-turn-guard](https://github.com/FYTXY/dsh-empty-turn-guard)，仅将“stop 且没有工具调用、回答为空或只剩协议残留”标成异常 EOT。包含正常正文的操作前言保留为成功响应，不再按句式重发原请求。
 
-异常 EOT 在同一步骤内持续重试，直到成功或取消；其他错误遵循宿主策略。任务收尾核验则有界：默认最多追加 3 步，连续 2 次没有新成功工具结果时停止，可在高级页调整。模型报告完成、等待用户、等待后台工作、阻塞或继续执行；做过工具工作时，完成声明需引用成功结果。已有未完成 Goal、后台等待、取消与截断保留原有控制。首次收尾核验通常增加一次模型步骤，引用校验不等于独立证明全部任务要求已满足。[两层机制、计数与验证边界](docs/empty-turn-evidence.md)
+异常 EOT 在同一步骤内持续重试，直到成功或取消；其他错误遵循宿主策略。开启结束回合核验后，Agent 结束时会追加有界核验：默认最多 3 步，连续 2 次没有新成功工具结果时停止，可在高级页调整。模型报告完成、等待用户、等待后台工作、阻塞或继续执行；做过工具工作时，完成声明需引用成功结果。已有未完成 Goal、后台等待、取消与截断保留原有控制。首次收尾核验通常增加一次模型步骤，引用校验不等于独立证明全部任务要求已满足。[两层机制、计数与验证边界](docs/empty-turn-evidence.md)
 
 ## 使用前先知道
 

@@ -269,7 +269,7 @@ test('a lower gateway window reaches resolved Host metadata while saved override
     await saveFixtureKey(service);
     const refreshed = await service.refreshModels();
     assert.equal(refreshed.models[0]?.contextWindow, 500_000);
-    assert.equal((await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5')).context?.contextWindow, 500_000);
+    assert.equal((await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5')).context?.contextWindow, 272_000);
     assert.equal(refreshed.models[0]?.maxOutputTokens, undefined);
     current.modelSettings = { 'claude-opus-5.5': { contextWindow: 200_000 } };
     assert.equal((await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5')).context?.contextWindow, 200_000);

@@ -35,6 +35,8 @@ const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/u;
 /** Live switches of this plugin, mirrored for a settings page that only has this RPC. */
 export interface StatusConfig {
   emptyTurnGuard: boolean;
+  /** Opt-in completion handshake; absent on a Host that predates it. */
+  turnCompletionReview?: boolean;
   useDesktopCredential: boolean;
   baseURL: string;
   /** Credential reference name (an env var or a DSH credential ref), never the value. */
@@ -314,6 +316,7 @@ function parseStatusConfig(value: unknown): StatusConfig {
   if (!ENV_REF.test(apiKeyEnv)) throw new Error('凭据引用名必须是合法标识符');
   return {
     emptyTurnGuard: flag(value.emptyTurnGuard, '空轮保护开关'),
+    ...(value.turnCompletionReview === undefined ? {} : { turnCompletionReview: flag(value.turnCompletionReview, '结束回合核验开关') }),
     useDesktopCredential: flag(value.useDesktopCredential, '桌面登录态开关'),
     baseURL: text(value.baseURL, '推理地址', MAX_BASE_URL),
     apiKeyEnv,

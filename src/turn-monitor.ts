@@ -141,6 +141,11 @@ export class TurnMonitor {
   #report(decision: ReviewDecision, reason: ReviewReason): void {
     this.#last = { at: new Date(this.now()).toISOString(), decision, reason };
   }
+  /** The completion handshake is opt-in; the empty-turn guard stays the outer switch. */
+  #reviewing(): boolean {
+    const config = this.config();
+    return config.emptyTurnGuard === true && config.turnCompletionReview === true;
+  }
   #release(state: TurnState): void {
     const remove = state.removeTool;
     state.removeTool = undefined;
@@ -155,7 +160,7 @@ export class TurnMonitor {
     this.#active.delete(state);
   }
   configurationChanged(): void {
-    if (this.config().emptyTurnGuard) return;
+    if (this.#reviewing()) return;
     for (const state of [...this.#active]) { state.settled = true; this.#release(state); }
     this.#report('skipped', 'disabled');
   }
@@ -263,7 +268,7 @@ export class TurnMonitor {
       output: { schema: outcomeSchema, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
       execute: async (args, exec) => {
         exec.signal.throwIfAborted();
-        if (this.#disposed || !this.config().emptyTurnGuard || state.settled || exec.agent !== state.agent
+        if (this.#disposed || !this.#reviewing() || state.settled || exec.agent !== state.agent
           || !state.removeTool || !exec.agent || this.#states.get(exec.agent.session) !== state || !monitored(exec.agent.session)) {
           throw new LlmError('当前没有可提交的收尾核验', 'INVALID_REQUEST');
         }
@@ -305,7 +310,7 @@ export class TurnMonitor {
   readonly stopping = ({ agent, turn, signal }: { agent: MonitorAgent; turn: number; signal: AbortSignal }): void => {
     const state = this.#states.get(agent.session);
     if (!state || state.turn !== turn || state.settled || state.assistantSeq < 0 || state.checkedSeq === state.assistantSeq) return;
-    if (this.#disposed || !this.config().emptyTurnGuard || !monitored(agent.session) || !state.assistantMonitored) { this.#release(state); return; }
+    if (this.#disposed || !this.#reviewing() || !monitored(agent.session) || !state.assistantMonitored) { this.#release(state); return; }
     state.agent = agent;
     state.checkedSeq = state.assistantSeq;
     if (signal.aborted || state.interrupted) { this.#release(state); this.#report('skipped', 'cancelled'); return; }

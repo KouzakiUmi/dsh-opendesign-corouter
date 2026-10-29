@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Context, Service } from '@deepseek-ai/cordis';
 import type { MessageId, UserMessage } from '@deepseek-ai/dsh-llm';
-import { PLAN_PROVIDER, type RuntimeConfig } from '../src/config.js';
+import { PAID_PROVIDER, PLAN_PROVIDER, type RuntimeConfig } from '../src/config.js';
 import { FINISH_TURN_TOOL, TurnMonitor, installTurnMonitor, type MonitorAgent, type MonitorToolDefinition, type MonitorToolExecution } from '../src/turn-monitor.js';
 
 const base: RuntimeConfig = { apiKeyEnv: 'FIXTURE', baseURL: 'https://fixture.invalid/v1', useDesktopCredential: false,
-  emptyTurnGuard: true, requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 };
+  emptyTurnGuard: true, turnCompletionReview: true, requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 };
 // Core rc.3 rejects constraint keywords outside this subset, including maxLength/minimum/maxItems.
 // This mirrors the inspected published validator's admission vocabulary, not a full JSON Schema validator.
 function assertCoreSchemaSubset(schema: Record<string, unknown>): void {
@@ -220,6 +220,38 @@ test('disabled, other-model and tool-less calls cannot register a completion too
     if (mode === 'disabled') f.setConfig({ emptyTurnGuard: false });
     else f.setHeader({ config: { provider: mode === 'provider' ? 'other' : PLAN_PROVIDER, model: mode === 'model' ? 'other' : 'deepseek-v4.1-flash' }, tools: mode === 'tools' ? [] : [{ name: 'read', description: '', parameters: {} }] });
     f.response(); f.stopping(); assert.equal(f.messages.length, 0); assert.equal(f.definitions.size, 0); f.monitor.dispose();
+  }
+});
+
+test('the completion handshake stays off until its own switch is enabled', () => {
+  const off = fixture({ turnCompletionReview: false }); off.response(); off.stopping();
+  assert.equal(off.messages.length, 0); assert.equal(off.definitions.size, 0);
+  assert.equal(off.monitor.status().checks, 0); assert.equal(off.monitor.status().continuations, 0);
+  off.monitor.dispose();
+  // Enabling it mid-turn is honoured from the next stop; disabling it releases the owned scope.
+  const g = fixture({ turnCompletionReview: false }); g.response(); g.stopping();
+  g.setConfig({ turnCompletionReview: true }); g.response(); g.stopping();
+  assert.equal(g.messages.length, 1); assert.ok(g.definitions.get(FINISH_TURN_TOOL));
+  g.setConfig({ turnCompletionReview: false }); g.monitor.configurationChanged();
+  assert.equal(g.definitions.size, 0); assert.equal(g.monitor.status().last?.reason, 'disabled');
+  g.monitor.dispose();
+});
+
+test('monitoring never widens beyond this plugin plan provider’s deepseek-v4.1-flash', () => {
+  const foreign = [
+    { provider: PAID_PROVIDER, model: 'deepseek-v4.1-flash' },
+    { provider: 'openai', model: 'deepseek-v4.1-flash' },
+    { provider: PLAN_PROVIDER, model: 'deepseek-v4-pro' },
+    { provider: PLAN_PROVIDER, model: 'gpt-6-astra' },
+  ] as const;
+  for (const config of foreign) {
+    const f = fixture();
+    f.setHeader({ config, tools: [{ name: 'read', description: '', parameters: {} }] });
+    f.response(); f.stopping();
+    assert.equal(f.messages.length, 0, `${config.provider}/${config.model} must not be reviewed`);
+    assert.equal(f.definitions.size, 0);
+    assert.equal(f.monitor.status().checks, 0);
+    f.monitor.dispose();
   }
 });
 

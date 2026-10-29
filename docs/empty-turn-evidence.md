@@ -1,10 +1,10 @@
 # DeepSeek V4.1 Flash 异常结束监控
 
-监控分为协议保护和任务收尾核验，两者由 `emptyTurnGuard` 控制，仅作用于本插件 `deepseek-v4.1-flash` 的工具对话。
+监控分为协议保护和任务收尾核验。协议保护由 `emptyTurnGuard` 控制并默认开启；任务收尾核验由独立的 `turnCompletionReview` 控制，默认关闭，且仍要求 `emptyTurnGuard` 开启。两者都仅作用于本插件 Plan Provider（`opendesign-corouter-plan`）的 `deepseek-v4.1-flash` 工具对话；Paid Provider、其它 Provider 下的同名模型以及本插件同 Provider 的其它模型都不受影响。
 
 ## 协议保护
 
-[空轮守卫](../src/empty-turn.ts) 仅在 `stop`、本次没有工具调用、可见回答为空或只有已知 REA / DSML / thinking / 返璞归真残留时改写为 `OPENDESIGN_EOT`。思考内容不能代替可见答案。包含正常正文的操作前言保持成功响应，留给 Agent 收尾核验，不再依赖语言句式把正文改判为请求错误。原有待执行句式匹配已移除。
+[空轮守卫](../src/empty-turn.ts) 仅在 `stop`、本次没有工具调用、可见回答为空或只有已知 REA / DSML / thinking / 返璞归真残留时改写为 `OPENDESIGN_EOT`。思考内容不能代替可见答案。包含正常正文的操作前言保持成功响应，不再依赖语言句式把正文改判为请求错误；收尾核验开启时这些响应才进入下一步检查。原有待执行句式匹配已移除。
 
 [适配器](../src/adapter.ts) 将监控范围内、工具调用开始前的缺终态流归为 `TRANSPORT`。原生零内容流由解析器拒绝，监控范围内再归为 `OPENDESIGN_EOT`。实际工具调用、其他模型和无工具请求保留原有语义。
 
@@ -14,7 +14,7 @@
 
 ## 任务收尾核验
 
-[收尾控制器](../src/turn-monitor.ts) 实时观察当前轮的 Session 与 assistant-stream 事件，在 `agent/turn-stopping` 检查点工作：
+任务收尾核验是可选能力，默认关闭。关闭时回复结束即结束回合，不追加核验输入、不注册收尾工具，也不消耗额外模型步骤。[收尾控制器](../src/turn-monitor.ts) 在开启时实时观察当前轮的 Session 与 assistant-stream 事件，在 `agent/turn-stopping` 检查点工作：
 
 1. 只处理对应 Provider / 型号、实际携带工具且成功结束的响应；取消、截断、请求失败、工具主动结束以及新输入保留宿主处理。
 2. 当前存在未完成的 Goal 时，让既有 Goal 状态和续办组件控制后续，不创建、恢复或修改 Goal。
@@ -34,6 +34,7 @@
 
 ### 限额和生命周期
 
+- `turnCompletionReview`：结束回合核验开关，默认关闭。关闭时整个收尾流程不运行；开启后仍受 `emptyTurnGuard` 与下列限额约束。
 - `turnReviewMaxContinuations`：每轮最多追加的核验 / 续办步骤，默认 3，范围 1–10。
 - `turnReviewNoProgressLimit`：连续未出现新成功工具结果的停止阈值，默认 2，范围 1–5。相同工具参数和相同结果不算新进展；改变前言文字也不重置计数。
 - 达限后停止插件续办并在设置中记录原因，不把未核实状态伪装成任务完成。限额针对插件追加的步骤，不限制原任务自己的正常工具循环，也不替代协议重试策略。

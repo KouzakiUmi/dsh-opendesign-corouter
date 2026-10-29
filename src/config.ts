@@ -14,7 +14,8 @@ export const Config = Schema.object({
   apiProtocol: Schema.union(API_PROTOCOL_IDS).default('chat-completions').description('网关支持的推理协议；模型目录通过该网关的兼容接口读取').volatile(),
   modelSettings: Schema.transform(Schema.dict(Schema.any<unknown>()), serializableTransform(parseModelSettingsMap)).default({}).description('逐模型启用状态、图片输入和请求参数').volatile(),
   useDesktopCredential: Schema.boolean().default(true).description('优先读取 OpenDesign 桌面端登录态查询额度').volatile(),
-  emptyTurnGuard: Schema.boolean().default(true).description('保护 DeepSeek V4.1 Flash 工具对话：恢复空回答，并在结束前进行有界的结构化收尾核验').volatile(),
+  emptyTurnGuard: Schema.boolean().default(true).description('保护 DeepSeek V4.1 Flash 工具对话：恢复空回答与已知协议残留结束').volatile(),
+  turnCompletionReview: Schema.boolean().default(false).description('回复结束后追加有界的结构化收尾核验，要求模型调用收尾工具报告状态').volatile(),
   turnReviewMaxContinuations: Schema.natural().min(1).max(10).default(3).description('每轮任务的收尾核验最多续办次数').volatile(),
   turnReviewNoProgressLimit: Schema.natural().min(1).max(5).default(2).description('连续缺少新成功工具结果时停止收尾续办的次数').volatile(),
   quotaRefreshSeconds: Schema.natural().min(5).max(3600).default(60).description('额度自动刷新间隔（秒）').volatile(),
@@ -29,6 +30,7 @@ export interface RuntimeConfig {
   modelSettings?: ModelSettingsMap;
   quotaRefreshSeconds?: number;
   maxRequestImageBytes?: number;
+  turnCompletionReview?: boolean;
   turnReviewMaxContinuations?: number;
   turnReviewNoProgressLimit?: number;
 }
@@ -51,6 +53,7 @@ export function readConfig(config: LiveConfig): RuntimeConfig {
     useDesktopCredential: config.useDesktopCredential.get(), emptyTurnGuard: config.emptyTurnGuard.get(),
     requestTimeoutMs: config.requestTimeoutMs.get(), streamIdleTimeoutMs: config.streamIdleTimeoutMs.get(),
     maxRequestImageBytes: config.maxRequestImageBytes.get(),
+    turnCompletionReview: config.turnCompletionReview.get(),
     turnReviewMaxContinuations: config.turnReviewMaxContinuations.get(), turnReviewNoProgressLimit: config.turnReviewNoProgressLimit.get(),
   };
 }

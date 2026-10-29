@@ -10,7 +10,7 @@ import { volatileForm } from '../node_modules/@deepseek-ai/dsh-settings/lib/type
 const formSchema = volatileForm(Config);
 const previewDir = process.env.ODC_PREVIEW_DIR || 'docs/previews';
 assert.ok(formSchema);
-const react = await build({ stdin: { contents: `import * as React from 'react'; import {createRoot} from 'react-dom/client'; import Schema from '@deepseek-ai/schemastery'; window.__Schema=Schema; window.__React=React; window.__mount=(component,props)=>{window.__root=createRoot(document.getElementById('root'));window.__root.render(React.createElement(component,props));};`, resolveDir: process.cwd(), loader: 'js' }, bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"development"' } });
+const react = await build({ stdin: { contents: `import * as React from 'react'; import {createRoot} from 'react-dom/client'; import Schema from '@deepseek-ai/schemastery'; window.__Schema=Schema; window.__React=React; window.__mount=(component,props)=>{window.__root=createRoot(document.getElementById('root'));window.__root.render(React.createElement(component,props));}; window.__mountInto=(container,component,props)=>{const root=createRoot(container);root.render(React.createElement(component,props));return root;};`, resolveDir: process.cwd(), loader: 'js' }, bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"development"' } });
 const client = await readFile('lib/client.js', 'utf8');
 const theme = await readFile('test/fixtures/dsh-theme.css', 'utf8');
 assert.ok(!client.includes('node:'));
@@ -23,8 +23,8 @@ try {
   await page.route('**/*', route => route.abort());
   await page.setContent(`<html><head><meta charset="utf-8"><style>
   :root{color-scheme:light}
-  body{margin:0;background:var(--dsw-alias-bg-base);font-family:system-ui,'Microsoft YaHei',sans-serif;padding:38px;color:var(--dsw-alias-label-primary)} #root{max-width:900px;margin:auto} .fixture-note{max-width:900px;margin:0 auto 20px;color:var(--dsw-alias-label-secondary);font-size:11px;letter-spacing:.03em}
-  </style></head><body><div class="fixture-note">离线界面预览 · 模拟数据，非真实账号</div><main id="root"></main></body></html>`);
+  body{margin:0;background:var(--dsw-alias-bg-base);font-family:system-ui,'Microsoft YaHei',sans-serif;padding:38px;color:var(--dsw-alias-label-primary)} #root{max-width:900px;margin:auto} .fixture-note{max-width:900px;margin:0 auto 20px;color:var(--dsw-alias-label-secondary);font-size:11px;letter-spacing:.03em} #conversation-input{max-width:900px;margin:0 auto 16px;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l4);border-radius:10px}
+  </style></head><body><div class="fixture-note">离线界面预览 · 模拟数据，非真实账号</div><div id="conversation-input"></div><main id="root"></main></body></html>`);
   await page.addStyleTag({ content: theme });
   await page.addScriptTag({ content: react.outputFiles[0].text });
   await page.evaluate(() => {
@@ -60,7 +60,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
     window.__setKeySource = source => { apiKeySource = source; };
     window.__failStatusReads = false;
     let config = {
-      emptyTurnGuard: true, useDesktopCredential: true, baseURL: 'https://amr-link.open-design.ai/v1', apiKeyEnv: 'COROUTER_API_KEY',
+      emptyTurnGuard: true, turnCompletionReview: false, useDesktopCredential: true, baseURL: 'https://amr-link.open-design.ai/v1', apiKeyEnv: 'COROUTER_API_KEY',
       apiProtocol: 'chat-completions', modelSettings: {}, quotaRefreshSeconds: 60, requestTimeoutMs: 1800000, streamIdleTimeoutMs: 300000,
       turnReviewMaxContinuations: 3, turnReviewNoProgressLimit: 2,
     };
@@ -78,6 +78,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
     window.__rejectSave = false;
     window.__refreshQuotaCalls = 0;
     window.__forceRefreshCalls = 0;
+    window.__statusCalls = 0;
     window.__refreshModelsCalls = 0;
     window.__refreshPricesCalls = 0;
     window.__pricesFail = false;
@@ -112,7 +113,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
     window.__restoreQuota = () => { quota = initialQuota(); };
     window.__setWindowResetSoon = () => { quota = { ...quota, windows: quota.windows.map((item, index) => index === 0 ? { ...item, resetsAt: new Date(Date.now() + 1800).toISOString() } : item) }; };
     const api = {
-      status: async (...args) => { if (args.length) throw new Error('status requires zero arguments'); if (window.__failStatusReads) throw new Error('fixture-status-unavailable'); return { ok: true, value: status() }; },
+      status: async (...args) => { if (args.length) throw new Error('status requires zero arguments'); if (window.__failStatusReads) throw new Error('fixture-status-unavailable'); window.__statusCalls += 1; return { ok: true, value: status() }; },
       refreshPrices: async (...args) => {
         if (args.length) throw new Error('refreshPrices requires zero arguments');
         window.__refreshPricesCalls += 1;
@@ -185,17 +186,52 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
       snapshot = { ...snapshot, value: config };
       for (const cb of listeners) cb();
     };
+    // Seed a saved override the way an older configuration would carry it: the tier and the
+    // legacy number are mutually exclusive, so the other one is dropped with the patch.
+    window.__setModelSettings = (id, patch) => {
+      const next = { ...(config.modelSettings?.[id] ?? {}), ...patch };
+      if (patch.contextWindow !== undefined) delete next.contextTier;
+      if (patch.contextTier !== undefined) delete next.contextWindow;
+      config = { ...config, modelSettings: { ...config.modelSettings, [id]: next } };
+      validateConfig(config); syncConfig();
+      snapshot = { ...snapshot, value: config };
+      for (const cb of listeners) cb();
+    };
+    window.__clearModelSettings = id => {
+      const next = { ...config.modelSettings };
+      delete next[id];
+      config = { ...config, modelSettings: next };
+      validateConfig(config); syncConfig();
+      snapshot = { ...snapshot, value: config };
+      for (const cb of listeners) cb();
+    };
     window.__setFormState = (state, writable) => {
       snapshot = { ...snapshot, status: state, writable, value: state === 'ready' ? config : undefined };
       for (const cb of listeners) cb();
     };
+    window.__setQuotaRefresh = seconds => {
+      config = { ...config, quotaRefreshSeconds: seconds };
+      validateConfig(config); syncConfig();
+      snapshot = { ...snapshot, value: config };
+      for (const cb of listeners) cb();
+    };
     window.__saveCalls = [];
+    window.__heldSaves = 0;
+    window.__holdWaiters = [];
+    // Releasing is safe at any moment: it frees every write that waits now, and a write
+    // that arrives later simply runs on. A stale resolver must never strand the queue.
+    window.__releaseSave = () => { for (const resolve of window.__holdWaiters.splice(0)) resolve(); };
+    window.__releaseHeldSave = () => { window.__releaseSave(); };
     const form = {
       getSnapshot: () => snapshot,
       subscribe: cb => { listeners.add(cb); return () => listeners.delete(cb); },
       set: async (field, value) => {
         window.__saveCalls.push(field);
-        if (window.__holdSaves) await new Promise(resolve => { window.__releaseSave = resolve; });
+        if (window.__holdSaves) {
+          window.__heldSaves += 1;
+          await new Promise(resolve => { window.__holdWaiters.push(resolve); });
+          window.__heldSaves -= 1;
+        }
         if (window.__rejectSave) { window.__rejectSave = false; return false; }
         const next = { ...config, [field]: value };
         validateConfig(next);
@@ -206,14 +242,63 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
         return true;
       },
     };
+    // Conversation input slots: every session owns its own model directory store.
+    const directories = new Map();
+    const directoryFor = sessionId => {
+      let entry = directories.get(sessionId);
+      if (!entry) {
+        const directoryListeners = new Set();
+        let directorySnapshot = { current: null, pending: null, status: 'idle', groups: [], routable: null };
+        entry = {
+          store: {
+            getSnapshot: () => directorySnapshot,
+            subscribe: cb => { directoryListeners.add(cb); return () => directoryListeners.delete(cb); },
+          },
+          listenerCount: () => directoryListeners.size,
+          update: patch => {
+            directorySnapshot = { ...directorySnapshot, ...patch };
+            for (const cb of [...directoryListeners]) cb();
+          },
+        };
+        directories.set(sessionId, entry);
+      }
+      return entry;
+    };
+    window.__setDirectory = (sessionId, patch) => { directoryFor(sessionId).update(patch); };
+    window.__quickRoots = [];
+    window.__mountQuick = (sessionId, containerId = 'conversation-input') => {
+      const slot = window.__quickSlot;
+      if (!slot) throw new Error('the conversation input slot is not registered');
+      const container = document.getElementById(containerId);
+      const root = window.__mountInto(container, slot.component, slot.descriptor.inject(sessionId));
+      window.__quickRoots.push(root);
+      return true;
+    };
+    window.__unmountQuick = () => { for (const root of window.__quickRoots.splice(0)) root.unmount(); };
+    window.__activeSubscriptions = () => ({ form: listeners.size, directories: [...directories.values()].reduce((sum, entry) => sum + entry.listenerCount(), 0) });
     const ctx = {
       remote: { openDesignCoRouter: api, $mount: async () => () => { window.__remoteDisposed = true; } },
       get: key => key === 'remote.openDesignCoRouter' ? api : undefined,
       effect: fn => { const result = fn(); if (result?.then) { void result.then(disposer => { if (disposer) disposers.push(disposer); }); } else if (typeof result === 'function') disposers.push(result); },
-      inject: (_services, fn) => fn(ctx), configForms: { get: () => form },
-      slots: { inject: (_name, fn) => fn(), register: (descriptor, component) => { window.__mount(component, descriptor.inject()); return () => {}; } },
+      inject: (services, fn) => {
+        // The model directory is a nested scope: it is per session, never a global model.
+        if (services.includes('modelDirectories')) return fn({ modelDirectories: { directoryFor }, effect: ctx.effect, slots: ctx.slots });
+        return fn(ctx);
+      },
+      configForms: { get: () => form },
+      slots: {
+        inject: (_name, fn) => fn(),
+        register: (descriptor, component) => {
+          if (descriptor.name === 'conversation.input.right') {
+            window.__quickSlot = { descriptor, component };
+            return () => { window.__quickSlot = undefined; };
+          }
+          window.__mount(component, descriptor.inject());
+          return () => {};
+        },
+      },
     };
-    window.__cleanup = async () => { window.__root.unmount(); for (const off of disposers.reverse()) await off(); };
+    window.__cleanup = async () => { window.__root.unmount(); window.__unmountQuick(); for (const off of disposers.reverse()) await off(); };
     window.__plugin.apply(ctx);
   }, { rawModels: fixtureModels, wireSchema: JSON.parse(JSON.stringify(formSchema.toJSON())) });
   const config = () => page.evaluate(() => window.__config);
@@ -430,10 +515,15 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await kimiTemperature.fill('0.3');
   await kimiTemperature.blur();
   await page.waitForFunction(() => window.__config.modelSettings?.['kimi-k2.7-code']?.temperature === 0.3);
-  const kimiContext = kimi.getByLabel('上下文预算（tokens）', { exact: true });
-  await kimiContext.fill('200000');
-  await kimiContext.blur();
-  await page.waitForFunction(() => window.__config.modelSettings?.['kimi-k2.7-code']?.contextWindow === 200000);
+  // A model whose reference is below a tier cannot select that tier; the default is clamped.
+  const kimiTiers = kimi.locator('.odc-context');
+  const kimiDefault = kimiTiers.getByRole('radio', { name: '默认' });
+  assert.equal(await kimiDefault.isEnabled(), true, 'the default tier stays selectable for a small reference');
+  assert.equal(await kimiDefault.isChecked(), true);
+  assert.equal(await kimiTiers.getByRole('radio', { name: '扩展' }).isDisabled(), true, 'a tier above the reference is not selectable');
+  assert.equal(await kimiTiers.getByRole('radio', { name: '最大' }).isDisabled(), true);
+  await kimi.locator('.odc-context-option[data-preset=extended]').getByText('超过参考容量 262,144', { exact: false }).waitFor();
+  await kimi.getByText('当前总窗口 262,144 tokens（含输出预留）', { exact: false }).waitFor();
   await kimi.getByRole('button', { name: '重置', exact: true }).click();
   await page.waitForFunction(() => !('kimi-k2.7-code' in (window.__config.modelSettings ?? {})));
   // Reset deletes the whole map entry; the ready form must win over the now-stale catalog flag.
@@ -473,7 +563,6 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   const temperature = luna.getByLabel('温度', { exact: true });
   const topP = luna.getByLabel('Top P', { exact: true });
   const maxTokens = luna.getByLabel('最大输出（tokens）', { exact: true });
-  const contextWindow = luna.getByLabel('上下文预算（tokens）', { exact: true });
   const effortEditor = luna.locator('.odc-effort');
   const editEffort = luna.getByRole('button', { name: '编辑默认思考深度', exact: true });
   await temperature.fill('0.7');
@@ -485,15 +574,100 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await maxTokens.fill('4096');
   await maxTokens.blur();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.maxTokens === 4096);
-  await contextWindow.fill('200000');
-  await contextWindow.blur();
-  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextWindow === 200000);
-  await contextWindow.fill('4096');
-  await contextWindow.blur();
-  await luna.getByText('最大输出必须小于上下文预算；请先增大上下文预算或减小最大输出。', { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => window.__config.modelSettings['gpt-6-luna'].contextWindow), 200000);
-  await contextWindow.fill('200000');
-  await contextWindow.blur();
+  // The context window is one of three mutually exclusive tiers; the default stores nothing.
+  const lunaTiers = luna.locator('.odc-context');
+  const lunaDefault = lunaTiers.getByRole('radio', { name: '默认' });
+  const lunaExtended = lunaTiers.getByRole('radio', { name: '扩展' });
+  const lunaMaximum = lunaTiers.getByRole('radio', { name: '最大' });
+  assert.equal(await lunaDefault.isChecked(), true, 'an absent override is the default tier');
+  await lunaExtended.check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended');
+  await lunaMaximum.check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'maximum');
+  await lunaDefault.check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === undefined);
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.contextWindow), undefined, 'the default tier stores no numeric override');
+  // A pending tier is visible immediately and locks the control until the Host answers.
+  await page.evaluate(() => { window.__holdSaves = true; });
+  await lunaExtended.check();
+  assert.equal(await lunaExtended.isChecked(), true, 'the pending tier is visible immediately');
+  assert.equal(await lunaExtended.isDisabled(), true, 'the tier control locks while its map save is pending');
+  await luna.getByText('正在保存模型设置，完成后可继续选择档位。', { exact: true }).waitFor();
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended');
+  // A rejected tier save restores the accepted tier.
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await lunaMaximum.check();
+  assert.equal(await lunaMaximum.isChecked(), true, 'the requested tier shows before the Host answers');
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
+  assert.equal(await lunaExtended.isChecked(), true, 'a rejected tier save restores the accepted tier');
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier), 'extended');
+  // A read-only configuration explains why the tier control is unavailable.
+  await page.evaluate(() => window.__setFormState('ready', false));
+  await luna.getByText('当前设置为只读', { exact: true }).waitFor();
+  assert.equal(await lunaExtended.isDisabled(), true, 'a read-only form cannot change the tier');
+  await page.evaluate(() => window.__setFormState('ready', true));
+  await page.waitForFunction(() => !document.querySelector('.odc-context input[value=default]')?.disabled);
+  // A legacy numeric window stays a custom state; choosing a tier replaces it in one write.
+  await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { contextWindow: 200000 }));
+  await luna.getByText('旧自定义 200,000，选择档位替换', { exact: true }).waitFor();
+  assert.equal(await lunaDefault.isChecked(), false, 'a custom window selects no tier');
+  await lunaExtended.check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended'
+    && window.__config.modelSettings?.['gpt-6-luna']?.contextWindow === undefined);
+  // A legacy number that equals a tier's token count is still a custom window.
+  await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { contextWindow: 500000 }));
+  await luna.getByText('旧自定义 500,000，选择档位替换', { exact: true }).waitFor();
+  assert.equal(await lunaExtended.isChecked(), false, 'a legacy 500,000 never selects the extended tier');
+  assert.equal(await luna.getByText('当前总窗口 500,000 tokens（含输出预留）', { exact: false }).count(), 1);
+  await lunaExtended.check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended'
+    && window.__config.modelSettings?.['gpt-6-luna']?.contextWindow === undefined);
+  // An explicit output limit that no longer fits the window is reported before any save.
+  await lunaDefault.check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === undefined);
+  await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { maxTokens: 384000 }));
+  await luna.getByText('最大输出 384,000 不小于当前总窗口 272,000（含输出预留）；可清空或减小最大输出，或改选更大的上下文档位。', { exact: true }).waitFor();
+  assert.equal(await maxTokens.getAttribute('aria-invalid'), 'true');
+  assert.equal(await maxTokens.isEnabled(), true, 'the invalid output limit stays clearable');
+  await maxTokens.fill('');
+  await maxTokens.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.maxTokens === undefined);
+  // Switching to a smaller tier is rejected while an explicit output conflicts.
+  await lunaMaximum.check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'maximum');
+  await maxTokens.fill('400000');
+  await maxTokens.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.maxTokens === 400000);
+  await lunaDefault.click();
+  await luna.getByText('无法切换到「默认」档：最大输出 400,000 不小于该档位的总窗口 272,000（含输出预留）；请先清空或减小最大输出，当前档位保持不变。', { exact: true }).waitFor();
+  assert.equal(await lunaMaximum.isChecked(), true, 'a rejected tier change keeps the saved tier');
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier), 'maximum');
+  // Clearing the output frees the smaller tier again; the limit is never rewritten silently.
+  await maxTokens.fill('');
+  await maxTokens.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.maxTokens === undefined);
+  await lunaDefault.click();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === undefined);
+  await maxTokens.fill('4096');
+  await maxTokens.blur();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.maxTokens === 4096);
+  // The tier group is a native radio group: arrow keys move the selection.
+  await page.waitForFunction(() => {
+    const input = document.querySelector('.odc-context input[value=default]');
+    return Boolean(input) && !input.disabled;
+  });
+  await lunaDefault.focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended');
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === undefined);
+  // The tier control stays readable inside a narrow settings pane.
+  await page.locator('#root').evaluate(root => { root.style.width = '320px'; });
+  assert.equal(await lunaTiers.evaluate(element => element.scrollWidth <= element.clientWidth), true, 'the tier control fits a narrow settings pane');
+  assert.equal(await lunaTiers.locator('.odc-context-option').evaluateAll(options => options.every(option => option.getBoundingClientRect().height >= 32)), true, 'each tier keeps a usable target size');
+  await page.locator('#root').evaluate(root => { root.style.width = ''; });
   assert.equal(await effortEditor.getAttribute('data-mode'), 'summary');
   assert.equal(await effortEditor.locator('.odc-effort-value').innerText(), '继承默认');
   const savesBeforeEffort = await page.evaluate(() => window.__saveCalls.length);
@@ -549,7 +723,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await luna.getByText('自动 · 支持图片', { exact: true }).waitFor();
   assert.equal(await restoreImage.count(), 0);
   assert.deepEqual(await modelSettings(), {
-    'gpt-6-luna': { temperature: 0.7, topP: 0.9, maxTokens: 4096, contextWindow: 200000, reasoningEffort: 'high' },
+    'gpt-6-luna': { temperature: 0.7, topP: 0.9, maxTokens: 4096, reasoningEffort: 'high' },
   }, 'restore-auto removes only imageInput and preserves every other setting');
   await temperature.fill('3');
   await temperature.blur();
@@ -602,6 +776,192 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.getByText('模型发现请求超过 20 秒时限', { exact: true }).waitFor({ state: 'detached' });
   await page.getByText('已从当前网关刷新模型目录', { exact: false }).waitFor();
 
+  // ── Conversation input quick switch ────────────────────────────────────────
+  // The quick switch follows the session's own model directory, never a global model.
+  const waitQuickReady = async () => {
+    await page.waitForFunction(() => {
+      const radio = document.querySelector('#conversation-input .odc-quick-panel input[type=radio]');
+      return Boolean(radio) && !radio.disabled;
+    }, null, { timeout: 5000 });
+  };
+  await page.evaluate(() => { window.__setQuotaRefresh(3600); });
+  const quotaBefore = await page.evaluate(() => window.__refreshQuotaCalls);
+  const statusBefore = await page.evaluate(() => window.__statusCalls);
+  await page.evaluate(() => {
+    window.__setDirectory('session-a', {
+      current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' },
+      pending: null, status: 'ready', groups: [{ id: 'co', models: [] }], routable: true,
+    });
+    const second = document.createElement('div');
+    second.id = 'conversation-input-b';
+    document.body.appendChild(second);
+  });
+  await page.evaluate(() => window.__mountQuick('session-a'));
+  await page.waitForFunction(before => window.__statusCalls > before, statusBefore);
+  assert.equal(await page.evaluate(() => window.__refreshQuotaCalls), quotaBefore, 'the quick switch reads the cached status and never refreshes the quota');
+  await page.evaluate(() => window.__setQuotaRefresh(60));
+  const quickA = page.locator('#conversation-input .odc-quick');
+  const quickButton = quickA.getByRole('button', { name: /^CoRouter 上下文/u });
+  const quickPanel = quickA.locator('.odc-quick-panel');
+  await quickButton.waitFor();
+  await waitQuickReady();
+  assert.match(await quickButton.innerText(), /272K/u, 'the default tier is the current window');
+  // A third-party model has no CoRouter window to change.
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'openai', model: 'gpt-4o' } }));
+  await page.waitForFunction(() => !document.querySelector('#conversation-input .odc-quick'));
+  assert.equal(await quickA.count(), 0, 'a foreign provider renders no CoRouter quick switch');
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' } }));
+  await quickButton.waitFor();
+  // The popover is a dialog with the three tiers and states that the change is global.
+  await quickButton.click();
+  await page.getByRole('dialog', { name: '上下文窗口' }).waitFor();
+  await quickPanel.waitFor();
+  await waitQuickReady();
+  assert.match(await quickPanel.innerText(), /修改此模型的默认值，其他会话同步。/u);
+  await quickButton.click();
+  await quickPanel.waitFor({ state: 'hidden' });
+  await quickButton.click();
+  await quickPanel.waitFor();
+  await waitQuickReady();
+  assert.match(await quickPanel.innerText(), /上下文档位/u);
+  assert.equal(await quickPanel.getByRole('radio').count(), 3, 'the quick switch offers the three tiers');
+  assert.match(await quickPanel.innerText(), /当前总窗口 272,000 tokens（含输出预留）。/u);
+  // A tier choice is written as the global model default and shows up in the settings page.
+  await quickPanel.getByRole('radio', { name: '扩展' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended');
+  await quickPanel.getByText('上下文档位已保存。', { exact: true }).waitFor();
+  assert.match(await quickButton.innerText(), /500K/u, 'the button shows the selected tier');
+  const lunaRow = page.locator('.odc-model-item').filter({ hasText: 'gpt-6-luna' });
+  if (await lunaRow.locator('details').evaluate(element => !element.open)) await lunaRow.locator('summary').click();
+  assert.equal(await lunaRow.locator('.odc-context-option[data-preset=extended] input').isChecked(), true, 'the settings page shows the same tier');
+  // A pending tier is visible immediately and locks the quick switch until the Host answers.
+  await page.evaluate(() => { window.__holdSaves = true; });
+  await quickPanel.getByRole('radio', { name: '最大' }).check();
+  assert.equal(await quickPanel.getByRole('radio', { name: '最大' }).isChecked(), true, 'the pending tier is visible immediately');
+  assert.equal(await quickPanel.getByRole('radio', { name: '最大' }).isDisabled(), true, 'the quick switch locks while its write is pending');
+  await quickPanel.getByText('正在保存模型设置…', { exact: true }).waitFor();
+  await page.waitForFunction(() => window.__heldSaves > 0);
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseHeldSave(); });
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'maximum');
+  // A rejected write restores the accepted tier.
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await quickPanel.getByRole('radio', { name: '扩展' }).check();
+  await page.waitForFunction(() => window.__heldSaves > 0);
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseHeldSave(); });
+  await quickPanel.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier), 'maximum');
+  assert.equal(await quickPanel.getByRole('radio', { name: '最大' }).isChecked(), true, 'a rejected quick save restores the accepted tier');
+  // A model with a smaller reference cannot take a tier above it.
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'kimi-k2.7-code' } }));
+  await page.waitForFunction(() => document.querySelector('#conversation-input .odc-quick button')?.textContent?.includes('262,144'));
+  await quickButton.click();
+  await quickPanel.waitFor();
+  await waitQuickReady();
+  assert.equal(await quickPanel.getByRole('radio', { name: '扩展' }).isDisabled(), true, 'a tier above the reference is not selectable');
+  assert.equal(await quickPanel.getByRole('radio', { name: '默认' }).isEnabled(), true, 'the default tier stays selectable');
+  // An explicit output that does not fit keeps the saved tier and asks for the settings page.
+  await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { maxTokens: 384000 }));
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' } }));
+  await quickButton.click();
+  await quickPanel.waitFor();
+  await waitQuickReady();
+  await quickPanel.getByRole('radio', { name: '默认' }).click();
+  await quickPanel.getByText('最大输出 384,000 不小于所选总窗口 272,000；请先在设置页清空或减小最大输出。', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier), 'maximum', 'a conflicting tier keeps the saved value');
+  // A read-only or loading configuration never writes.
+  await page.evaluate(() => window.__setFormState('ready', false));
+  await quickPanel.getByText('当前设置为只读。', { exact: true }).waitFor();
+  assert.equal(await quickPanel.getByRole('radio', { name: '扩展' }).isDisabled(), true, 'a read-only configuration cannot change the tier');
+  await page.evaluate(() => window.__setFormState('loading', false));
+  await quickPanel.getByText('正在载入模型设置。', { exact: true }).waitFor();
+  await page.evaluate(() => window.__setFormState('ready', true));
+  await waitQuickReady();
+  // An external update to another model survives the quick write.
+  await page.evaluate(() => window.__setModelSettings('claude-haiku-5.5', { temperature: 0.4 }));
+  await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { maxTokens: 4096 }));
+  await quickPanel.getByRole('radio', { name: '扩展' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended');
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['claude-haiku-5.5']?.temperature), 0.4, 'an external update to another model survives the quick write');
+  // A second session keeps its own model and its own window.
+  await page.evaluate(() => {
+    window.__setModelSettings('claude-opus-5.5', { contextTier: 'maximum' });
+    window.__setDirectory('session-b', {
+      current: { provider: 'opendesign-corouter-paid', model: 'claude-opus-5.5' },
+      pending: null, status: 'ready', groups: [], routable: true,
+    });
+    return window.__mountQuick('session-b', 'conversation-input-b');
+  });
+  const quickB = page.locator('#conversation-input-b .odc-quick');
+  const quickButtonB = quickB.getByRole('button', { name: /^CoRouter 上下文/u });
+  await quickButtonB.waitFor();
+  await page.waitForFunction(() => document.querySelector('#conversation-input-b .odc-quick button')?.textContent?.includes('872K'));
+  assert.match(await quickButtonB.innerText(), /872K/u, 'the second session shows its own window');
+  const labelB = await quickButtonB.innerText();
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'claude-haiku-5.5' } }));
+  await page.waitForFunction(() => document.querySelector('#conversation-input .odc-quick button')?.textContent?.includes('272K'));
+  assert.equal(await quickButtonB.innerText(), labelB, 'the other session is unaffected by the first one');
+  // Switching the model closes the popover and never writes a late result to the new model.
+  await quickButton.click();
+  await quickPanel.waitFor();
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' } }));
+  await quickPanel.waitFor({ state: 'hidden' });
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['claude-haiku-5.5']?.contextTier), undefined, 'a late result never reaches the new model');
+  // A write that is in flight when the model changes lands on the model it started for.
+  await quickButton.click();
+  await quickPanel.waitFor();
+  await waitQuickReady();
+  await page.evaluate(() => { window.__holdSaves = true; });
+  await quickPanel.getByRole('radio', { name: '最大' }).check();
+  await page.waitForFunction(() => window.__heldSaves > 0);
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'claude-haiku-5.5' } }));
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseHeldSave(); });
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'maximum');
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['claude-haiku-5.5']?.contextTier), undefined, 'the in-flight write stays with the model it started for');
+  assert.equal(await page.locator('#conversation-input .odc-quick-error').count(), 0, 'the new model shows no stale error');
+  assert.equal(await page.locator('#conversation-input .odc-quick-panel').getByText('上下文档位已保存。', { exact: true }).count(), 0, 'the new model shows no stale success notice');
+  // Escape and an outside click close the popover; the focus returns to the button.
+  await quickButton.click();
+  await quickPanel.waitFor();
+  await page.keyboard.press('Escape');
+  await quickPanel.waitFor({ state: 'hidden' });
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')?.startsWith('CoRouter 上下文') ?? false), true, 'Escape returns the focus to the button');
+  await quickButton.click();
+  await quickPanel.waitFor();
+  await page.mouse.click(8, 8);
+  await quickPanel.waitFor({ state: 'hidden' });
+  // The quick switch stays usable in a narrow chat pane.
+  await page.locator('#conversation-input').evaluate(element => { element.style.width = '320px'; element.style.maxWidth = '320px'; });
+  assert.equal(await page.locator('#conversation-input').evaluate(element => element.scrollWidth <= element.clientWidth), true, 'the quick switch fits a narrow chat pane');
+  await quickButton.click();
+  await quickPanel.waitFor();
+  assert.equal(await quickPanel.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth;
+  }), true, 'the popover keeps its left and right bounds in a narrow chat pane');
+  await page.keyboard.press('Escape');
+  await quickPanel.waitFor({ state: 'hidden' });
+  await page.locator('#conversation-input').evaluate(element => { element.style.width = ''; element.style.maxWidth = ''; });
+  // A 320 pixel viewport keeps the popover inside the screen.
+  await page.setViewportSize({ width: 320, height: 900 });
+  await quickButton.click();
+  await quickPanel.waitFor();
+  const quickBox = await quickPanel.boundingBox();
+  assert.ok(quickBox !== null && quickBox.x >= 0 && quickBox.x + quickBox.width <= 320, 'the popover keeps its left and right bounds in a 320 pixel viewport');
+  await page.keyboard.press('Escape');
+  await quickPanel.waitFor({ state: 'hidden' });
+  await page.setViewportSize({ width: 1040, height: 1000 });
+  // Restore the shared model defaults the settings page expects.
+  await page.evaluate(() => window.__clearModelSettings('claude-haiku-5.5'));
+  await page.evaluate(() => window.__clearModelSettings('claude-opus-5.5'));
+  await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { maxTokens: 4096 }));
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' } }));
+  await quickButton.click();
+  await quickPanel.waitFor();
+  await waitQuickReady();
+  await quickPanel.getByRole('radio', { name: '默认' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === undefined);
+  await page.screenshot({ path: join(previewDir, 'context-quick.png'), fullPage: true });
+  await page.keyboard.press('Escape');
   await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
   const startDevice = page.getByRole('button', { name: '开始设备授权', exact: true });
   // Action responses remain usable even while a separate status read is unavailable.
@@ -718,6 +1078,13 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   const turnNoProgress = page.getByLabel('无进展停止上限', { exact: true });
   assert.equal(await turnContinuations.inputValue(), '3');
   assert.equal(await turnNoProgress.inputValue(), '2');
+  // The completion handshake is opt-in and stays disabled by default.
+  const reviewSwitch = page.getByRole('checkbox', { name: /启用结束回合核验/u });
+  assert.equal(await reviewSwitch.isChecked(), false);
+  assert.equal(await turnContinuations.isDisabled(), true, 'review limits stay disabled while the handshake is off');
+  await reviewSwitch.check();
+  await page.waitForFunction(() => window.__config.turnCompletionReview === true);
+  assert.equal(await turnContinuations.isDisabled(), false);
   await turnContinuations.fill('5');
   await turnContinuations.blur();
   await page.waitForFunction(() => window.__config.turnReviewMaxContinuations === 5);
@@ -800,6 +1167,14 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
   await page.waitForFunction(() => document.querySelector('#odc-image-budget')?.value === '12');
   assert.equal(await page.evaluate(() => window.__config.maxRequestImageBytes), 12 * 1024 * 1024);
+  // A rejected numeric edit remains visible as a failed action until a real retry succeeds.
+  await imageBudget.fill('16');
+  await imageBudget.blur();
+  await page.waitForFunction(() => window.__config.maxRequestImageBytes === 16 * 1024 * 1024);
+  await page.waitForFunction(() => !document.querySelector('#odc-image-budget-hint')?.classList.contains('odc-field-error'));
+  await imageBudget.fill('12');
+  await imageBudget.blur();
+  await page.waitForFunction(() => window.__config.maxRequestImageBytes === 12 * 1024 * 1024);
   await requestTimeout.fill('900000');
   await requestTimeout.blur();
   await page.waitForFunction(() => window.__config.requestTimeoutMs === 900000);
@@ -843,6 +1218,16 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
     await modelDetails.getByRole('button', { name: '编辑默认思考深度', exact: true }).click();
     assert.equal(await modelDetails.getByRole('combobox', { name: '默认思考深度' }).isEnabled(), true);
     reports.push(await auditTheme(page, `${index + 1}-${mode}-model-options`));
+    // The quick switch lives outside the settings pane; the audit measures it where it is.
+    const quickAuditButton = page.getByRole('button', { name: /^CoRouter 上下文/u }).first();
+    if (await quickAuditButton.count()) {
+      await quickAuditButton.click();
+      const quickAuditPanel = page.getByRole('dialog', { name: '上下文窗口' });
+      await quickAuditPanel.waitFor();
+      reports.push(await auditTheme(page, `${index + 1}-${mode}-context-quick`));
+      await page.keyboard.press('Escape');
+      await quickAuditPanel.waitFor({ state: 'hidden' });
+    }
     if (mode === 'dark') await page.screenshot({ path: join(previewDir, 'models-dark.png'), fullPage: true });
     await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
     const primary = page.locator('.odc-button-primary');
@@ -872,6 +1257,17 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   reports.push(await auditTheme(page, 'forced-colors-protocol-options'));
   await page.getByRole('tab', { name: '模型', exact: true }).click();
   reports.push(await auditTheme(page, 'forced-colors-compact-image-controls'));
+  // The quick switch keeps its own contrast and focus ring in forced colors.
+  const forcedQuickButton = page.getByRole('button', { name: /^CoRouter 上下文/u }).first();
+  if (await forcedQuickButton.count()) {
+    await forcedQuickButton.click();
+    const forcedQuickPanel = page.getByRole('dialog', { name: '上下文窗口' });
+    await forcedQuickPanel.waitFor();
+    reports.push(await auditTheme(page, 'forced-colors-context-quick'));
+    await page.keyboard.press('Escape');
+    await forcedQuickPanel.waitFor({ state: 'hidden' });
+    assert.equal(await forcedQuickButton.evaluate(element => element === document.activeElement && element.matches(':focus-visible') && getComputedStyle(element).outlineStyle === 'solid' && parseFloat(getComputedStyle(element).outlineWidth) >= 2), true, 'Escape returns keyboard focus with a visible forced-color focus indicator');
+  }
   const forcedImageInput = page.locator('.odc-image-toggle:visible input').first();
   await page.keyboard.press('Tab');
   await forcedImageInput.focus();
@@ -914,6 +1310,8 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
   await page.evaluate(() => window.__cleanup());
   assert.equal(await page.locator('style[data-opendesign-corouter]').count(), 0);
+  assert.equal(await page.locator('.odc-quick').count(), 0, 'slot teardown unmounts every session quick control');
+  assert.deepEqual(await page.evaluate(() => window.__activeSubscriptions()), { form: 0, directories: 0 }, 'teardown releases both form and per-session directory subscriptions');
   assert.equal(await page.evaluate(() => window.__remoteDisposed), true);
   assert.deepEqual(errors, []);
   console.log(`Offline UI smoke passed: 4 tabs, ${fixtureModels.length} models, price tiers and stale fallback, stable enablement ordering, compact keyboard-accessible image controls, model enable/edit/reset persistence, protocol selection, quota timing and auto-refresh scheduling, 10 RPCs, credential input, guard switch, keyboard navigation, disposal; ${reports.length} official light/dark/forced-color audits, minimum measured text contrast ${Math.min(...reports.map(report => report.minimum))}:1.`);

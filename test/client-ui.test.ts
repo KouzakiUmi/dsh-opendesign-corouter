@@ -9,6 +9,10 @@ import {
   ModelRow,
   QuotaView,
   SettingsPage,
+  contextCapacityConflict,
+  contextTierAvailable,
+  contextTierConflict,
+  contextTierWindow,
   formatRefreshCountdown,
   formatRelativeDeadline,
   formatWindowCredits,
@@ -21,6 +25,7 @@ import {
   protocolEndpoint,
   quotaAutoRefresh,
   quotaStatusView,
+  selectedContextTier,
   sortModelsByEnabled,
   tabAfter,
   writeModelSettings,
@@ -118,6 +123,7 @@ const status: Status = {
   login: { jobId: null, state: 'idle' },
   config: {
     emptyTurnGuard: true,
+    turnCompletionReview: false,
     useDesktopCredential: true,
     baseURL: 'https://example.invalid/v1',
     apiKeyEnv: 'COROUTER_API_KEY',
@@ -144,6 +150,7 @@ let snapshot: FormSnapshot = {
   writable: true,
   value: {
     emptyTurnGuard: true,
+    turnCompletionReview: true,
     useDesktopCredential: true,
     baseURL: 'https://example.invalid/v1',
     apiKeyEnv: 'COROUTER_API_KEY',
@@ -196,7 +203,7 @@ test('model discovery wording names the configured gateway, not OpenAI as the pr
   assert.match(html, />刷新模型目录<\/button>/u);
   assert.match(html, /title="从当前配置的网关读取可用模型目录"/u);
   assert.match(html, /来源：当前网关/u);
-  assert.match(html, /上下文为参考预算；刷新后会采用网关报告的较小窗口，实际限制可能不同，可在模型设置中覆盖/u);
+  assert.match(html, /上下文为参考预算；刷新后会采用网关报告的较小窗口，实际限制可能不同，可在模型设置中选择总窗口档位/u);
   assert.doesNotMatch(html, /从 OpenAI 刷新模型|OpenAI \/models 发现/u);
 });
 
@@ -469,7 +476,7 @@ test('Claude Opus 5.5 labels the vendor context reference without changing the o
     model: { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', group: 'paid', contextWindow: 1_000_000 },
     settings: {}, authoritative: true, writable: true, pending: false, protocol: 'messages', onCommit: async () => true,
   }));
-  assert.match(html, /上下文 1,000,000 为厂商参考，网关实际容量未验证；可通过上下文预算覆盖。/u);
+  assert.match(html, /上下文 1,000,000 为厂商参考，网关实际容量未验证；档位总窗口不会超过该参考容量。/u);
   assert.match(html, /Messages 默认最大输出 4096/u);
 });
 
@@ -478,7 +485,7 @@ test('Muse Wonder identifies its unverified mapping as a tentative reference', (
     model: { id: 'muse-wonder', name: 'Muse Wonder', group: 'paid', contextWindow: 1_048_576 },
     settings: {}, authoritative: true, writable: true, pending: false, protocol: 'chat-completions', onCommit: async () => true,
   }));
-  assert.match(html, /上下文 1,048,576 为暂定参考，网关型号映射及实际容量未验证；可通过上下文预算覆盖。/u);
+  assert.match(html, /上下文 1,048,576 为暂定参考，网关型号映射及实际容量未验证；档位总窗口不会超过该参考容量。/u);
 });
 
 test('numeric settings accept inherit, bounds and integers only', () => {
@@ -547,9 +554,13 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
   assert.equal((html.match(/type="checkbox"/g) ?? []).length, 6);
   assert.equal((html.match(/type="checkbox"[^>]*checked=""/g) ?? []).length, 4);
   assert.equal((html.match(/<summary[^>]*>参数设置 · (?:已自定义|使用默认值)<\/summary>/g) ?? []).length, 3);
-  for (const label of ['温度', 'Top P', '最大输出（tokens）', '上下文预算（tokens）']) {
+  for (const label of ['温度', 'Top P', '最大输出（tokens）']) {
     assert.match(html, new RegExp(`<label for="[^"]+">${label}</label>`));
   }
+  // The context window is a three-tier choice, not another numeric field.
+  assert.doesNotMatch(html, /上下文预算（tokens）/u);
+  assert.equal((html.match(/type="radio"/g) ?? []).length, models.length * 3);
+  assert.equal((html.match(/<legend[^>]*>上下文窗口（输入 \+ 输出合计）<\/legend>/gu) ?? []).length, models.length);
   assert.equal((html.match(/aria-label="编辑默认思考深度"/g) ?? []).length, 3);
   assert.equal((html.match(/class="odc-effort-value">继承默认<\/p>/g) ?? []).length, 3);
   assert.doesNotMatch(html, /<label for="[^"]+">默认思考深度<\/label>/u, 'the effort selector appears only after entering edit mode');
@@ -562,6 +573,143 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
   assert.match(html, /role="alert"/u);
   // One explicit entry: only that row's reset is enabled.
   assert.equal((html.match(/<button[^>]*disabled=""[^>]*>重置<\/button>/g) ?? []).length, 2);
+});
+
+/** The rendered input tag of one context tier; attribute order is React's, not the test's. */
+function contextRadio(html: string, preset: string): string {
+  return html.match(new RegExp(`<input[^>]*value="${preset}"[^>]*>`, 'u'))?.[0] ?? '';
+}
+
+test('the context window offers three tiers and keeps the vendor reference separate', () => {
+  const model: StatusModel = { id: 'gpt-6-luna', name: 'GPT-6 Luna', group: 'plan', contextWindow: 1_050_000, maxOutputTokens: 128_000 };
+  const render = (settings: Parameters<typeof ModelRow>[0]['settings'], pending = false) => renderToStaticMarkup(h(ModelRow, {
+    model, settings, authoritative: true, writable: true, pending, onCommit: async () => true,
+  }));
+  const html = render({});
+  assert.equal((html.match(/type="radio"/g) ?? []).length, 3);
+  assert.match(contextRadio(html, 'default'), /checked=""/u, 'an absent override is the default tier');
+  assert.doesNotMatch(contextRadio(html, 'extended'), /checked=""/u);
+  assert.doesNotMatch(contextRadio(html, 'maximum'), /checked=""/u);
+  // The vendor reference stays the evidence value; the working window is the tier.
+  assert.match(html, /参考容量 1,050,000/u);
+  assert.match(html, /当前总窗口 272,000（含输出预留）/u);
+  assert.match(html, /当前总窗口 272,000 tokens（含输出预留）/u);
+  assert.match(html, /输出能力参考 128,000/u);
+  assert.match(html, /自动输出预留 68,000/u, 'the automatic reservation is a quarter of the working window');
+  assert.match(html, /正整数；留空按模型与当前总窗口自动预留。/u);
+  assert.doesNotMatch(html, /上下文预算（tokens）/u);
+
+  const extended = render({ contextTier: 'extended' });
+  assert.match(contextRadio(extended, 'extended'), /checked=""/u);
+  assert.match(extended, /当前总窗口 500,000 tokens（含输出预留）/u);
+
+  const maximum = render({ contextTier: 'maximum' });
+  assert.match(contextRadio(maximum, 'maximum'), /checked=""/u);
+  assert.match(maximum, /当前总窗口 872,000 tokens（含输出预留）/u);
+
+  const pendingHtml = render({ contextTier: 'extended' }, true);
+  assert.match(contextRadio(pendingHtml, 'extended'), /disabled=""/u, 'a pending save locks the tier control');
+  // A disabled tier control explains why it is unavailable.
+  assert.match(pendingHtml, /正在保存模型设置，完成后可继续选择档位。/u);
+  assert.match(contextRadio(pendingHtml, 'extended'), /aria-describedby="[^"]+-reason"/u);
+  const readOnly = renderToStaticMarkup(h(ModelRow, {
+    model, settings: {}, authoritative: true, writable: false, pending: false, onCommit: async () => true,
+  }));
+  assert.match(readOnly, /配置不可写/u);
+  assert.match(contextRadio(readOnly, 'default'), /aria-describedby="[^"]+-reason"/u);
+});
+
+test('a small reference limits the tiers above it and clamps the default tier', () => {
+  const model: StatusModel = { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', group: 'plan', contextWindow: 262_144, maxOutputTokens: 262_144 };
+  const html = renderToStaticMarkup(h(ModelRow, {
+    model, settings: {}, authoritative: true, writable: true, pending: false, onCommit: async () => true,
+  }));
+  assert.match(contextRadio(html, 'default'), /checked=""/u, 'the default tier stays selectable');
+  assert.doesNotMatch(contextRadio(html, 'default'), /disabled=""/u);
+  assert.match(contextRadio(html, 'extended'), /disabled=""/u);
+  assert.match(contextRadio(html, 'maximum'), /disabled=""/u);
+  assert.match(html, /超过参考容量 262,144/u);
+  assert.match(html, /参考容量 262,144/u);
+  assert.match(html, /当前总窗口 262,144 tokens（含输出预留）；参考容量 262,144，所选档位已按参考容量限幅/u);
+});
+
+test('a selected tier is capped by a smaller reference and says so', () => {
+  const model: StatusModel = { id: 'grok-4.7', name: 'Grok 4.7', group: 'paid', contextWindow: 500_000, maxOutputTokens: 128_000 };
+  const render = (settings: Parameters<typeof ModelRow>[0]['settings']) => renderToStaticMarkup(h(ModelRow, {
+    model, settings, authoritative: true, writable: true, pending: false, onCommit: async () => true,
+  }));
+  const maximum = render({ contextTier: 'maximum' });
+  assert.match(maximum, /当前总窗口 500,000 tokens（含输出预留）；参考容量 500,000，所选档位已按参考容量限幅/u);
+  const extended = render({ contextTier: 'extended' });
+  assert.match(extended, /当前总窗口 500,000 tokens（含输出预留）。/u, 'a tier at the reference is not clamped');
+  // A legacy number keeps its own value and is never described as clamped.
+  const legacy = render({ contextWindow: 500_000 });
+  assert.match(legacy, /当前总窗口 500,000 tokens（含输出预留）；旧自定义窗口按原值继续生效/u);
+  assert.doesNotMatch(legacy, /所选档位已按参考容量限幅/u);
+});
+
+test('a legacy custom window stays visible and is never read as a tier', () => {
+  const model: StatusModel = { id: 'gpt-6-luna', name: 'GPT-6 Luna', group: 'plan', contextWindow: 1_050_000, maxOutputTokens: 128_000 };
+  const render = (settings: Parameters<typeof ModelRow>[0]['settings']) => renderToStaticMarkup(h(ModelRow, {
+    model, settings, authoritative: true, writable: true, pending: false, onCommit: async () => true,
+  }));
+  const legacy = render({ contextWindow: 200_000 });
+  assert.match(legacy, /旧自定义 200,000，选择档位替换/u);
+  assert.doesNotMatch(contextRadio(legacy, 'default'), /checked=""/u, 'a custom window selects no tier');
+  assert.match(legacy, /当前总窗口 200,000 tokens（含输出预留）/u);
+
+  // A legacy number that happens to equal a tier's token count stays a custom window.
+  const equalToTier = render({ contextWindow: 500_000 });
+  assert.match(equalToTier, /旧自定义 500,000，选择档位替换/u);
+  assert.doesNotMatch(contextRadio(equalToTier, 'extended'), /checked=""/u);
+  assert.match(equalToTier, /当前总窗口 500,000 tokens（含输出预留）/u);
+});
+
+test('an explicit output that no longer fits the window is reported before any save', () => {
+  const model: StatusModel = { id: 'gpt-6-luna', name: 'GPT-6 Luna', group: 'plan', contextWindow: 1_050_000, maxOutputTokens: 128_000 };
+  const html = renderToStaticMarkup(h(ModelRow, {
+    model, settings: { maxTokens: 384_000 }, authoritative: true, writable: true, pending: false, onCommit: async () => true,
+  }));
+  const input = html.match(/<input[^>]*id="[^"]+-maxTokens"[^>]*>/u)?.[0] ?? '';
+  assert.match(input, /aria-invalid="true"/u);
+  assert.doesNotMatch(input, /disabled/u, 'an invalid output limit stays clearable');
+  assert.match(html, /最大输出 384,000 不小于当前总窗口 272,000（含输出预留）/u);
+  assert.match(html, /可清空或减小最大输出，或改选更大的上下文档位/u);
+});
+
+test('the tier policy, the capacity conflicts and the writer agree', () => {
+  assert.equal(selectedContextTier({}), 'default');
+  assert.equal(selectedContextTier({ contextTier: 'extended' }), 'extended');
+  assert.equal(selectedContextTier({ contextWindow: 500_000 }), undefined, 'a legacy number is never a tier');
+  assert.equal(selectedContextTier({ contextWindow: 500_000, contextTier: 'maximum' }), 'maximum');
+
+  assert.equal(contextTierAvailable('default', 262_144), true);
+  assert.equal(contextTierAvailable('extended', 262_144), false);
+  assert.equal(contextTierAvailable('extended', 500_000), true);
+  assert.equal(contextTierAvailable('maximum', 500_000), false);
+  assert.equal(contextTierAvailable('maximum', undefined), true);
+
+  assert.equal(contextTierWindow('default', 262_144), 262_144);
+  assert.equal(contextTierWindow('default', 1_050_000), 272_000);
+  assert.equal(contextTierWindow('extended', 1_050_000), 500_000);
+  assert.equal(contextTierWindow('maximum', undefined), 872_000);
+
+  assert.equal(contextCapacityConflict(1_050_000, { maxTokens: 4096 }), undefined);
+  assert.equal(contextCapacityConflict(1_050_000, { maxTokens: 384_000 }),
+    '最大输出 384,000 不小于当前总窗口 272,000（含输出预留）；可清空或减小最大输出，或改选更大的上下文档位。');
+  assert.equal(contextCapacityConflict(1_050_000, { maxTokens: 384_000, contextTier: 'maximum' }), undefined);
+  assert.equal(contextCapacityConflict(1_050_000, { maxTokens: 384_000, contextWindow: 500_000 }), undefined, 'a legacy window keeps its own meaning');
+  assert.equal(contextCapacityConflict(1_050_000, {}), undefined);
+
+  assert.match(contextTierConflict(1_050_000, 'default', 384_000) ?? '', /无法切换到「默认」档/u);
+  assert.match(contextTierConflict(1_050_000, 'default', 384_000) ?? '', /当前档位保持不变/u);
+  assert.equal(contextTierConflict(1_050_000, 'maximum', 384_000), undefined);
+  assert.equal(contextTierConflict(1_050_000, 'default', undefined), undefined);
+
+  const tiered = writeModelSettings({}, 'gpt-6-luna', { contextTier: 'extended' });
+  assert.deepEqual(tiered['gpt-6-luna'], { contextTier: 'extended' });
+  const legacyKept = writeModelSettings(tiered, 'gpt-6-luna', { contextTier: 'extended', contextWindow: 200_000 });
+  assert.deepEqual(legacyKept['gpt-6-luna'], { contextTier: 'extended', contextWindow: 200_000 });
 });
 
 test('invalid saved efforts remain clearable and are not presented as supported choices', () => {
@@ -717,6 +865,35 @@ test('turn monitor limits save through the host form with rollback', async () =>
   // Without form or host values the defaults render as the editable starting point.
   assert.match(unbound.match(/<input[^>]*id="odc-turn-continuations"[^>]*>/u)?.[0] ?? '', /value="3"/u);
   assert.match(unbound.match(/<input[^>]*id="odc-turn-no-progress"[^>]*>/u)?.[0] ?? '', /value="2"/u);
+});
+
+test('the completion review switch defaults off and gates its own limits', () => {
+  const off = renderAdvanced(
+    { ...status, config: { ...status.config, turnCompletionReview: false } },
+    { status: 'ready', writable: true, value: { ...snapshot.value, turnCompletionReview: false } },
+  );
+  assert.match(off, /启用结束回合核验/u);
+  assert.equal((off.match(/type="checkbox"[^>]*checked=""/gu) ?? []).length, 1, 'only the guard is enabled by default');
+  assert.match(off.match(/<input[^>]*id="odc-turn-continuations"[^>]*>/u)?.[0] ?? '', /disabled=""/u);
+  assert.match(off.match(/<input[^>]*id="odc-turn-no-progress"[^>]*>/u)?.[0] ?? '', /disabled=""/u);
+
+  const on = renderAdvanced(
+    { ...status, config: { ...status.config, turnCompletionReview: true } },
+    { status: 'ready', writable: true, value: { ...snapshot.value, turnCompletionReview: true } },
+  );
+  assert.equal((on.match(/type="checkbox"[^>]*checked=""/gu) ?? []).length, 2);
+  assert.doesNotMatch(on.match(/<input[^>]*id="odc-turn-continuations"[^>]*>/u)?.[0] ?? '', /disabled=""/u);
+
+  // The guard stays the outer switch: no probe can enable a review the guard has disabled.
+  const guardedOff = renderAdvanced(
+    { ...status, config: { ...status.config, emptyTurnGuard: false, turnCompletionReview: true } },
+    { status: 'ready', writable: true, value: { ...snapshot.value, emptyTurnGuard: false, turnCompletionReview: true } },
+  );
+  const boxes = guardedOff.match(/<input type="checkbox"[^>]*>/gu) ?? [];
+  assert.equal(boxes.length, 2);
+  assert.match(boxes[1] ?? '', /disabled=""/u);
+  assert.match(boxes[1] ?? '', /checked=""/u, 'the saved value stays visible while the guard disables it');
+  assert.match(guardedOff, /需要先开启异常结束监控/u, 'a disabled switch explains why');
 });
 
 test('unavailable writable forms cannot expose editable controls', () => {

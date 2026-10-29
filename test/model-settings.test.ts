@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyModelSettings, isModelEnabled, parseModelSettingsMap } from '../src/model-settings.js';
 import { findModel, type CatalogModel } from '../src/catalog.js';
+import { CONTEXT_WINDOW_PRESETS } from '../src/context-budget.js';
 
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'] as const;
 const MAX_ENTRIES = 512;
@@ -104,6 +105,32 @@ test('explicit output capacity must be smaller than explicit context capacity', 
   assert.deepEqual(applyModelSettings(row, { maxTokens: 8192, contextWindow: 8192 }), { ...row, maxOutputTokens: 8192, contextWindow: 8192 });
 });
 
+test('context tiers are allowlisted separately from legacy numeric windows', () => {
+  const row = findModel('deepseek-v4.1-flash')!;
+  for (const [contextTier, window] of [['default', 272_000], ['extended', 500_000], ['maximum', 872_000]] as const) {
+    const settings = { model: { contextTier } };
+    assert.deepEqual(parseModelSettingsMap(settings), settings);
+    assert.equal(applyModelSettings(row, { contextTier }).contextWindow, window);
+  }
+  for (const contextTier of ['', 'large', '272000', 272000, null, true]) {
+    assert.throws(() => parseModelSettingsMap({ model: { contextTier } }), /contextTier/u);
+  }
+  assert.throws(() => parseModelSettingsMap({ model: { contextWindow: 500_000, contextTier: 'extended' } }), /不能同时设置/u);
+  assert.throws(() => applyModelSettings(row, { contextWindow: 500_000, contextTier: 'extended' }), /不能同时设置/u);
+  assert.throws(() => parseModelSettingsMap({ model: { contextTier: 'extended', maxTokens: 500_000 } }), /小于档位总窗口/u);
+  const small = { ...row, contextWindow: 96_000 };
+  assert.equal(applyModelSettings(small).contextWindow, 96_000);
+  assert.equal(applyModelSettings(small, { contextTier: 'maximum' }).contextWindow, 96_000);
+  assert.equal(applyModelSettings(small, { contextWindow: 500_000 }).contextWindow, 500_000, 'legacy overrides are not reinterpreted as tiers');
+});
+
+test('self-contained schema tier limits stay aligned with the shared policy', () => {
+  for (const { id: contextTier, tokens } of CONTEXT_WINDOW_PRESETS) {
+    assert.doesNotThrow(() => parseModelSettingsMap({ model: { contextTier, maxTokens: tokens - 1 } }));
+    assert.throws(() => parseModelSettingsMap({ model: { contextTier, maxTokens: tokens } }), /小于档位总窗口/u);
+  }
+});
+
 test('applyModelSettings overrides capacity on a copy and never mutates the catalog row', () => {
   const row = findModel('deepseek-v4.1-flash');
   assert.ok(row);
@@ -118,12 +145,13 @@ test('applyModelSettings overrides capacity on a copy and never mutates the cata
   // 原始目录行保持官网/Go defaults 取证值。
   assert.equal(row.contextWindow, 1_000_000);
   assert.equal(row.maxOutputTokens, 384_000);
-  // 缺省或只给采样参数时，容量沿用目录行（采样参数属于请求，不写回目录行）。
-  assert.deepEqual(applyModelSettings(row), row);
-  assert.deepEqual(applyModelSettings(row, {}), row);
-  assert.deepEqual(applyModelSettings(row, { temperature: 0.3, topP: 0.8, reasoningEffort: 'low' }), row);
+  // 缺省使用工作总窗口，目录参考本身不变；采样参数仍属于请求。
+  const defaultRow = { ...row, contextWindow: 272_000 };
+  assert.deepEqual(applyModelSettings(row), defaultRow);
+  assert.deepEqual(applyModelSettings(row, {}), defaultRow);
+  assert.deepEqual(applyModelSettings(row, { temperature: 0.3, topP: 0.8, reasoningEffort: 'low' }), defaultRow);
   assert.equal(applyModelSettings(row, { contextWindow: 200_000 }).maxOutputTokens, row.maxOutputTokens);
-  assert.equal(applyModelSettings(row, { maxTokens: 8_000 }).contextWindow, row.contextWindow);
+  assert.equal(applyModelSettings(row, { maxTokens: 8_000 }).contextWindow, 272_000);
   // 动态发现且无容量的模型可由用户显式补上，仍然不推断其它能力。
   const paid: CatalogModel = { id: 'future-model', name: 'Future model', group: 'paid' };
   const tuned = applyModelSettings(paid, { contextWindow: 300_000, maxTokens: 16_000 });

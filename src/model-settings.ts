@@ -13,8 +13,9 @@
  */
 
 import type { CatalogModel } from './catalog.js';
+import { effectiveContextWindow, type ContextWindowPresetId } from './context-budget.js';
 
-/** One model's optional overrides; every field absent means "inherit the catalog row". */
+/** One model's overrides; absent context uses the default working-window preset. */
 export interface ModelSettings {
   /** 是否出现在模型选择器；缺省视为启用。 */
   enabled?: boolean;
@@ -26,8 +27,10 @@ export interface ModelSettings {
   topP?: number;
   /** 单次输出上限；覆盖目录行的 maxOutputTokens。 */
   maxTokens?: number;
-  /** 上下文窗口；覆盖目录行的 contextWindow。 */
+  /** 旧版自定义总窗口；数值原样保留，不按档位解释。 */
   contextWindow?: number;
+  /** 总窗口档位；与旧 contextWindow 数值互斥，缺省使用默认档。 */
+  contextTier?: ContextWindowPresetId;
   /** 思考深度；只允许目录同一套档位。 */
   reasoningEffort?: string;
 }
@@ -48,7 +51,7 @@ export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('模型设置必须是对象');
   const keys = Object.keys(value);
   if (keys.length > 512) throw new Error('模型设置最多允许 512 个模型');
-  const fields = new Set(['enabled', 'imageInput', 'temperature', 'topP', 'maxTokens', 'contextWindow', 'reasoningEffort']);
+  const fields = new Set(['enabled', 'imageInput', 'temperature', 'topP', 'maxTokens', 'contextWindow', 'contextTier', 'reasoningEffort']);
   const efforts: readonly unknown[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
   const out: ModelSettingsMap = {};
   for (const id of keys) {
@@ -81,6 +84,15 @@ export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
       if (typeof item !== 'number' || !Number.isSafeInteger(item) || item < 1 || item > max) throw new Error(`模型设置的 ${field} 必须是 1 到 ${max} 之间的整数`);
       parsed[field] = item;
     }
+    if (settings.contextTier !== undefined) {
+      if (settings.contextTier !== 'default' && settings.contextTier !== 'extended' && settings.contextTier !== 'maximum') throw new Error('模型设置的 contextTier 不在允许的取值内');
+      if (parsed.contextWindow !== undefined) throw new Error('上下文档位与旧自定义窗口不能同时设置');
+      parsed.contextTier = settings.contextTier;
+      // This callback is reconstructed without module bindings in the browser.
+      // Keep local tier limits aligned with CONTEXT_WINDOW_PRESETS (covered by tests).
+      const window = parsed.contextTier === 'default' ? 272_000 : parsed.contextTier === 'extended' ? 500_000 : 872_000;
+      if (parsed.maxTokens !== undefined && parsed.maxTokens >= window) throw new Error('模型设置的 maxTokens 必须小于档位总窗口');
+    }
     if (settings.reasoningEffort !== undefined) {
       if (typeof settings.reasoningEffort !== 'string' || !efforts.includes(settings.reasoningEffort)) throw new Error('模型设置的 reasoningEffort 不在允许的取值内');
       parsed.reasoningEffort = settings.reasoningEffort;
@@ -92,20 +104,20 @@ export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
 }
 
 /**
- * Copy a catalog row and apply explicit capacity and image-input overrides. The input row and
- * its arrays are never mutated; sampling and effort belong to the request instead.
+ * Copy a catalog row, resolve the working window, and apply explicit output/image
+ * overrides. Catalog references remain unchanged; sampling/effort belong to requests.
  */
 export function applyModelSettings(row: CatalogModel, settings?: ModelSettings): CatalogModel {
-  const { contextWindow, maxTokens, imageInput } = settings ?? {};
-  if (contextWindow === undefined && maxTokens === undefined && imageInput === undefined) return { ...row };
+  const { contextWindow, contextTier, maxTokens, imageInput } = settings ?? {};
   // Validate each override independently; the adapter owns effective-capacity errors
   // (including inherited catalog values) and reports them through its LlmError contract.
   if (contextWindow !== undefined) parseModelSettingsMap({ model: { contextWindow } });
+  if (contextTier !== undefined) parseModelSettingsMap({ model: { contextTier, ...(contextWindow === undefined ? {} : { contextWindow }) } });
   if (maxTokens !== undefined) parseModelSettingsMap({ model: { maxTokens } });
   if (imageInput !== undefined) parseModelSettingsMap({ model: { imageInput } });
   return {
     ...row,
-    ...(contextWindow === undefined ? {} : { contextWindow }),
+    contextWindow: effectiveContextWindow(row.contextWindow, contextWindow, contextTier),
     ...(maxTokens === undefined ? {} : { maxOutputTokens: maxTokens }),
     ...(imageInput === undefined ? {} : { inputModalities: imageInput ? ['text', 'image'] : ['text'] }),
   };

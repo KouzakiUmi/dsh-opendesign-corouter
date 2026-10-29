@@ -4,122 +4,152 @@
     {
       "label": "1-light-概览",
       "checked": 64,
-      "minimum": 5.8
+      "minimum": 5.23
     },
     {
       "label": "1-light-模型",
-      "checked": 272,
-      "minimum": 5.77
+      "checked": 370,
+      "minimum": 5.27
     },
     {
       "label": "1-light-连接与登录",
-      "checked": 23,
+      "checked": 27,
       "minimum": 5.8
     },
     {
       "label": "1-light-高级",
-      "checked": 36,
+      "checked": 63,
       "minimum": 5.8
     },
     {
       "label": "1-light-model-options",
-      "checked": 262,
-      "minimum": 5.77
+      "checked": 377,
+      "minimum": 4.97
+    },
+    {
+      "label": "1-light-context-quick",
+      "checked": 386,
+      "minimum": 4.97
     },
     {
       "label": "1-light-hover",
-      "checked": 23,
+      "checked": 27,
       "minimum": 5.8
     },
     {
       "label": "1-light-error",
-      "checked": 65,
-      "minimum": 5.77
+      "checked": 63,
+      "minimum": 5.23
     },
     {
       "label": "2-dark-概览",
       "checked": 64,
-      "minimum": 9.25
+      "minimum": 10.39
     },
     {
       "label": "2-dark-模型",
-      "checked": 272,
-      "minimum": 4.95
+      "checked": 370,
+      "minimum": 9.25
     },
     {
       "label": "2-dark-连接与登录",
-      "checked": 23,
+      "checked": 27,
       "minimum": 9.25
     },
     {
       "label": "2-dark-高级",
-      "checked": 36,
+      "checked": 63,
       "minimum": 9.25
     },
     {
       "label": "2-dark-model-options",
-      "checked": 262,
-      "minimum": 4.95
+      "checked": 377,
+      "minimum": 9.25
+    },
+    {
+      "label": "2-dark-context-quick",
+      "checked": 386,
+      "minimum": 9.25
     },
     {
       "label": "2-dark-hover",
-      "checked": 23,
+      "checked": 27,
       "minimum": 9.25
     },
     {
       "label": "2-dark-error",
-      "checked": 65,
+      "checked": 63,
       "minimum": 4.95
     },
     {
       "label": "3-light-概览",
       "checked": 64,
-      "minimum": 5.8
+      "minimum": 5.23
     },
     {
       "label": "3-light-模型",
-      "checked": 272,
-      "minimum": 5.77
+      "checked": 370,
+      "minimum": 5.27
     },
     {
       "label": "3-light-连接与登录",
-      "checked": 23,
+      "checked": 27,
       "minimum": 5.8
     },
     {
       "label": "3-light-高级",
-      "checked": 36,
+      "checked": 63,
       "minimum": 5.8
     },
     {
       "label": "3-light-model-options",
-      "checked": 262,
-      "minimum": 5.77
+      "checked": 377,
+      "minimum": 4.97
+    },
+    {
+      "label": "3-light-context-quick",
+      "checked": 386,
+      "minimum": 4.97
     },
     {
       "label": "3-light-hover",
-      "checked": 23,
+      "checked": 27,
       "minimum": 5.8
     },
     {
       "label": "3-light-error",
-      "checked": 65,
-      "minimum": 5.77
+      "checked": 63,
+      "minimum": 5.23
     },
     {
       "label": "forced-colors-connection",
-      "checked": 23,
+      "checked": 27,
       "minimum": 13.98
     },
     {
       "label": "forced-colors-protocol-options",
-      "checked": 36,
+      "checked": 63,
       "minimum": 21
+    },
+    {
+      "label": "forced-colors-compact-image-controls",
+      "checked": 370,
+      "minimum": 13.98
+    },
+    {
+      "label": "forced-colors-context-quick",
+      "checked": 379,
+      "minimum": 13.98
+    },
+    {
+      "label": "forced-colors-effort-editor",
+      "checked": 377,
+      "minimum": 13.98
     },
     {
       "label": "dark-mobile-overview",
       "checked": 64,
-      "minimum": 9.25
+      "minimum": 10.39
     }
   ]
 }

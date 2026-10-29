@@ -9,6 +9,7 @@ import { volatileForm } from '../node_modules/@deepseek-ai/dsh-settings/lib/type
 test('configuration rejects unsafe URLs before persistence and exposes live defaults', () => {
   const config = readConfig(Config({}));
   assert.equal(config.emptyTurnGuard, true);
+  assert.equal(config.turnCompletionReview, false);
   assert.equal(config.turnReviewMaxContinuations, 3);
   assert.equal(config.turnReviewNoProgressLimit, 2);
   assert.equal(config.useDesktopCredential, true);
@@ -29,6 +30,8 @@ test('configuration rejects unsafe URLs before persistence and exposes live defa
   for (const turnReviewMaxContinuations of [0, 11, 1.5]) assert.throws(() => Config({ turnReviewMaxContinuations }));
   for (const turnReviewNoProgressLimit of [0, 6, 1.5]) assert.throws(() => Config({ turnReviewNoProgressLimit }));
   assert.equal(readConfig(Config({ turnReviewMaxContinuations: 10, turnReviewNoProgressLimit: 5 })).turnReviewMaxContinuations, 10);
+  assert.equal(readConfig(Config({ turnCompletionReview: true })).turnCompletionReview, true);
+  assert.equal(readConfig(Config({ turnCompletionReview: true, emptyTurnGuard: false })).emptyTurnGuard, false);
   assert.equal(readConfig(Config({ maxRequestImageBytes: 8 * 1024 * 1024 })).maxRequestImageBytes, 8 * 1024 * 1024);
   assert.throws(() => Config({ maxRequestImageBytes: 1024 * 1024 - 1 }));
   assert.throws(() => Config({ maxRequestImageBytes: 100 * 1024 * 1024 + 1 }));
@@ -54,7 +57,8 @@ test('real Host volatile form projection survives repeated JSON hops before brow
   const form = volatileForm(Config);
   assert.ok(form);
   let current = form;
-  const values = readConfig(Config({ emptyTurnGuard: false, useDesktopCredential: false, modelSettings: { model: { imageInput: false } } }));
+  const values = readConfig(Config({ emptyTurnGuard: false, useDesktopCredential: false,
+    modelSettings: { model: { imageInput: false, contextTier: 'maximum' }, legacy: { contextWindow: 500_000 } } }));
   for (let hop = 0; hop < 4; hop++) {
     const wire = JSON.stringify(current.toJSON());
     const decoded = rehydrateInFreshVM(wire);
@@ -62,6 +66,7 @@ test('real Host volatile form projection survives repeated JSON hops before brow
     assert.equal(decoded({ ...values, emptyTurnGuard: true }).emptyTurnGuard, true);
     assert.throws(() => decoded({ ...values, baseURL: 'https://user:secret@example.com/v1' }));
     assert.throws(() => decoded({ ...values, modelSettings: { model: { apiKey: 'secret' } } }));
+    assert.throws(() => decoded({ ...values, modelSettings: { model: { contextTier: 'extended', contextWindow: 500_000 } } }));
     current = new Schema(JSON.parse(wire));
   }
 });
@@ -100,6 +105,7 @@ test('fresh-VM settings retain URL, model allowlist, bounds and safe errors', ()
     { model: { topP: 1.1 } }, { model: { topP: Number.POSITIVE_INFINITY } },
     { model: { maxTokens: 0 } }, { model: { maxTokens: 1.5 } }, { model: { maxTokens: 10_000_001 } },
     { model: { contextWindow: 100_000_001 } }, { model: { reasoningEffort: 'invalid' } },
+    { model: { contextTier: 'large' } }, { model: { contextTier: 'extended', contextWindow: 500_000 } },
     { model: { maxTokens: 8192, contextWindow: 8192 } },
     { 'fixture-secret id': {} }, { ['a'.repeat(129)]: {} },
     Object.fromEntries(Array.from({ length: 513 }, (_, i) => [`model-${i}`, {}])),

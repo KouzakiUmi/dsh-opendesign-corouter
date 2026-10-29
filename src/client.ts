@@ -12,10 +12,13 @@ import {
 import type { QuotaSnapshot, QuotaWindow } from './quota.js';
 import { inferenceEndpoint, API_PROTOCOL_OPTIONS, type ApiProtocol } from './protocol-options.js';
 import type { ModelSettings, ModelSettingsMap } from './model-settings.js';
+import { CONTEXT_WINDOW_PRESETS, contextWindowPreset, effectiveContextWindow, type ContextWindowPresetId } from './context-budget.js';
 import { validateActivationUrl } from './device-auth.js';
 import { modelReasoningEfforts } from './reasoning.js';
 import { CLAUDE_MESSAGES_MAX_OUTPUT, claudeOutputError, claudeSamplingError, hasRestrictedClaudeSampling } from './claude-capabilities.js';
 import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES } from './image-budget.js';
+import { configWritesFor } from './client-config-writes.js';
+import { ContextQuickSwitch, QUICK_CONTEXT_CSS, type ContextQuickProps, type ModelDirectoryService } from './client-context-quick.js';
 import type { ReviewDecision, ReviewReason } from './turn-monitor-status.js';
 
 const h = React.createElement;
@@ -50,12 +53,12 @@ const MAX_TURN_REVIEW_NO_PROGRESS_LIMIT = 5;
 const RPC_TIMEOUT_MS = 30_000;
 /** 与 model-settings.ts 的容量上限保持一致，避免界面先接受再被 Host 拒绝。 */
 const MAX_OUTPUT_TOKENS = 10_000_000;
-const MAX_CONTEXT_WINDOW = 100_000_000;
 
 export type RpcCaller = <T>(method: keyof CoRouterRemote, request?: unknown) => Promise<T>;
 
 export interface FormValues {
   emptyTurnGuard?: boolean;
+  turnCompletionReview?: boolean;
   useDesktopCredential?: boolean;
   baseURL?: string;
   apiKeyEnv?: string;
@@ -82,14 +85,14 @@ export interface ConfigForms {
   get(namespace: string): ConfigForm;
 }
 export interface SlotDescriptor<P> {
-  name: 'settings.section';
+  name: 'settings.section' | 'conversation.input.right';
   id: string;
   order: number;
-  label: () => string;
-  inject: () => P;
+  label?: () => string;
+  inject: (sessionId: string) => P;
 }
 export interface Slots {
-  inject(name: 'settings.section', register: () => void | (() => void)): void | (() => void);
+  inject(name: 'settings.section' | 'conversation.input.right', register: () => void | (() => void)): void | (() => void);
   register<P>(descriptor: SlotDescriptor<P>, component: React.ComponentType<P>): void | (() => void);
 }
 export interface ClientContext {
@@ -106,7 +109,9 @@ export interface ConfigScope {
   configForms: ConfigForms;
   slots: Slots;
   effect(effect: () => void | (() => void), label?: string): void;
+  inject(services: ['modelDirectories'], apply: (ctx: ModelDirectoryScope) => void): void;
 }
+export interface ModelDirectoryScope { slots: Slots; modelDirectories: ModelDirectoryService; effect(effect: () => void | (() => void), label?: string): void }
 export interface SettingsProps {
   caller: RpcCaller;
   form: ConfigForm;
@@ -182,6 +187,7 @@ function installStyles(): () => void {
 .odc-notice{padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);font-size:12px;line-height:1.6}.odc-notice[data-kind=error]{color:var(--dsw-alias-state-error-primary,inherit);color:color-mix(in srgb,var(--dsw-alias-state-error-primary,CanvasText) 85%,var(--dsw-alias-label-primary,CanvasText))}
 .odc-model-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}.odc-model-list{display:grid;gap:6px;margin:10px 0 0;padding:0;list-style:none}.odc-model-item{padding:9px 10px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);min-width:0}.odc-model-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap}.odc-model-switch{min-width:0;flex:1 1 190px}.odc-model-item strong,.odc-model-item code{display:block;overflow-wrap:anywhere}.odc-model-item strong{font-size:12px;font-weight:600}.odc-model-item code{margin-top:2px;color:var(--dsw-alias-label-secondary,inherit);font-size:11px}.odc-model-meta{margin-top:6px!important;color:var(--dsw-alias-label-secondary,inherit);font-size:11px;overflow-wrap:anywhere}.odc-model-count{color:var(--dsw-alias-label-secondary,inherit);font-size:11px;font-weight:400}.odc-chip{display:inline-flex;align-items:center;padding:1px 7px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:999px;color:var(--dsw-alias-label-secondary,inherit);font-size:10px;line-height:1.6}
 .odc-model-details{margin-top:8px}.odc-model-details>summary{cursor:pointer;color:var(--dsw-alias-label-secondary,inherit);font-size:11px;line-height:1.7}.odc-model-editor{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 10px;margin-top:8px}
+.odc-context{grid-column:1/-1;min-width:0;margin:0 0 4px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l4,transparent);border-radius:10px}.odc-context-legend{padding:0 6px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,inherit)}.odc-context-options{display:grid;gap:6px;margin-top:2px}.odc-context-option{display:flex;align-items:flex-start;gap:8px;min-width:0;min-height:32px;padding:6px 8px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:8px;cursor:pointer}.odc-context-option:hover:not(:has(input:disabled)){border-color:color-mix(in srgb,var(--odc-accent) 55%,transparent)}.odc-context-option:has(input:checked){border-color:color-mix(in srgb,var(--odc-accent) 65%,transparent);background:color-mix(in srgb,var(--odc-accent) 8%,transparent)}.odc-context-option:has(input:disabled){cursor:not-allowed;opacity:.6}.odc-context-option input{appearance:auto;width:16px;height:16px;flex:none;margin:2px 0 0;cursor:inherit;accent-color:var(--dsw-alias-brand-primary,Highlight)}.odc-context-copy{display:grid;gap:1px;min-width:0}.odc-context-copy strong{font-size:12px;font-weight:600}.odc-context-legacy{margin-top:6px!important;color:var(--dsw-alias-label-secondary,inherit);font-size:12px}
 .odc-model-image{display:flex;align-items:center;gap:2px 8px;flex-wrap:wrap;margin-top:3px;min-width:0}.odc-image-toggle{display:inline-flex;align-items:center;gap:6px;flex:none;min-height:28px;padding:2px 2px 2px 0;color:var(--dsw-alias-label-primary,inherit);font-size:12px;font-weight:550;cursor:pointer}.odc-image-toggle input{appearance:auto;width:16px;height:16px;flex:none;margin:0;cursor:inherit;accent-color:var(--dsw-alias-brand-primary,Highlight)}.odc-image-toggle:has(input:disabled){cursor:not-allowed;opacity:.6}.odc-image-state{min-width:0;color:var(--dsw-alias-label-secondary,inherit);font-size:12px;line-height:1.5;overflow-wrap:anywhere}.odc-image-reset{min-height:28px;padding:2px 7px;border:1px solid var(--dsw-alias-border-l3,CanvasText);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:12px;cursor:pointer}.odc-image-reset:hover:not(:disabled){border-color:var(--dsw-alias-brand-primary,Highlight);color:var(--dsw-alias-label-primary,inherit)}.odc-image-reset:disabled{opacity:.55;cursor:not-allowed}
 .odc-field{display:grid;gap:6px;margin-top:14px}.odc-field-compact{margin-top:8px}.odc-field label,.odc-switch-text{font-size:12px;font-weight:550}.odc-input{width:100%;min-width:0;min-height:34px;padding:7px 9px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:12px}.odc-field-compact .odc-input{min-height:30px;padding:5px 8px;font-size:11px}.odc-input::placeholder{color:var(--dsw-alias-label-secondary,inherit);opacity:1}.odc-input:disabled{opacity:.55}
 .odc-effort{min-width:0}.odc-effort-head{display:flex;align-items:center;justify-content:space-between;gap:6px 10px;flex-wrap:wrap}.odc-effort-label{font-size:12px;font-weight:550}.odc-effort-value{min-width:0;margin:0;font-size:12px;overflow-wrap:anywhere}.odc-effort-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -200,14 +206,14 @@ function installStyles(): () => void {
 .odc-quota-panel{display:grid;gap:8px;min-width:0}.odc-quota-panel>.odc-card-head{margin:0}.odc-quota-status{--odc-state:var(--odc-accent);display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--odc-state) 28%,transparent);border-radius:10px;background:color-mix(in srgb,var(--odc-state) 10%,transparent);font-size:13px;font-weight:600}.odc-quota-status[data-tone=good]{--odc-state:var(--dsw-alias-state-success-primary,Highlight)}.odc-quota-status[data-tone=warn]{--odc-state:var(--dsw-alias-state-warn-primary,Highlight)}.odc-quota-status[data-tone=critical]{--odc-state:var(--dsw-alias-state-error-primary,Highlight)}.odc-state-mark{display:grid;place-items:center;width:28px;height:28px;border:1px solid color-mix(in srgb,var(--odc-state) 65%,transparent);border-radius:8px;flex:none;font-size:15px;font-weight:700}.odc-state-copy{display:grid;gap:1px;min-width:0}.odc-state-copy .odc-hint{font-weight:400}
 .odc-window{--odc-window-color:var(--dsw-alias-label-secondary,CanvasText);gap:5px;margin:0;padding:10px 12px;border:0;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 5%,transparent)}.odc-window[data-tone=good]{--odc-window-color:color-mix(in srgb,var(--dsw-alias-state-success-primary,Highlight) 70%,var(--dsw-alias-label-primary,CanvasText))}.odc-window[data-tone=warn]{--odc-window-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary,Highlight) 70%,var(--dsw-alias-label-primary,CanvasText))}.odc-window[data-tone=critical]{--odc-window-color:var(--dsw-alias-state-error-primary,Highlight)}.odc-window-remaining strong{font-size:18px}.odc-window progress{appearance:none;height:7px;border:0;border-radius:999px;overflow:hidden;background:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 18%,transparent);accent-color:var(--odc-window-color)}.odc-window progress::-webkit-progress-bar{background:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 18%,transparent);border-radius:999px}.odc-window progress::-webkit-progress-value{background:var(--odc-window-color);border-radius:999px}
 .odc-window-usage{display:block;margin:0;color:var(--dsw-alias-label-secondary,inherit);font-size:12px;overflow-wrap:anywhere}.odc-window-bottom{display:flex;align-items:baseline;justify-content:space-between;gap:4px 12px;flex-wrap:wrap}.odc-window-reset{display:flex;align-items:baseline;justify-content:flex-start;flex-wrap:wrap;gap:4px 6px;padding:0;border:0}.odc-window-details>summary{min-height:28px;padding:4px 0}.odc-window-details[open]{flex-basis:100%}.odc-window-details dl>div{display:flex;justify-content:space-between;gap:12px}
-@media(forced-colors:active){.odc-window progress{appearance:auto;accent-color:Highlight;forced-color-adjust:auto}.odc-window progress::-webkit-progress-value{background:Highlight}.odc-image-toggle input{forced-color-adjust:auto}.odc-image-reset{border-color:ButtonText;background:ButtonFace;color:ButtonText}}
+@media(forced-colors:active){.odc-window progress{appearance:auto;accent-color:Highlight;forced-color-adjust:auto}.odc-window progress::-webkit-progress-value{background:Highlight}.odc-image-toggle input{forced-color-adjust:auto}.odc-image-reset{border-color:ButtonText;background:ButtonFace;color:ButtonText}.odc-context-option input{forced-color-adjust:auto}.odc-context-option{border-color:ButtonText}.odc-context-option:has(input:checked){border-color:Highlight}}
 .odc-balance-list,.odc-timing{display:grid;gap:0;margin:0}.odc-balance-row,.odc-timing-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;min-width:0;min-height:0;padding:6px 0;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-balance-row:first-child,.odc-timing-row:first-child{border-top:0}.odc-balance-row>div,.odc-timing-row>div{min-width:0}.odc-balance-row dt,.odc-timing-row dt{font-size:12px;font-weight:600}.odc-balance-row dd,.odc-timing-row dd{margin:0;min-width:0;text-align:right}.odc-balance-row .odc-metric-value{font-size:13px}.odc-timing-row .odc-metric-text{font-size:13px;white-space:nowrap}.odc-timing-row .odc-hint{display:block}.odc-timing{padding:4px 14px}
 .odc-model-item{background:transparent;border:1px solid var(--dsw-alias-border-l4,transparent)}.odc-model-item:has(details[open]){border-color:color-mix(in srgb,var(--odc-accent) 55%,transparent);background:color-mix(in srgb,var(--odc-accent) 5%,transparent)}
 .odc-price-summary{margin:5px 0 0!important;font-size:12px;color:var(--dsw-alias-label-secondary,inherit);overflow-wrap:anywhere}.odc-pricing-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.odc-price-tier{padding:8px 0;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-price-tier dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;margin:6px 0 0}.odc-price-tier dl>div{display:flex;justify-content:space-between;gap:8px}.odc-price-tier dt{color:var(--dsw-alias-label-secondary,inherit)}.odc-price-tier dd{margin:0;font-variant-numeric:tabular-nums}
 .odc-settings :focus-visible{outline:2px solid var(--dsw-alias-brand-primary,Highlight);outline-offset:3px}@media(max-width:680px){.odc-quota-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.odc-model-groups{grid-template-columns:1fr}.odc-model-editor{grid-template-columns:1fr}}@media(max-width:380px){.odc-quota-grid{grid-template-columns:1fr}.odc-card{padding:12px}}
 @container(max-width:680px){.odc-quota-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.odc-model-groups,.odc-model-editor{grid-template-columns:1fr}}@container(max-width:380px){.odc-quota-grid{grid-template-columns:1fr}.odc-card{padding:12px}}
 @container(max-width:480px){.odc-timing-row{align-items:flex-start}.odc-timing-row>div{flex:1 1 0}.odc-timing-row dd{flex:0 0 auto;max-width:50%;overflow-wrap:anywhere}.odc-timing-row .odc-metric-text{white-space:normal}}
-`;
+${QUICK_CONTEXT_CSS}`;
   document.head.append(style);
   return () => style.remove();
 }
@@ -514,7 +520,7 @@ export function QuotaView({ quota, nextAutoRefreshAt, refreshIntervalSeconds, bu
 }
 
 /** 异常结束监控卡片：协议拦截与新监控计数分列，未知值保持未知，不补零；计数均从插件加载起累计。 */
-export function TurnMonitorView({ turnMonitor, guardedTurns, enabled = true }: { turnMonitor?: Status['turnMonitor']; guardedTurns?: number | undefined; enabled?: boolean | undefined }) {
+export function TurnMonitorView({ turnMonitor, guardedTurns, enabled = true, reviewEnabled = true }: { turnMonitor?: Status['turnMonitor']; guardedTurns?: number | undefined; enabled?: boolean | undefined; reviewEnabled?: boolean | undefined }) {
   const metrics = [
     { label: '空响应／残留拦截', hint: '空回答或协议标记残留的拦截次数，从插件加载起累计', value: guardedTurns === undefined ? '—' : String(guardedTurns) },
     { label: '请求重试', hint: '本插件空响应错误恢复中已开始的重试次数，从插件加载起累计', value: turnMonitor === undefined ? '—' : String(turnMonitor.requestRetries) },
@@ -530,7 +536,7 @@ export function TurnMonitorView({ turnMonitor, guardedTurns, enabled = true }: {
       h('span', { className: 'odc-hint', role: 'status' },
         !enabled ? '监控已关闭；以下为本次加载的累计记录。' : turnMonitor === undefined
           ? guardedTurns === undefined ? '暂无监控数据' : '仅协议拦截计数可用'
-          : turnMonitor.available
+          : turnMonitor.available && reviewEnabled
             ? `收尾核验可用，已核验 ${turnMonitor.checks} 次。`
             : '仅协议保护可用；收尾核验未启用。')),
     metrics.map(metric => h('div', { className: 'odc-turn-monitor-row', key: metric.label },
@@ -560,6 +566,7 @@ export function writeModelSettings(map: ModelSettingsMap | undefined, id: string
   if (next.topP !== undefined) entry.topP = next.topP;
   if (next.maxTokens !== undefined) entry.maxTokens = next.maxTokens;
   if (next.contextWindow !== undefined) entry.contextWindow = next.contextWindow;
+  if (next.contextTier !== undefined) entry.contextTier = next.contextTier;
   if (next.reasoningEffort !== undefined) entry.reasoningEffort = next.reasoningEffort;
   if (Object.keys(entry).length === 0) delete out[id];
   else out[id] = entry;
@@ -687,23 +694,62 @@ export function Overview({ status, busy, onRefresh, nextAutoRefreshAt, refreshIn
     h(QuotaView, { quota: status?.quota, nextAutoRefreshAt, refreshIntervalSeconds, busy }));
 }
 
-type NumericKey = 'temperature' | 'topP' | 'maxTokens' | 'contextWindow';
+type NumericKey = 'temperature' | 'topP' | 'maxTokens';
 interface NumericSpec { label: string; hint: string; min: number; max: number; integer?: boolean }
 const NUMERIC_FIELDS: Record<NumericKey, NumericSpec> = {
   temperature: { label: '温度', hint: '0–2；留空继承默认。', min: 0, max: 2 },
   topP: { label: 'Top P', hint: '0–1；留空继承默认。', min: 0, max: 1 },
-  maxTokens: { label: '最大输出（tokens）', hint: '正整数；留空继承目录默认。', min: 1, max: MAX_OUTPUT_TOKENS, integer: true },
-  contextWindow: { label: '上下文预算（tokens）', hint: '正整数；留空继承目录默认。', min: 1, max: MAX_CONTEXT_WINDOW, integer: true },
+  maxTokens: { label: '最大输出（tokens）', hint: '正整数；留空按模型与当前总窗口自动预留。', min: 1, max: MAX_OUTPUT_TOKENS, integer: true },
 };
-const NUMERIC_ORDER: readonly NumericKey[] = ['temperature', 'topP', 'maxTokens', 'contextWindow'];
+const NUMERIC_ORDER: readonly NumericKey[] = ['temperature', 'topP', 'maxTokens'];
 
-function OptionalNumberField({ id, field, value, disabled, restricted = false, invalid = false, maxOutputLimit, resetToken, onSave }: {
+/**
+ * The tier a saved override represents. A legacy number keeps its own meaning: even a
+ * number that equals a tier's token count is a custom window, never a tier.
+ */
+export function selectedContextTier(settings: ModelSettings): ContextWindowPresetId | undefined {
+  return contextWindowPreset(settings.contextWindow, settings.contextTier);
+}
+
+/** A tier above the known reference cannot be selected; the default tier is clamped instead. */
+export function contextTierAvailable(tier: ContextWindowPresetId, reference: number | undefined): boolean {
+  if (tier === 'default') return true;
+  const preset = CONTEXT_WINDOW_PRESETS.find(item => item.id === tier);
+  if (preset === undefined) return false;
+  return reference === undefined || preset.tokens <= reference;
+}
+
+/** The working window a tier would produce for this model. */
+export function contextTierWindow(tier: ContextWindowPresetId, reference: number | undefined): number {
+  return effectiveContextWindow(reference, undefined, tier);
+}
+
+/** An explicit output limit that does not fit the effective working window. */
+export function contextCapacityConflict(reference: number | undefined, next: ModelSettings): string | undefined {
+  const output = next.maxTokens;
+  if (output === undefined) return undefined;
+  const window = effectiveContextWindow(reference, next.contextWindow, next.contextTier);
+  if (output < window) return undefined;
+  return `最大输出 ${formatTokens(output)} 不小于当前总窗口 ${formatTokens(window)}（含输出预留）；可清空或减小最大输出，或改选更大的上下文档位。`;
+}
+
+/** A tier change that would break an explicit output limit; the saved tier stays unchanged. */
+export function contextTierConflict(reference: number | undefined, tier: ContextWindowPresetId, output: number | undefined): string | undefined {
+  if (output === undefined) return undefined;
+  const window = contextTierWindow(tier, reference);
+  if (output < window) return undefined;
+  const preset = CONTEXT_WINDOW_PRESETS.find(item => item.id === tier);
+  return `无法切换到「${preset?.label ?? tier}」档：最大输出 ${formatTokens(output)} 不小于该档位的总窗口 ${formatTokens(window)}（含输出预留）；请先清空或减小最大输出，当前档位保持不变。`;
+}
+
+function OptionalNumberField({ id, field, value, disabled, restricted = false, invalid = false, conflict, maxOutputLimit, resetToken, onSave }: {
   id: string;
   field: NumericKey;
   value: number | undefined;
   disabled: boolean;
   restricted?: boolean;
   invalid?: boolean;
+  conflict?: string | undefined;
   maxOutputLimit?: number | undefined;
   resetToken: number;
   onSave: (value: number | undefined) => Promise<boolean>;
@@ -752,10 +798,64 @@ function OptionalNumberField({ id, field, value, disabled, restricted = false, i
       onBlur: () => { void commit(); },
     }),
     h('small', {
-      className: error === undefined ? 'odc-hint' : 'odc-hint odc-field-error',
+      className: error === undefined && conflict === undefined ? 'odc-hint' : 'odc-hint odc-field-error',
       id: `${id}-hint`,
-      ...(error === undefined ? {} : { role: 'alert' as const }),
-    }, error ?? (restricted ? field === 'temperature' ? 'Messages 仅接受 1；建议留空，且勿同时设置 Top P。' : 'Messages 仅接受 0.99；建议留空，且勿同时设置温度。' : maxOutputLimit !== undefined ? `Messages 最大输出 ${maxOutputLimit}；留空继承默认。` : spec.hint)));
+      ...(error === undefined && conflict === undefined ? {} : { role: 'alert' as const }),
+    }, error ?? conflict ?? (restricted ? field === 'temperature' ? 'Messages 仅接受 1；建议留空，且勿同时设置 Top P。' : 'Messages 仅接受 0.99；建议留空，且勿同时设置温度。' : maxOutputLimit !== undefined ? `Messages 最大输出 ${maxOutputLimit}；留空继承默认。` : spec.hint)));
+}
+
+/**
+ * The mutually exclusive context-window tiers. Each tier is a combined input-plus-output
+ * working window; the vendor reference stays the evidence value and only caps the tiers.
+ */
+function ContextWindowField({ id, reference, settings, disabled, reason, onSelect }: {
+  id: string;
+  reference: number | undefined;
+  settings: ModelSettings;
+  disabled: boolean;
+  reason?: string | undefined;
+  onSelect: (tier: ContextWindowPresetId) => void;
+}) {
+  const tier = selectedContextTier(settings);
+  const legacy = settings.contextTier === undefined && settings.contextWindow !== undefined;
+  const both = settings.contextTier !== undefined && settings.contextWindow !== undefined;
+  const current = effectiveContextWindow(reference, settings.contextWindow, settings.contextTier);
+  // A legacy number keeps its own value; only a tier is capped by the known reference.
+  const requested = legacy ? undefined : CONTEXT_WINDOW_PRESETS.find(preset => preset.id === (tier ?? 'default'))?.tokens;
+  const clamped = requested !== undefined && reference !== undefined && current < requested;
+  const note = legacy
+    ? '；旧自定义窗口按原值继续生效'
+    : clamped ? `；参考容量 ${formatTokens(reference ?? 0)}，所选档位已按参考容量限幅` : '';
+  const reasonId = `${id}-reason`;
+  return h('fieldset', { className: 'odc-context', 'aria-describedby': reason === undefined ? undefined : reasonId },
+    h('legend', { className: 'odc-context-legend' }, '上下文窗口（输入 + 输出合计）'),
+    h('div', { className: 'odc-context-options' },
+      CONTEXT_WINDOW_PRESETS.map(preset => {
+        const available = contextTierAvailable(preset.id, reference);
+        const inputId = `${id}-${preset.id}`;
+        const hintId = `${inputId}-hint`;
+        return h('label', {
+          className: 'odc-context-option', key: preset.id, htmlFor: inputId,
+          'data-preset': preset.id, 'data-available': available ? 'true' : 'false',
+        },
+          h('input', {
+            id: inputId, type: 'radio', name: id, value: preset.id,
+            checked: preset.id === tier,
+            disabled: disabled || !available,
+            'aria-describedby': reason === undefined ? hintId : `${hintId} ${reasonId}`,
+            onChange: () => { onSelect(preset.id); },
+          }),
+          h('span', { className: 'odc-context-copy' },
+            h('strong', null, preset.label),
+            h('small', { className: 'odc-hint', id: hintId }, available
+              ? `${formatTokens(preset.tokens)} tokens`
+              : `${formatTokens(preset.tokens)} tokens · 超过参考容量 ${formatTokens(reference ?? 0)}`)));
+      })),
+    reason === undefined ? null : h('small', { className: 'odc-hint', id: reasonId }, reason),
+    legacy ? h('p', { className: 'odc-context-legacy', role: 'status' }, `旧自定义 ${formatTokens(settings.contextWindow ?? 0)}，选择档位替换`) : null,
+    both ? h('p', { className: 'odc-context-legacy', role: 'status' }, `旧自定义 ${formatTokens(settings.contextWindow ?? 0)} 与所选档位同时存在，请重新选择档位以只保留其一。`) : null,
+    h('small', { className: 'odc-hint' },
+      `当前总窗口 ${formatTokens(current)} tokens（含输出预留）${note}。`));
 }
 
 function EffortField({ id, model, value, disabled, pending, disabledReason, onSave }: {
@@ -895,6 +995,17 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
   const samplingRestricted = hasRestrictedClaudeSampling(model.id, protocol);
   const samplingError = claudeSamplingError(model.id, protocol, settings.temperature, settings.topP);
   const outputError = claudeOutputError(model.id, protocol, settings.maxTokens);
+  const effectiveWindow = effectiveContextWindow(model.contextWindow, settings.contextWindow, settings.contextTier);
+  // The automatic reservation follows the adapter: a quarter of the working window, never
+  // above the model's output capability. An unknown capability stays unknown.
+  const outputCap = model.maxOutputTokens ?? (protocol === 'messages' ? 4096 : undefined);
+  const reserveCandidate = outputCap === undefined ? undefined : Math.min(outputCap, Math.floor(effectiveWindow / 4));
+  const autoReserve = reserveCandidate !== undefined && claudeOutputError(model.id, protocol, reserveCandidate) === undefined
+    ? reserveCandidate
+    : undefined;
+  // A saved output limit that no longer fits the working window is reported before any
+  // save; the value stays visible and clearable instead of being rewritten silently.
+  const outputConflict = contextCapacityConflict(model.contextWindow, settings);
   const hasOverrides = Object.keys(settings).length > 0;
   const commit = async (next: ModelSettings | undefined): Promise<boolean> => {
     const saved = await onCommit(next);
@@ -915,12 +1026,19 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
     }
     // Without an explicit override the adapter reserves at most a quarter of the
     // window; the catalog's maximum output capability is not the sent default.
-    const output = next.maxTokens;
-    const context = next.contextWindow ?? model.contextWindow;
-    if (output !== undefined && context !== undefined && output >= context) {
-      setError('最大输出必须小于上下文预算；请先增大上下文预算或减小最大输出。');
-      return false;
-    }
+    const reason = contextCapacityConflict(model.contextWindow, next);
+    if (reason !== undefined) { setError(reason); return false; }
+    setError(undefined);
+    return commit(next);
+  };
+  const selectContextTier = async (tier: ContextWindowPresetId): Promise<boolean> => {
+    const next: ModelSettings = { ...settings };
+    // A tier replaces the legacy number in one write; the two fields are never both saved.
+    delete next.contextWindow;
+    if (tier === 'default') delete next.contextTier;
+    else next.contextTier = tier;
+    const reason = contextTierConflict(model.contextWindow, tier, next.maxTokens);
+    if (reason !== undefined) { setError(reason); return false; }
     setError(undefined);
     return commit(next);
   };
@@ -938,8 +1056,10 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
   };
   const imageDisabledReason = pending ? ' · 正在保存' : !writable ? ' · 配置不可写' : '';
   const facts = [
-    `上下文 ${formatTokens(model.contextWindow)}`,
-    `最大输出 ${formatTokens(model.maxOutputTokens)}`,
+    `参考容量 ${formatTokens(model.contextWindow)}`,
+    `当前总窗口 ${formatTokens(effectiveWindow)}（含输出预留）`,
+    `输出能力参考 ${formatTokens(model.maxOutputTokens)}`,
+    `自动输出预留 ${formatTokens(autoReserve)}`,
     ...(model.reasoningEfforts === undefined || model.reasoningEfforts.length === 0
       ? []
       : [`思考档位 ${model.reasoningEfforts.join(' / ')}`]),
@@ -976,18 +1096,25 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
     h('details', { className: 'odc-model-details' },
       h('summary', { 'aria-label': `${model.name} 参数设置${price === undefined ? '' : '与价格'}` }, `${price === undefined ? '参数设置' : '参数与价格'} · ${hasOverrides ? '已自定义' : '使用默认值'}`),
       h('p', { className: 'odc-model-meta' }, facts),
-      model.id === 'claude-opus-5.5' && model.contextWindow === 1_000_000 ? h('p', { className: 'odc-hint' }, '上下文 1,000,000 为厂商参考，网关实际容量未验证；可通过上下文预算覆盖。') : null,
-      model.id === 'muse-wonder' && model.contextWindow === 1_048_576 ? h('p', { className: 'odc-hint' }, '上下文 1,048,576 为暂定参考，网关型号映射及实际容量未验证；可通过上下文预算覆盖。') : null,
+      model.id === 'claude-opus-5.5' && model.contextWindow === 1_000_000 ? h('p', { className: 'odc-hint' }, '上下文 1,000,000 为厂商参考，网关实际容量未验证；档位总窗口不会超过该参考容量。') : null,
+      model.id === 'muse-wonder' && model.contextWindow === 1_048_576 ? h('p', { className: 'odc-hint' }, '上下文 1,048,576 为暂定参考，网关型号映射及实际容量未验证；档位总窗口不会超过该参考容量。') : null,
       samplingRestricted && model.id === 'claude-opus-4.8' ? h('p', { className: 'odc-hint' }, '厂商默认关闭思考，选择思考深度可启用自适应思考；网关实际行为可能不同。') : null,
       samplingRestricted && model.maxOutputTokens === undefined && settings.maxTokens === undefined ? h('p', { className: 'odc-hint' }, 'Messages 默认最大输出 4096；较高思考深度可能需要增大。') : null,
       price === undefined ? null : h(PriceDetails, { tiers: price.tiers }),
-      h('p', { className: 'odc-hint' }, '数值离开输入框后保存，留空继承默认。'),
+      h('p', { className: 'odc-hint' }, '数值离开输入框后保存，留空继承默认；上下文窗口为三档互斥选择。'),
       h('div', { className: 'odc-model-editor' },
+        h(ContextWindowField, {
+          id: `${id}-context`, reference: model.contextWindow, settings,
+          disabled: !writable || pending,
+          reason: pending ? '正在保存模型设置，完成后可继续选择档位。' : !writable ? (disabledReason ?? '配置不可写') : undefined,
+          onSelect: tier => { void selectContextTier(tier); },
+        }),
         NUMERIC_ORDER.map(key => h(OptionalNumberField, {
           key, id: `${id}-${key}`, field: key, value: settings[key],
           disabled: !writable || pending,
           restricted: samplingRestricted && (key === 'temperature' || key === 'topP'),
-          invalid: (samplingError !== undefined && settings[key] !== undefined && (key === 'temperature' || key === 'topP')) || (key === 'maxTokens' && outputError !== undefined),
+          invalid: (samplingError !== undefined && settings[key] !== undefined && (key === 'temperature' || key === 'topP')) || (key === 'maxTokens' && (outputError !== undefined || outputConflict !== undefined)),
+          conflict: key === 'maxTokens' ? outputConflict : undefined,
           maxOutputLimit: samplingRestricted && key === 'maxTokens' ? CLAUDE_MESSAGES_MAX_OUTPUT : undefined, resetToken,
           onSave: value => saveField(key, value),
         })),
@@ -1052,7 +1179,7 @@ function ModelGroup({ title, group, models, settingsMap, authoritative, writable
 export interface ModelsProps {
   status: Status | undefined;
   formSnapshot: FormSnapshot;
-  setFormField: (field: string, value: unknown) => Promise<boolean>;
+  setFormField: (field: string, value: unknown, baseValue?: unknown) => Promise<boolean>;
   pendingField: readonly string[];
   onRefreshModels: () => void;
   refreshingModels: boolean;
@@ -1075,10 +1202,10 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
   React.useEffect(() => { latestSettings.current = settingsMap; }, [settingsMap]);
   const saving = React.useRef(false);
   const commit = async (id: string, next: ModelSettings | undefined): Promise<boolean> => {
-    if (!writable || saving.current) return false;
+    if (!writable || pending || saving.current) return false;
     saving.current = true;
     try {
-      return await setFormField('modelSettings', writeModelSettings(latestSettings.current, id, next));
+      return await setFormField('modelSettings', writeModelSettings(latestSettings.current, id, next), latestSettings.current);
     } finally {
       saving.current = false;
     }
@@ -1094,7 +1221,7 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
     h('div', { className: 'odc-card-head' },
       h('div', null,
         h('h3', null, '可用模型'),
-        h('p', { className: 'odc-hint' }, '按分组搜索模型，设置启用状态与默认参数。上下文为参考预算；刷新后会采用网关报告的较小窗口，实际限制可能不同，可在模型设置中覆盖。')),
+        h('p', { className: 'odc-hint' }, '按分组搜索模型，设置启用状态与默认参数。上下文为参考预算；刷新后会采用网关报告的较小窗口，实际限制可能不同，可在模型设置中选择总窗口档位。')),
       h('div', { className: 'odc-actions' },
         h('span', { className: 'odc-label', role: 'status' }, `来源：${source}${updated}`),
         h('button', {
@@ -1193,6 +1320,8 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
   const imageBudget = formSnapshot.value?.maxRequestImageBytes ?? status?.config.maxRequestImageBytes ?? DEFAULT_MAX_REQUEST_IMAGE_BYTES;
   const turnContinuations = formSnapshot.value?.turnReviewMaxContinuations ?? status?.config.turnReviewMaxContinuations ?? DEFAULT_TURN_REVIEW_MAX_CONTINUATIONS;
   const turnNoProgress = formSnapshot.value?.turnReviewNoProgressLimit ?? status?.config.turnReviewNoProgressLimit ?? DEFAULT_TURN_REVIEW_NO_PROGRESS_LIMIT;
+  const guard = formSnapshot.value?.emptyTurnGuard ?? status?.config.emptyTurnGuard ?? true;
+  const review = formSnapshot.value?.turnCompletionReview ?? status?.config.turnCompletionReview ?? false;
   const selected = API_PROTOCOL_OPTIONS.find(option => option.id === protocol);
   const saveKeyRef = async () => {
     const value = apiKeyEnv.trim();
@@ -1213,23 +1342,32 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
       h('h3', null, '异常结束监控'),
       h('p', { className: 'odc-hint' }, '检测 DeepSeek V4.1 Flash 工具对话中的空回答、协议标记残留或说明下一步后未执行的提前结束。'),
       h('div', { style: { marginTop: 14 } }, h(Switch, {
-        checked: formSnapshot.value?.emptyTurnGuard ?? status?.config.emptyTurnGuard ?? true,
+        checked: guard,
         disabled: !writable || pendingField.includes('emptyTurnGuard'),
         label: '启用异常结束监控',
-        hint: `已累计 ${status?.guardedTurns ?? '—'} 次空响应或残留拦截。协议空响应恢复持续到成功或取消；收尾核验有界，可能额外消耗额度。`,
+        hint: `已累计 ${status?.guardedTurns ?? '—'} 次空响应或残留拦截。协议空响应恢复持续到成功或取消。`,
         onChange: checked => { void setFormField('emptyTurnGuard', checked); },
       })),
-      h(TurnMonitorView, { turnMonitor: status?.turnMonitor, guardedTurns: status?.guardedTurns, enabled: formSnapshot.value?.emptyTurnGuard ?? status?.config.emptyTurnGuard ?? true }),
+      h('div', { style: { marginTop: 14 } }, h(Switch, {
+        checked: review,
+        disabled: !writable || !guard || pendingField.includes('turnCompletionReview'),
+        label: '启用结束回合核验',
+        hint: !guard
+          ? '需要先开启异常结束监控，结束回合核验才会工作。'
+          : '回复结束后要求模型调用收尾工具报告完成、等待用户、等待后台工作或阻塞状态；关闭时回复结束即结束回合。收尾核验有界，可能额外消耗额度。',
+        onChange: checked => { void setFormField('turnCompletionReview', checked); },
+      })),
+      h(TurnMonitorView, { turnMonitor: status?.turnMonitor, guardedTurns: status?.guardedTurns, enabled: guard, reviewEnabled: guard && review }),
       h(NumberField, {
         id: 'odc-turn-continuations', label: '收尾核验最大续办次数', hint: `核验未完成时最多自动续办的次数，${MIN_TURN_REVIEW_MAX_CONTINUATIONS}–${MAX_TURN_REVIEW_MAX_CONTINUATIONS}；默认 ${DEFAULT_TURN_REVIEW_MAX_CONTINUATIONS} 次。`,
         value: turnContinuations, min: MIN_TURN_REVIEW_MAX_CONTINUATIONS, max: MAX_TURN_REVIEW_MAX_CONTINUATIONS, integer: true,
-        disabled: !writable || pendingField.includes('turnReviewMaxContinuations'),
+        disabled: !writable || !guard || !review || pendingField.includes('turnReviewMaxContinuations'),
         onCommit: value => setFormField('turnReviewMaxContinuations', value),
       }),
       h(NumberField, {
         id: 'odc-turn-no-progress', label: '无进展停止上限', hint: `连续无进展的核验达到该次数即停止续办，${MIN_TURN_REVIEW_NO_PROGRESS_LIMIT}–${MAX_TURN_REVIEW_NO_PROGRESS_LIMIT}；默认 ${DEFAULT_TURN_REVIEW_NO_PROGRESS_LIMIT} 次。`,
         value: turnNoProgress, min: MIN_TURN_REVIEW_NO_PROGRESS_LIMIT, max: MAX_TURN_REVIEW_NO_PROGRESS_LIMIT, integer: true,
-        disabled: !writable || pendingField.includes('turnReviewNoProgressLimit'),
+        disabled: !writable || !guard || !review || pendingField.includes('turnReviewNoProgressLimit'),
         onCommit: value => setFormField('turnReviewNoProgressLimit', value),
       })),
     h('section', { className: 'odc-card' },
@@ -1564,8 +1702,13 @@ export function SettingsPage({ caller, form }: SettingsProps) {
   const pricesBusy = React.useRef(false);
   const pricesRequested = React.useRef(false);
   const [modelsNotice, setModelsNotice] = React.useState<Notice | null>(null);
-  const [pendingField, setPendingField] = React.useState<readonly string[]>([]);
-  const writeTail = React.useRef<Promise<void>>(Promise.resolve());
+  const writes = React.useMemo(() => configWritesFor(form), [form]);
+  const writeState = React.useSyncExternalStore(
+    React.useCallback(listener => writes.subscribe(listener), [writes]),
+    React.useCallback(() => writes.getSnapshot(), [writes]),
+    React.useCallback(() => writes.getSnapshot(), [writes]),
+  );
+  const pendingField = writeState.pendingFields;
   const [formNotice, setFormNotice] = React.useState<Notice | null>(null);
   const [scheduleTick, setScheduleTick] = React.useState(0);
   const statusVersion = React.useRef(0);
@@ -1575,14 +1718,19 @@ export function SettingsPage({ caller, form }: SettingsProps) {
   const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const baseId = React.useId();
   const acceptedFormSnapshot = useFormSnapshot(form);
-  const [pendingValues, setPendingValues] = React.useState<Partial<FormValues>>({});
-  const writeVersions = React.useRef(new Map<string, number>());
-  const nextWriteVersion = React.useRef(0);
   const batchWriteFailed = React.useRef(false);
+  const pageBatchActive = React.useRef(false);
   const formSnapshot: FormSnapshot = React.useMemo(() => ({
     ...acceptedFormSnapshot,
-    value: acceptedFormSnapshot.value === undefined ? undefined : { ...acceptedFormSnapshot.value, ...pendingValues },
-  }), [acceptedFormSnapshot, pendingValues]);
+    value: acceptedFormSnapshot.value === undefined ? undefined : { ...acceptedFormSnapshot.value, ...writeState.pendingValues },
+  }), [acceptedFormSnapshot, writeState]);
+  React.useEffect(() => {
+    if (pendingField.length !== 0 || !pageBatchActive.current) return;
+    pageBatchActive.current = false;
+    setFormNotice(batchWriteFailed.current
+      ? { kind: 'error', text: '设置未保存，已恢复原值，请重试。' }
+      : { kind: 'status', text: '设置已保存。' });
+  }, [pendingField]);
 
   const acceptLoginStatus = React.useCallback((login: LoginState) => {
     // Action responses supersede reads started before that action completed.
@@ -1655,20 +1803,14 @@ export function SettingsPage({ caller, form }: SettingsProps) {
     };
   }, [loadStatus, refresh]);
 
-  const setFormField = React.useCallback(async (field: string, value: unknown): Promise<boolean> => {
+  const setFormField = React.useCallback(async (field: string, value: unknown, baseValue?: unknown): Promise<boolean> => {
     const snapshot = form.getSnapshot();
-    if (snapshot.status !== 'ready' || snapshot.value === undefined || !snapshot.writable || writeVersions.current.has(field)) return false;
-    if (writeVersions.current.size === 0) batchWriteFailed.current = false;
-    const version = ++nextWriteVersion.current;
-    writeVersions.current.set(field, version);
-    setPendingField([...writeVersions.current.keys()]);
-    setPendingValues(previous => ({ ...previous, [field]: value }));
+    if (snapshot.status !== 'ready' || snapshot.value === undefined || !snapshot.writable || writes.getSnapshot().pendingFields.includes(field)) return false;
+    if (writes.getSnapshot().pendingFields.length === 0) batchWriteFailed.current = false;
+    pageBatchActive.current = true;
     setFormNotice({ kind: 'status', text: '正在保存设置…' });
     try {
-      // Serialize fields so the Host mirror publishes each accepted value before the next write.
-      const operation = writeTail.current.then(() => mounted.current ? form.set(field, value) : false);
-      writeTail.current = operation.then(() => {}, () => {});
-      const accepted = await operation;
+      const accepted = await writes.set(field, value, baseValue);
       if (!accepted) batchWriteFailed.current = true;
       // Quota is an independent network read; it must not keep a saved control locked.
       if (accepted && mounted.current && (field === 'useDesktopCredential' || field === 'quotaRefreshSeconds')) void refresh(true);
@@ -1677,22 +1819,14 @@ export function SettingsPage({ caller, form }: SettingsProps) {
       batchWriteFailed.current = true;
       return false;
     } finally {
-      if (writeVersions.current.get(field) === version) {
-        writeVersions.current.delete(field);
-        if (mounted.current) {
-          setPendingValues(previous => {
-            const next = { ...previous };
-            delete next[field as keyof FormValues];
-            return next;
-          });
-          setPendingField([...writeVersions.current.keys()]);
-          if (writeVersions.current.size === 0) setFormNotice(batchWriteFailed.current
-            ? { kind: 'error', text: '设置未保存，已恢复原值，请重试。' }
-            : { kind: 'status', text: '设置已保存。' });
-        }
+      if (mounted.current && writes.getSnapshot().pendingFields.length === 0) {
+        pageBatchActive.current = false;
+        setFormNotice(batchWriteFailed.current
+          ? { kind: 'error', text: '设置未保存，已恢复原值，请重试。' }
+          : { kind: 'status', text: '设置已保存。' });
       }
     }
-  }, [form, mounted, refresh]);
+  }, [form, mounted, refresh, writes]);
 
   const refreshModelsBusy = React.useRef(false);
   const refreshModels = React.useCallback(async () => {
@@ -1832,7 +1966,7 @@ export function SettingsPage({ caller, form }: SettingsProps) {
     acceptedFormSnapshot.status !== 'ready' || acceptedFormSnapshot.value === undefined
       ? h(NoticeView, { notice: { kind: 'status', text: acceptedFormSnapshot.status === 'unavailable' ? '配置暂不可用，请检查插件是否已启用。' : '正在载入配置，完成后即可修改。' } })
       : !acceptedFormSnapshot.writable ? h(NoticeView, { notice: { kind: 'status', text: '当前设置为只读，无法保存修改。' } }) : null,
-    h(NoticeView, { notice: formNotice }),
+    h(NoticeView, { notice: pendingField.length > 0 ? { kind: 'status', text: '正在保存设置…' } : formNotice }),
     h('div', {
       className: 'odc-panel', role: 'tabpanel', id: `${baseId}-panel`, tabIndex: 0,
       'aria-labelledby': `${baseId}-tab-${tab}`,
@@ -1851,9 +1985,17 @@ export function apply(ctx: ClientContext): void {
   const caller = createCaller(ctx);
   ctx.inject(['configForms'], scope => {
     const form = scope.configForms.get(SETTINGS_NS);
+    const writes = configWritesFor(form);
+    scope.effect(() => () => writes.dispose(), 'opendesign-corouter: shared settings writes');
     scope.effect(() => scope.slots.inject('settings.section', () => scope.slots.register<SettingsProps>({
       name: 'settings.section', id: 'opendesign-corouter', order: 65,
       label: () => 'OpenDesign CoRouter', inject: () => ({ caller, form }),
     }, SettingsPage)), 'opendesign-corouter: settings section');
+    scope.inject(['modelDirectories'], modelScope => {
+      modelScope.effect(() => modelScope.slots.inject('conversation.input.right', () => modelScope.slots.register<ContextQuickProps>({
+        name: 'conversation.input.right', id: 'opendesign-corouter-context', order: 9,
+        inject: sessionId => ({ directory: modelScope.modelDirectories.directoryFor(sessionId).store, form, caller }),
+      }, ContextQuickSwitch)), 'opendesign-corouter: session context switch');
+    });
   });
 }

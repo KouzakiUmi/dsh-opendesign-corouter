@@ -258,7 +258,7 @@ test('invalid historical Claude output defaults stay saved but do not contaminat
   try {
     const invalid = await adapter.resolveModel(PAID_PROVIDER, row.id);
     assert.equal(invalid.defaultMaxTokens, undefined);
-    assert.equal(invalid.context?.contextWindow, configured.contextWindow);
+    assert.equal(invalid.context?.contextWindow, 272_000);
     assert.equal(config.modelSettings?.[row.id]?.maxTokens, 128001);
     await assert.rejects(collect(adapter.stream(request())), { code: 'UNSUPPORTED_OPTION' });
     assert.equal(reads, 0);

@@ -96,7 +96,7 @@ export class CoRouterAdapter extends LlmAdapter {
     if (!isModelEnabled(id, config.modelSettings)) throw new LlmError('该模型已在 CoRouter 设置中停用', 'MODEL_DISABLED');
     const configured = applyModelSettings(row, config.modelSettings?.[id]);
     const output = config.modelSettings?.[id]?.maxTokens;
-    if (output !== undefined && configured.contextWindow !== undefined && output >= configured.contextWindow) throw new LlmError('模型最大输出必须小于上下文预算，请调整模型参数', 'INVALID_REQUEST');
+    if (output !== undefined && configured.contextWindow !== undefined && output >= configured.contextWindow) throw new LlmError('模型最大输出必须小于当前总窗口（含输出预留），请调整模型参数', 'INVALID_REQUEST');
     return configured;
   }
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {

@@ -34,7 +34,7 @@ export async function auditTheme(page, label) {
       measurements.push(value);
       if (value + .01 < required) issues.push({ kind, element: element.tagName, className: element.className, text: (element.textContent || element.getAttribute('placeholder') || '').slice(0, 48), ratio: Number(value.toFixed(2)), required, color: style.color, background: bg });
     };
-    for (const element of document.querySelectorAll('.odc-settings *')) {
+    for (const element of document.querySelectorAll('.odc-settings *, .odc-quick *')) {
       if (!element.getClientRects().length || element.matches(':disabled')) continue;
       let faded = false;
       for (let node = element; node && node.className !== 'odc-settings'; node = node.parentElement) if (Number(getComputedStyle(node).opacity) < .99) faded = true;

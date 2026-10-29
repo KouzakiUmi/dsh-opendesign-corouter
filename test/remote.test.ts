@@ -30,7 +30,7 @@ const status: Status = {
     balances: { subscriptionUsd: 50, rechargeUsd: 20, totalUsd: 70 },
   },
   login: { jobId: null, state: 'idle' },
-  config: { emptyTurnGuard: true, useDesktopCredential: true, baseURL: 'https://amr-link.open-design.ai/v1', apiKeyEnv: 'COROUTER_API_KEY' },
+  config: { emptyTurnGuard: true, turnCompletionReview: false, useDesktopCredential: true, baseURL: 'https://amr-link.open-design.ai/v1', apiKeyEnv: 'COROUTER_API_KEY' },
   guardedTurns: 3,
   models: [
     { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', group: 'plan' },
@@ -123,6 +123,10 @@ test('completion monitoring transports only counters and fixed decisions, with l
   for (const config of [{ turnReviewMaxContinuations: 0 }, { turnReviewMaxContinuations: 11 }, { turnReviewNoProgressLimit: 6 }]) {
     assert.throws(() => parseStatus({ ...status, config: { ...status.config, ...config } }));
   }
+  // The completion handshake switch is a plain opt-in flag, and its absence stays absent.
+  assert.equal(parseStatus({ ...status, config: { ...status.config, turnCompletionReview: true } }).config.turnCompletionReview, true);
+  const { turnCompletionReview: _review, ...legacyConfig } = status.config;
+  assert.equal(parseStatus({ ...status, config: legacyConfig }).config.turnCompletionReview, undefined);
 });
 
 test('public price payload is bounded, sanitised and keeps missing rates unknown', () => {
@@ -210,7 +214,7 @@ test('quota periods, local refresh plans and model settings survive the actual R
       nextRefreshAt: '2026-10-26T08:01:00Z', stale: true, refreshFailures: 2, autoRefreshPaused: false,
       windows: [{ ...status.quota.windows[0]!, windowStart: '2026-10-22T12:00:00Z', resetMode: 'anchored_recurring' }],
     },
-    config: { ...status.config, apiProtocol: 'messages', modelSettings: { 'gpt-6-astra': { enabled: false, maxTokens: 8192 } }, requestTimeoutMs: 10000, streamIdleTimeoutMs: 3000, quotaRefreshSeconds: 60 },
+    config: { ...status.config, apiProtocol: 'messages', modelSettings: { 'gpt-6-astra': { enabled: false, maxTokens: 8192, contextTier: 'extended' }, legacy: { contextWindow: 500_000 } }, requestTimeoutMs: 10000, streamIdleTimeoutMs: 3000, quotaRefreshSeconds: 60 },
     models: [{ ...status.models[0]!, enabled: false, contextWindow: 100000, maxOutputTokens: 8192, reasoningEfforts: ['low', 'high'] }],
     modelsSource: 'openai', modelsUpdatedAt: '2026-10-26T08:00:00Z',
   };

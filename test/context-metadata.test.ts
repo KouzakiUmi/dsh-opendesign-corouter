@@ -20,21 +20,21 @@ test('the Host receives the whole context window separately from the output allo
   const dispose = ctx.llm.registerAdapter([PAID_PROVIDER, PLAN_PROVIDER], adapter);
   try {
     const initial = await ctx.llm.prepareCall({ provider: PAID_PROVIDER, model: 'claude-opus-5.5' });
-    assert.deepEqual(initial.context, { contextWindow: 1_000_000 });
+    assert.deepEqual(initial.context, { contextWindow: 272_000 });
     assert.equal(initial.config.maxTokens, 4096);
     config = { ...base, modelSettings: { 'claude-opus-5.5': { contextWindow: 200_000, maxTokens: 8_192 } } };
     const next = await ctx.llm.prepareCall({ provider: PAID_PROVIDER, model: 'claude-opus-5.5' });
     assert.deepEqual(next.context, { contextWindow: 200_000 });
     assert.equal(next.config.maxTokens, 8_192);
-    assert.deepEqual(initial.context, { contextWindow: 1_000_000 });
+    assert.deepEqual(initial.context, { contextWindow: 272_000 });
     const deepseek = await ctx.llm.prepareCall({ provider: PLAN_PROVIDER, model: 'deepseek-v4.1-flash' });
-    assert.deepEqual(deepseek.context, { contextWindow: 1_000_000 });
-    assert.equal(deepseek.config.maxTokens, 250_000);
+    assert.deepEqual(deepseek.context, { contextWindow: 272_000 });
+    assert.equal(deepseek.config.maxTokens, 68_000);
     const unknown = await ctx.llm.prepareCall({ provider: PAID_PROVIDER, model: 'future-model' });
-    assert.equal(unknown.context, undefined);
+    assert.deepEqual(unknown.context, { contextWindow: 272_000 }, 'unknown capacity receives a local working budget, not a fabricated catalog limit');
     config = { ...base, apiProtocol: 'chat-completions' };
     const chat = await ctx.llm.prepareCall({ provider: PAID_PROVIDER, model: 'claude-opus-5.5' });
-    assert.deepEqual(chat.context, { contextWindow: 1_000_000 });
+    assert.deepEqual(chat.context, { contextWindow: 272_000 });
     assert.equal(chat.config.maxTokens, undefined, 'the capacity reference does not add a Chat output cap');
   } finally {
     dispose(); adapter.dispose(); await runtime.dispose();
@@ -54,7 +54,7 @@ test('new context references survive Host preparation without adding an output c
       config = { ...base, apiProtocol: protocol };
       for (const row of added) {
         const call = await ctx.llm.prepareCall({ provider: row.group === 'plan' ? PLAN_PROVIDER : PAID_PROVIDER, model: row.id });
-        assert.equal(call.context?.contextWindow, row.contextWindow, `${row.id}/${protocol} context`);
+        assert.equal(call.context?.contextWindow, Math.min(272_000, row.contextWindow ?? 272_000), `${row.id}/${protocol} context`);
         assert.equal(call.config.maxTokens, protocol === 'messages' ? 4096 : undefined, `${row.id}/${protocol} output`);
       }
     }
