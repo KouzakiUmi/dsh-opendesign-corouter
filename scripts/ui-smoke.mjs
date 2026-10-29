@@ -784,6 +784,16 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
       return Boolean(radio) && !radio.disabled;
     }, null, { timeout: 5000 });
   };
+  // The native popover is shown before asynchronously positioning it off-viewport;
+  // wait for the measured position so later reads and clicks are not racing it.
+  const waitQuickPositioned = async () => {
+    await page.waitForFunction(() => {
+      const panel = document.querySelector('#conversation-input .odc-quick-panel');
+      if (!panel?.matches(':popover-open')) return false;
+      const rect = panel.getBoundingClientRect();
+      return rect.width > 0 && rect.left >= 0 && rect.top >= 0 && rect.right <= window.innerWidth;
+    }, null, { timeout: 5000 });
+  };
   await page.evaluate(() => { window.__setQuotaRefresh(3600); });
   const quotaBefore = await page.evaluate(() => window.__refreshQuotaCalls);
   const statusBefore = await page.evaluate(() => window.__statusCalls);
@@ -909,6 +919,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   // A write that is in flight when the model changes lands on the model it started for.
   await quickButton.click();
   await quickPanel.waitFor();
+  await waitQuickPositioned();
   await waitQuickReady();
   await page.evaluate(() => { window.__holdSaves = true; });
   await quickPanel.getByRole('radio', { name: '最大' }).check();
@@ -934,10 +945,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await page.locator('#conversation-input').evaluate(element => element.scrollWidth <= element.clientWidth), true, 'the quick switch fits a narrow chat pane');
   await quickButton.click();
   await quickPanel.waitFor();
-  await page.waitForFunction(() => {
-    const panel = document.querySelector('#conversation-input .odc-quick-panel');
-    return panel?.matches(':popover-open') === true && panel.style.left !== '' && panel.style.left !== '-9999px';
-  }, null, { timeout: 5000 });
+  await waitQuickPositioned();
   const narrowBox = await quickPanel.evaluate(element => {
     const rect = element.getBoundingClientRect();
     return { left: rect.left, right: rect.right, innerWidth: window.innerWidth, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
@@ -951,8 +959,9 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.setViewportSize({ width: 320, height: 900 });
   await quickButton.click();
   await quickPanel.waitFor();
+  await waitQuickPositioned();
   const quickBox = await quickPanel.boundingBox();
-  assert.ok(quickBox !== null && quickBox.x >= 0 && quickBox.x + quickBox.width <= 320, 'the popover keeps its left and right bounds in a 320 pixel viewport');
+  assert.ok(quickBox !== null && quickBox.x >= 0 && quickBox.x + quickBox.width <= 320, `the popover keeps its left and right bounds in a 320 pixel viewport: ${JSON.stringify(quickBox)}`);
   await page.keyboard.press('Escape');
   await quickPanel.waitFor({ state: 'hidden' });
   await page.setViewportSize({ width: 1040, height: 1000 });
@@ -963,6 +972,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' } }));
   await quickButton.click();
   await quickPanel.waitFor();
+  await waitQuickPositioned();
   await waitQuickReady();
   await quickPanel.getByRole('radio', { name: '默认' }).check();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === undefined);
