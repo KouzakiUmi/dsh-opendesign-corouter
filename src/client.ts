@@ -24,7 +24,7 @@ import type { ReviewDecision, ReviewReason } from './turn-monitor-status.js';
 const h = React.createElement;
 const SETTINGS_NS = 'llm-opendesign-corouter';
 /** Must match `DEFAULT_API_KEY_REF` in src/config.ts; the browser bundle keeps its own copy. */
-const DEFAULT_KEY_REF = 'COROUTER_API_KEY';
+export const DEFAULT_KEY_REF = 'COROUTER_API_KEY';
 const OFFICIAL_SITE = 'https://corouter.open-design.ai/zh/';
 const TABS = [
   { id: 'overview', label: '概览' },
@@ -82,6 +82,8 @@ export interface ConfigForm {
   getSnapshot(): FormSnapshot;
   subscribe(listener: () => void): () => void;
   set(field: string, value: unknown): Promise<boolean>;
+  /** Drop one field back to unnamed; absent on a Host that only writes values. */
+  unset?(field: string): Promise<boolean>;
 }
 export interface ConfigForms {
   get(namespace: string): ConfigForm;
@@ -1251,6 +1253,7 @@ export interface AdvancedProps {
   status: Status | undefined;
   formSnapshot: FormSnapshot;
   setFormField: (field: string, value: unknown) => Promise<boolean>;
+  clearFormField: (field: string) => Promise<boolean>;
   pendingField: readonly string[];
 }
 
@@ -1303,7 +1306,7 @@ function NumberField({ id, label, hint, value, min, max, integer, disabled, onCo
     }, error ?? hint));
 }
 
-export function Advanced({ status, formSnapshot, setFormField, pendingField }: AdvancedProps) {
+export function Advanced({ status, formSnapshot, setFormField, clearFormField, pendingField }: AdvancedProps) {
   const [apiKeyEnv, setApiKeyEnv] = React.useState(status?.config.apiKeyEnv ?? '');
   const [keyNotice, setKeyNotice] = React.useState<Notice | null>(null);
   const mounted = useMounted();
@@ -1328,7 +1331,18 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
   const saveKeyRef = async () => {
     const value = apiKeyEnv.trim();
     if (value === '') {
-      setKeyNotice({ kind: 'error', text: `未填写引用名；请求沿用默认引用 ${DEFAULT_KEY_REF}。若这里已存过引用名，需在配置里删除 apiKeyEnv 才能回到未命名状态。` });
+      // An empty field means "name nothing": drop the saved name instead of storing an empty one.
+      setKeyNotice(null);
+      try {
+        const cleared = await clearFormField('apiKeyEnv');
+        if (mounted.current) {
+          setKeyNotice(cleared
+            ? { kind: 'status', text: `已清除引用名；请求沿用默认引用 ${DEFAULT_KEY_REF}。` }
+            : { kind: 'error', text: '引用名未清除，请重试。' });
+        }
+      } catch {
+        if (mounted.current) setKeyNotice({ kind: 'error', text: GENERIC_ERROR });
+      }
       return;
     }
     if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(value)) {
@@ -1397,7 +1411,7 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
         h('small', { className: 'odc-hint' }, '地址由插件配置提供，无需在此填写；切换协议只改变请求路径与报文格式。'))),
     h('section', { className: 'odc-card' },
       h('h3', null, '凭据与网关'),
-      h('p', { className: 'odc-hint' }, '这里只保存凭据引用名称，不填写 Key 本身；网关地址由插件配置托管。不填写其他名称时，请求沿用 COROUTER_API_KEY。'),
+      h('p', { className: 'odc-hint' }, `这里只保存凭据引用名称，不填写 Key 本身；网关地址由插件配置托管。引用名留空时请求沿用 ${DEFAULT_KEY_REF}，保存空值即清除已保存的引用名。`),
       h('div', { className: 'odc-field' },
         h('label', { htmlFor: 'odc-api-key-env' }, 'API Key 环境变量 / 凭据引用名'),
         h('input', {
@@ -1835,6 +1849,31 @@ export function SettingsPage({ caller, form }: SettingsProps) {
     }
   }, [form, mounted, refresh, writes]);
 
+  const clearFormField = React.useCallback(async (field: string): Promise<boolean> => {
+    const snapshot = form.getSnapshot();
+    if (snapshot.status !== 'ready' || snapshot.value === undefined || !snapshot.writable || writes.getSnapshot().pendingFields.includes(field)) return false;
+    if (writes.getSnapshot().pendingFields.length === 0) batchWriteFailed.current = false;
+    pageBatchActive.current = true;
+    setFormNotice({ kind: 'status', text: '正在保存设置…' });
+    try {
+      const accepted = await writes.clear(field);
+      if (!accepted) batchWriteFailed.current = true;
+      // The cleared field disappears from the form; status still carries the old name until reread.
+      if (accepted && mounted.current) void loadStatus();
+      return accepted;
+    } catch {
+      batchWriteFailed.current = true;
+      return false;
+    } finally {
+      if (mounted.current && writes.getSnapshot().pendingFields.length === 0) {
+        pageBatchActive.current = false;
+        setFormNotice(batchWriteFailed.current
+          ? { kind: 'error', text: '设置未保存，已恢复原值，请重试。' }
+          : { kind: 'status', text: '设置已保存。' });
+      }
+    }
+  }, [form, mounted, writes, loadStatus]);
+
   const refreshModelsBusy = React.useRef(false);
   const refreshModels = React.useCallback(async () => {
     if (refreshModelsBusy.current) return;
@@ -1950,7 +1989,7 @@ export function SettingsPage({ caller, form }: SettingsProps) {
   } else if (tab === 'connection') {
     content = h(Connection, { status, formSnapshot, setFormField, pendingField, caller, onLoginStatus: acceptLoginStatus, onStatus: acceptStatus });
   } else {
-    content = h(Advanced, { status, formSnapshot, setFormField, pendingField });
+    content = h(Advanced, { status, formSnapshot, setFormField, clearFormField, pendingField });
   }
 
   return h('div', { className: 'odc-settings' },

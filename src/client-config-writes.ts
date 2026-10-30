@@ -8,7 +8,8 @@
  *
  * The coordinator talks to the Host configuration form only: it projects the value a caller
  * wants to save, hands the write to the form, and hands the value back to the form snapshot once
- * the write is done.
+ * the write is done. A clear travels the same queue but asks the form to drop the field, because
+ * an empty value and an unnamed field are different states for the Host.
  */
 import type { ConfigForm, FormValues } from './client.js';
 
@@ -31,6 +32,13 @@ export interface ConfigWrites {
    * already has a pending write, or when the Host rejects the write.
    */
   set(field: string, value: unknown, baseValue?: unknown): Promise<boolean>;
+  /**
+   * Queue one field clear.
+   *
+   * A cleared field goes back to being unnamed: the Host drops it from the profile instead of
+   * storing an empty value. Returns false when the Host offers no clear path.
+   */
+  clear(field: string): Promise<boolean>;
   /** Stop the coordinator: queued writes never start and subscribers are released. */
   dispose(): void;
 }
@@ -42,6 +50,8 @@ interface WriteTask {
   readonly value: unknown;
   /** The caller-rendered value the field diff is measured against. */
   readonly baseline: unknown;
+  /** Drop the field instead of writing a value. */
+  readonly clear: boolean;
   resolve(accepted: boolean): void;
 }
 
@@ -92,16 +102,25 @@ class ConfigWritesImpl implements ConfigWrites {
   }
 
   async set(field: string, value: unknown, baseValue?: unknown): Promise<boolean> {
+    return this.enqueue(field, value, baseValue, false);
+  }
+
+  async clear(field: string): Promise<boolean> {
+    return this.enqueue(field, undefined, undefined, true);
+  }
+
+  private async enqueue(field: string, value: unknown, baseValue: unknown, clear: boolean): Promise<boolean> {
     if (this.disposed) return false;
     const current = this.form.getSnapshot();
     if (!writableSnapshot(current)) return false;
     // The same field may only have one pending write; both surfaces rely on this refusal.
     if (this.inflight.has(field)) return false;
     const baseline = baseValue !== undefined ? baseValue : readField(current.value, field);
-    const task: WriteTask = { field, value, baseline, resolve: () => {} };
+    const task: WriteTask = { field, value, baseline, clear, resolve: () => {} };
     const accepted = new Promise<boolean>((resolve) => { task.resolve = resolve; });
     this.inflight.set(field, task);
-    this.overlay.set(field, value);
+    // A clear has no value to project; the control shows the empty state the user chose.
+    if (!clear) this.overlay.set(field, value);
     this.publish();
     this.queue.push(task);
     this.drain();
@@ -150,6 +169,15 @@ class ConfigWritesImpl implements ConfigWrites {
     if (this.disposed) return false;
     const current = this.form.getSnapshot();
     if (!writableSnapshot(current)) return false;
+    if (task.clear) {
+      const unset = this.form.unset;
+      if (unset === undefined) return false;
+      try {
+        return (await unset.call(this.form, task.field)) === true;
+      } catch {
+        return false;
+      }
+    }
     let payload = task.value;
     if (task.field === 'modelSettings') {
       // Rebase the caller's field-level diff onto the map the Host holds right now, so a

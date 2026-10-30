@@ -8,6 +8,7 @@ class FakeForm implements ConfigForm {
   writable = true;
   value: FormValues = {};
   calls: Array<{ field: string; value: unknown }> = [];
+  clears: string[] = [];
   outcome: 'accept' | 'reject' | 'throw' = 'accept';
   /** Hold every write until `release()` is called. */
   manual = false;
@@ -39,6 +40,17 @@ class FakeForm implements ConfigForm {
       });
     }
     this.value = { ...this.value, [field]: this.stored(field, value) as FormValues[keyof FormValues] };
+    this.notify();
+    return Promise.resolve(true);
+  }
+
+  unset(field: string): Promise<boolean> {
+    this.clears.push(field);
+    if (this.outcome === 'throw') return Promise.reject(new Error('clear failed'));
+    if (this.outcome === 'reject') return Promise.resolve(false);
+    const next: Record<string, unknown> = { ...this.value };
+    Reflect.deleteProperty(next, field);
+    this.value = next as FormValues;
     this.notify();
     return Promise.resolve(true);
   }
@@ -277,4 +289,45 @@ test('disposal stops queued writes and releases the subscribers', async () => {
   assert.equal(notified, seen, 'a disposed coordinator does not update the UI');
   assert.deepEqual(writes.getSnapshot().pendingFields, []);
   unsubscribe();
+});
+
+test('a cleared field is dropped by the Host instead of being written as a value', async () => {
+  const form = new FakeForm();
+  form.value = { apiKeyEnv: 'TEAM_KEY' } as FormValues;
+  const writes = configWritesFor(form);
+  try {
+    assert.equal(await writes.clear('apiKeyEnv'), true);
+    assert.deepEqual(form.clears, ['apiKeyEnv']);
+    assert.equal(form.calls.length, 0, 'a clear never travels as a value write');
+    // The form snapshot is authoritative again, so the control falls back to the unnamed state.
+    assert.deepEqual(writes.getSnapshot(), { pendingFields: [], pendingValues: {} });
+    assert.equal(Object.prototype.hasOwnProperty.call(form.getSnapshot().value, 'apiKeyEnv'), false);
+    // A rejected clear rolls back and stays retryable, like any other write.
+    form.value = { apiKeyEnv: 'TEAM_KEY' } as FormValues;
+    form.outcome = 'reject';
+    assert.equal(await writes.clear('apiKeyEnv'), false);
+    assert.deepEqual(writes.getSnapshot(), { pendingFields: [], pendingValues: {} });
+    assert.deepEqual(form.getSnapshot().value, { apiKeyEnv: 'TEAM_KEY' });
+  } finally {
+    writes.dispose();
+  }
+});
+
+test('a Host without a clear path refuses the clear instead of writing an empty name', async () => {
+  const form = new FakeForm();
+  form.value = { apiKeyEnv: 'TEAM_KEY' } as FormValues;
+  // A Host that predates the clear path exposes no `unset` at all.
+  const withoutUnset: ConfigForm = {
+    getSnapshot: () => form.getSnapshot(),
+    subscribe: listener => form.subscribe(listener),
+    set: (field, value) => form.set(field, value),
+  };
+  const writes = configWritesFor(withoutUnset);
+  try {
+    assert.equal(await writes.clear('apiKeyEnv'), false);
+    assert.equal(form.calls.length, 0);
+    assert.deepEqual(form.getSnapshot().value, { apiKeyEnv: 'TEAM_KEY' });
+  } finally {
+    writes.dispose();
+  }
 });

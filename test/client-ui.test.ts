@@ -4,6 +4,7 @@ import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   Advanced,
+  DEFAULT_KEY_REF,
   Models,
   LoginApproval,
   ModelRow,
@@ -37,6 +38,7 @@ import type { Status, StatusModel } from '../src/remote.js';
 import type { TurnMonitorStatus } from '../src/turn-monitor-status.js';
 import { TurnMonitorView } from '../src/client.js';
 import type { QuotaSnapshot } from '../src/quota.js';
+import { DEFAULT_API_KEY_REF } from '../src/config.js';
 
 const h = React.createElement;
 
@@ -194,6 +196,7 @@ function renderAdvanced(nextStatus: Status = status, nextSnapshot: FormSnapshot 
     status: nextStatus,
     formSnapshot: nextSnapshot,
     setFormField: async () => true,
+    clearFormField: async () => true,
     pendingField: [],
   }));
 }
@@ -855,12 +858,12 @@ test('turn monitor limits save through the host form with rollback', async () =>
     return false;
   };
   const html = renderToStaticMarkup(h(Advanced, {
-    status, formSnapshot: snapshot, setFormField, pendingField: ['turnReviewMaxContinuations'],
+    status, formSnapshot: snapshot, setFormField, clearFormField: async () => true, pendingField: ['turnReviewMaxContinuations'],
   }));
   assert.match(html, /<input[^>]*id="odc-turn-continuations"[^>]*disabled=""/u);
   assert.equal(saved.length, 0, 'server rendering must not write configuration');
   const unbound = renderToStaticMarkup(h(Advanced, {
-    status: omitTurnMonitor(status), formSnapshot: { status: 'loading', writable: false, value: undefined }, setFormField: async () => true, pendingField: [],
+    status: omitTurnMonitor(status), formSnapshot: { status: 'loading', writable: false, value: undefined }, setFormField: async () => true, clearFormField: async () => true, pendingField: [],
   }));
   // Without form or host values the defaults render as the editable starting point.
   assert.match(unbound.match(/<input[^>]*id="odc-turn-continuations"[^>]*>/u)?.[0] ?? '', /value="3"/u);
@@ -906,7 +909,7 @@ test('unavailable writable forms cannot expose editable controls', () => {
 
 test('all concurrently pending fields stay disabled', () => {
   const html = renderToStaticMarkup(h(Advanced, {
-    status, formSnapshot: snapshot, setFormField: async () => true,
+    status, formSnapshot: snapshot, setFormField: async () => true, clearFormField: async () => true,
     pendingField: ['emptyTurnGuard', 'apiProtocol', 'apiKeyEnv', 'maxRequestImageBytes'],
   }));
   assert.match(html, /type="checkbox" disabled=""/u);
@@ -931,3 +934,17 @@ test('an unconfigured form snapshot keeps the guard on its host value', () => {
   assert.match(html, /已累计 2 次空响应或残留拦截/u);
 });
 
+
+test('an unnamed reference leaves the field blank and names the default as its placeholder', () => {
+  // The browser bundle carries its own copy of the default; the two must not drift apart.
+  assert.equal(DEFAULT_KEY_REF, DEFAULT_API_KEY_REF);
+  const unnamed: Status = { ...status, config: { ...status.config, apiKeyEnv: '' } };
+  const html = renderAdvanced(unnamed);
+  const input = html.match(/<input[^>]*id="odc-api-key-env"[^>]*>/u)?.[0] ?? '';
+  assert.match(input, /value=""/u);
+  assert.match(input, new RegExp(`placeholder="${DEFAULT_KEY_REF}"`, 'u'));
+  // A named reference still shows the saved name and needs no placeholder.
+  const named = renderAdvanced({ ...status, config: { ...status.config, apiKeyEnv: 'TEAM_KEY' } });
+  const namedInput = named.match(/<input[^>]*id="odc-api-key-env"[^>]*>/u)?.[0] ?? '';
+  assert.match(namedInput, /value="TEAM_KEY"/u);
+});

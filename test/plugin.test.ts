@@ -50,8 +50,8 @@ test('real Cordis scope loads both Providers and Host RPC, then fully withdraws 
     assert.deepEqual(ctx.llm.listProviders().map(row => row.id), [PLAN_PROVIDER, PAID_PROVIDER]);
     assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 13);
     assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 26);
-    // The Host's model page offers a key field only for a route that reports no native auth;
-    // both routes authenticate themselves, so the page must not present a key it cannot use.
+    // Both routes authenticate themselves, so the directory must describe that path rather than
+    // a per-route environment field, and must address its settings through this namespace alone.
     for (const entry of ctx.llm.listConfigurableProviders()) {
       assert.equal(entry.settingsNs, SETTINGS_NS);
       assert.deepEqual(entry.settingsPath, []);

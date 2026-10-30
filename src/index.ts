@@ -41,11 +41,13 @@ const SESSION = credentialKey(name, 'console');
 const SETTINGS_CONFLICT = 'SETTINGS_CONFLICT';
 /**
  * Both routes authenticate themselves: a saved API key, a profile-named reference, or an
- * OpenDesign device sign-in. None of those is a Host credential reference, so the directory
- * declares native auth with no environment variable and a stored sign-in behind it — the Host's
- * model page then omits the key field it would otherwise offer and stops reporting a named
- * reference as missing. The profile still names a reference whenever the user sets one, and that
- * reference stays authoritative for requests.
+ * OpenDesign device sign-in. Declaring that path tells the directory the plugin owns its
+ * credentials instead of reading a per-route environment field.
+ *
+ * It is a description, not a repair: the observed Host model page acts on this declaration only
+ * for its own DeepSeek and pi-ai layouts, and shows this namespace a read-only hint instead. The
+ * missing-API-key warning disappears because the profile names no reference by default; a
+ * reference the user does name stays authoritative for requests and stays what the page reports on.
  */
 const NATIVE_AUTH = { env: [], oauth: true } as const;
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value) ?? '').digest('hex');

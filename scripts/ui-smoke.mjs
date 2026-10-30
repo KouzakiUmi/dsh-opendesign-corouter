@@ -88,7 +88,9 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
     const syncConfig = () => { window.__config = config; };
     const status = () => {
       const value = {
-        revision: 'fixture-revision', apiKeyConfigured: true, apiKeySource, sessionSource: 'login', quota, login, config, guardedTurns: 2,
+        revision: 'fixture-revision', apiKeyConfigured: true, apiKeySource, sessionSource: 'login', quota, login, guardedTurns: 2,
+        // The Host sends an empty string when the profile names no reference.
+        config: { ...config, apiKeyEnv: config.apiKeyEnv ?? '' },
         ...(turnMonitor === undefined ? {} : { turnMonitor }),
         models: models.map(model => ({ ...model, enabled: config.modelSettings?.[model.id]?.enabled ?? model.enabled ?? true })),
         modelsSource,
@@ -234,6 +236,18 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
         }
         if (window.__rejectSave) { window.__rejectSave = false; return false; }
         const next = { ...config, [field]: value };
+        validateConfig(next);
+        config = next;
+        syncConfig();
+        snapshot = { ...snapshot, value: config };
+        for (const cb of listeners) cb();
+        return true;
+      },
+      unset: async field => {
+        window.__saveCalls.push(field);
+        if (window.__rejectSave) { window.__rejectSave = false; return false; }
+        const next = { ...config };
+        Reflect.deleteProperty(next, field);
         validateConfig(next);
         config = next;
         syncConfig();
@@ -1156,6 +1170,15 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await page.evaluate(() => window.__config.modelSettings?.['claude-haiku-5.5']?.temperature), undefined);
   await page.getByRole('tab', { name: '高级', exact: true }).click();
   const reference = page.getByLabel('API Key 环境变量 / 凭据引用名', { exact: true });
+  await reference.fill('COROUTER_FIXTURE_REF');
+  await page.getByRole('button', { name: '保存引用名', exact: true }).click();
+  await page.waitForFunction(() => window.__config.apiKeyEnv === 'COROUTER_FIXTURE_REF');
+  // An empty field means "name nothing": saving it drops the saved name instead of storing one.
+  await reference.fill('');
+  await page.getByRole('button', { name: '保存引用名', exact: true }).click();
+  await page.waitForFunction(() => window.__config.apiKeyEnv === undefined);
+  assert.equal(await reference.inputValue(), '', 'a cleared name leaves the field blank');
+  assert.equal(await reference.getAttribute('placeholder'), 'COROUTER_API_KEY', 'the default reference stays visible as a placeholder');
   await reference.fill('COROUTER_FIXTURE_REF');
   await page.getByRole('button', { name: '保存引用名', exact: true }).click();
   await page.waitForFunction(() => window.__config.apiKeyEnv === 'COROUTER_FIXTURE_REF');
