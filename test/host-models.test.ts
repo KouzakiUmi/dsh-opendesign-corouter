@@ -5,11 +5,12 @@
 // 因此既有真实的发现归一化/错误分类，也绝不发出网络请求或读取任何真实凭据、主机 Profile。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Context } from '@deepseek-ai/cordis';
+import { Context, Service } from '@deepseek-ai/cordis';
 import { CredentialProvider, type CredentialKey, type CredentialRecord, type CredentialRef } from '@deepseek-ai/dsh-credentials';
 import { OpenDesignCoRouterService, type HostDependencies } from '../src/index.js';
 import { CoRouterAdapter } from '../src/adapter.js';
-import { PAID_PROVIDER, type RuntimeConfig } from '../src/config.js';
+import { PAID_PROVIDER, SETTINGS_NS, type RuntimeConfig } from '../src/config.js';
+import type { ModelCatalogSnapshot } from '../src/model-catalog-snapshot.js';
 import { fetchModelCatalog } from '../src/model-discovery.js';
 import { MODELS } from '../src/catalog.js';
 import { ConsoleError, type QuotaSnapshot } from '../src/quota.js';
@@ -31,6 +32,30 @@ class MemoryCredentials extends CredentialProvider {
   async listRecords() { return [...this.data.entries()].map(([key, value]) => ({ key, kind: value.kind })); }
   async modifyRecord(key: CredentialKey, mutate: (current: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>) { const next = await mutate(await this.readRecord(key)); if (next) this.data.set(key, structuredClone(next)); return this.readRecord(key); }
   async deleteRecord(key: CredentialKey) { this.data.delete(key); }
+}
+
+/** In-memory form service: the only surface the Host persistence path uses. */
+class MemorySettings extends Service {
+  patch: Record<string, unknown> = {};
+  revision = 1;
+  fail = false;
+  /** Drop the namespace from `describe()`; the form is then not writable. */
+  hidden = false;
+  /** Hold every write until released, so concurrent refreshes overlap. */
+  gate: Promise<void> | undefined;
+  writes: Record<string, unknown>[] = [];
+  onWrite: ((patch: Record<string, unknown>) => void) | undefined;
+  constructor(ctx: Context) { super(ctx, 'settings'); }
+  describe() { return this.hidden ? [] : [{ ns: SETTINGS_NS, revision: this.revision }]; }
+  async update(_ns: string, patch: object, expected?: number) {
+    if (this.gate) await this.gate;
+    if (this.fail) throw new Error('fixture settings write failed');
+    if (expected !== undefined && expected !== this.revision) throw new Error('fixture revision conflict');
+    this.revision++;
+    this.patch = { ...this.patch, ...patch };
+    this.writes.push({ ...patch });
+    this.onWrite?.(patch as Record<string, unknown>);
+  }
 }
 
 const BASE = 'https://amr-link.open-design.ai/v1';
@@ -90,13 +115,16 @@ function hostDependencies(calls: Wire[], respond: Responder, changed?: () => voi
   };
 }
 
-async function host(current: RuntimeConfig, deps: HostDependencies) {
+async function host(current: RuntimeConfig, deps: HostDependencies, withSettings = false) {
   const ctx = new Context();
   const credentials = await ctx.plugin(MemoryCredentials);
+  const settingsFiber = withSettings ? await ctx.plugin(MemorySettings) : undefined;
+  const settings = settingsFiber ? ctx.get('settings') as unknown as MemorySettings : undefined;
   const fiber = await ctx.plugin(scope => { new OpenDesignCoRouterService(scope, () => current, deps); });
   return {
     service: ctx.openDesignCoRouter,
-    dispose: async () => { await fiber.dispose(); await credentials.dispose(); },
+    settings,
+    dispose: async () => { await fiber.dispose(); await settingsFiber?.dispose(); await credentials.dispose(); },
   };
 }
 
@@ -104,6 +132,15 @@ async function host(current: RuntimeConfig, deps: HostDependencies) {
 async function saveFixtureKey(service: OpenDesignCoRouterService, value = KEY): Promise<void> {
   const { revision } = await service.status();
   await service.saveApiKey({ value, expectedRevision: revision });
+}
+
+/** Poll a fire-and-forget persistence side effect without real timers. */
+async function waitFor(check: () => boolean): Promise<void> {
+  for (let index = 0; index < 200; index++) {
+    if (check()) return;
+    await tick();
+  }
+  assert.fail('fixture condition never became true');
 }
 
 async function waitForRequest(calls: Wire[], count: number): Promise<void> {
@@ -465,4 +502,129 @@ test('dispose cancels the in-flight request without an unhandled rejection', asy
     process.off('unhandledRejection', onUnhandled);
     await shutdown();
   }
+});
+
+test('a successful discovery persists its catalog and the next Host start restores it', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  const { service, settings, dispose } = await host(current, hostDependencies(calls, () => list('deepseek-v4.1-flash')), true);
+  try {
+    await saveFixtureKey(service);
+    const refreshed = await service.refreshModels();
+    assert.equal(refreshed.modelsSource, 'openai');
+    await waitFor(() => settings !== undefined && settings.patch.modelCatalog !== undefined);
+    const snapshot = settings?.patch.modelCatalog as ModelCatalogSnapshot;
+    assert.equal(snapshot.baseURL, BASE);
+    assert.equal(snapshot.updatedAt, refreshed.modelsUpdatedAt);
+    assert.deepEqual(snapshot.models.map(model => model.id), ['deepseek-v4.1-flash']);
+    // A fresh Host with the saved configuration restores the gateway catalog on its first status.
+    current.modelCatalog = snapshot;
+    const restarted = await host(current, hostDependencies([], () => list()));
+    try {
+      const status = await restarted.service.status();
+      assert.equal(status.modelsSource, 'openai');
+      assert.equal(status.modelsUpdatedAt, snapshot.updatedAt);
+      assert.deepEqual(status.models.map(model => model.id), ['deepseek-v4.1-flash']);
+      assert.equal(status.modelsError, undefined);
+      assert.deepEqual(restarted.service.modelCatalog().map(model => model.id), ['deepseek-v4.1-flash']);
+    } finally { await restarted.dispose(); }
+  } finally { await dispose(); }
+});
+
+test('a snapshot from another gateway never replaces the built-in catalog', async () => {
+  const current = runtimeConfig();
+  current.modelCatalog = { baseURL: 'https://other.invalid/v1', updatedAt: '2026-10-30T00:00:00.000Z', models: [{ id: 'foreign-model', name: 'Foreign', group: 'paid' }] };
+  const { service, dispose } = await host(current, hostDependencies([], () => list()));
+  try {
+    const status = await service.status();
+    assert.equal(status.modelsSource, 'builtin');
+    assert.deepEqual(status.models.map(model => model.id), MODELS.map(model => model.id));
+  } finally { await dispose(); }
+});
+
+test('a failing settings write keeps the live catalog and reports the unsaved state', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  const { service, settings, dispose } = await host(current, hostDependencies(calls, () => list('deepseek-v4.1-flash')), true);
+  if (settings) settings.fail = true;
+  try {
+    await saveFixtureKey(service);
+    const refreshed = await service.refreshModels();
+    assert.equal(refreshed.modelsSource, 'openai');
+    let error: string | undefined;
+    for (let index = 0; index < 200 && error === undefined; index++) error = (await service.status()).modelsError;
+    assert.equal(error, '模型目录已更新，但保存失败；重启后需要重新刷新。');
+    assert.deepEqual(service.modelCatalog().map(model => model.id), ['deepseek-v4.1-flash']);
+  } finally { await dispose(); }
+});
+
+test('an unwritable form reports its own state while a composition without settings stays quiet', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  const { service, settings, dispose } = await host(current, hostDependencies(calls, () => list('deepseek-v4.1-flash')), true);
+  if (settings) settings.hidden = true;
+  try {
+    await saveFixtureKey(service);
+    const refreshed = await service.refreshModels();
+    assert.equal(refreshed.modelsSource, 'openai');
+    let error: string | undefined;
+    for (let index = 0; index < 200 && error === undefined; index++) error = (await service.status()).modelsError;
+    assert.equal(error, '模型目录已更新，但当前配置服务不可写；重启后需要重新刷新。');
+    assert.deepEqual(service.modelCatalog().map(model => model.id), ['deepseek-v4.1-flash']);
+  } finally { await dispose(); }
+
+  // No settings service at all: nothing to warn about, and the catalog still works for this run.
+  const plain = await host(runtimeConfig(), hostDependencies([], () => list('deepseek-v4.1-flash')));
+  try {
+    await saveFixtureKey(plain.service);
+    const refreshed = await plain.service.refreshModels();
+    assert.equal(refreshed.modelsSource, 'openai');
+    await tick();
+    await tick();
+    assert.equal((await plain.service.status()).modelsError, undefined);
+  } finally { await plain.dispose(); }
+});
+
+test('overlapping refreshes persist in order and only the newest catalog survives a restart', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  let release = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let responses = 0;
+  const { service, settings, dispose } = await host(current, hostDependencies(calls, () => {
+    responses++;
+    return list(responses === 1 ? 'first-model' : 'second-model');
+  }), true);
+  if (settings) settings.gate = gate;
+  try {
+    await saveFixtureKey(service);
+    await service.refreshModels();
+    await waitFor(() => settings !== undefined && settings.writes.length === 1 || calls.length >= 1);
+    // Second refresh starts while the first persistence is still blocked by the gate.
+    const second = service.refreshModels();
+    await waitFor(() => calls.length >= 2);
+    release();
+    await second;
+    await waitFor(() => settings !== undefined && settings.writes.length >= 2);
+    const snapshot = settings?.patch.modelCatalog as ModelCatalogSnapshot;
+    assert.deepEqual(snapshot.models.map(model => model.id), ['second-model']);
+    current.modelCatalog = snapshot;
+    const restarted = await host(current, hostDependencies([], () => list()));
+    try {
+      assert.deepEqual((await restarted.service.status()).models.map(model => model.id), ['second-model']);
+    } finally { await restarted.dispose(); }
+  } finally { await dispose(); }
+});
+
+test('saving the catalog snapshot never rotates the status revision or blocks credential writes', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  const { service, settings, dispose } = await host(current, hostDependencies(calls, () => list('deepseek-v4.1-flash')), true);
+  try {
+    await saveFixtureKey(service);
+    const before = await service.status();
+    await service.refreshModels();
+    await waitFor(() => settings !== undefined && settings.patch.modelCatalog !== undefined);
+    // Persisting the snapshot is a configuration write, but it must not look like a credential change.
+    assert.equal((await service.status()).revision, before.revision);
+    // A credential write prepared before the snapshot still commits against the same revision.
+    const status = await service.status();
+    await service.saveApiKey({ value: 'second-fixture-key', expectedRevision: status.revision });
+    assert.equal((await service.status()).apiKeyConfigured, true);
+  } finally { await dispose(); }
 });

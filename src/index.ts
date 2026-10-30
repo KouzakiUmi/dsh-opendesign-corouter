@@ -19,6 +19,7 @@ import { applyModelSettings, isModelEnabled } from './model-settings.js';
 import { modelReasoningEfforts } from './reasoning.js';
 import type { CatalogModel } from './catalog.js';
 import { Config, SETTINGS_NS, PLAN_PROVIDER, PAID_PROVIDER, readConfig, type LiveConfig } from './config.js';
+import { parseModelCatalogSnapshot, type ModelCatalogSnapshot } from './model-catalog-snapshot.js';
 import { MODELS } from './catalog.js';
 import { resolveSession, deviceGrant, isOfficialRuntimeUrl, type LoginGrant } from './auth.js';
 import { ConsoleLogin, type LoginOptions } from './login.js';
@@ -37,6 +38,11 @@ export const inject = ['llm'];
 const API_KEY = credentialKey(name, 'api-key');
 const SESSION = credentialKey(name, 'console');
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value) ?? '').digest('hex');
+/** The persisted catalog snapshot never participates in revision or login fingerprints. */
+const stableConfig = (config: ReturnType<typeof readConfig>): ReturnType<typeof readConfig> => {
+  const { modelCatalog: _snapshot, ...rest } = config;
+  return rest;
+};
 const needLogin = (): QuotaSnapshot => ({ state: 'need-login', updatedAt: new Date().toISOString(), windows: [], balances: {}, note: '请在连接与登录页完成账号授权后读取额度。' });
 const unreadQuota = (): QuotaSnapshot => ({ state: 'partial', updatedAt: new Date().toISOString(), windows: [], balances: {}, note: '额度尚未读取，请刷新额度。' });
 interface CapturedState {
@@ -44,6 +50,11 @@ interface CapturedState {
   key: string | undefined; keySource: Status['apiKeySource']; config: ReturnType<typeof readConfig>;
 }
 interface LoginCapture { revision: string; sessionHash: string; configHash: string }
+/** Narrow structural view of the Host settings service; only the catalog snapshot field is written. */
+interface SettingsWriter {
+  describe(): readonly { ns: string; revision: number }[];
+  update(ns: string, patch: object, expectedRevision?: number): Promise<void>;
+}
 export interface HostDependencies {
   resolveSession: typeof resolveSession;
   readQuota: typeof readQuota;
@@ -83,18 +94,21 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   private _modelsEpoch = 0;
   private _modelsPending: Promise<Status> | undefined;
   private _modelsController: AbortController | undefined;
+  private _modelsWriteSerial = 0;
+  private _modelsWrite: Promise<void> = Promise.resolve();
   private _prices: PriceCatalog | undefined;
   private _pricesPending: Promise<PriceCatalog> | undefined;
   modelCatalog(): readonly CatalogModel[] { return this._models; }
   constructor(ctx: Context, config: () => ReturnType<typeof readConfig>, readonly dependencies: HostDependencies = { resolveSession, readQuota, readDesktopQuota }) {
     super(ctx, 'openDesignCoRouter');
     this._config = config;
+    this._restoreModels();
     this._login = new ConsoleLogin({
       capture: async expectedRevision => {
         const state = await this._state();
         this._expect(expectedRevision);
         this._credentials();
-        return { revision: expectedRevision, sessionHash: hash(state.sessionRecord), configHash: hash(state.config) } satisfies LoginCapture;
+        return { revision: expectedRevision, sessionHash: hash(state.sessionRecord), configHash: hash(stableConfig(state.config)) } satisfies LoginCapture;
       },
       commit: async (tokens, captured, signal) => {
         if (!record(captured) || typeof captured.revision !== 'string' || typeof captured.sessionHash !== 'string' || typeof captured.configHash !== 'string') throw this._conflict();
@@ -103,7 +117,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
         signal.throwIfAborted();
         await this._credentials().modifyRecord(SESSION, async current => {
           signal.throwIfAborted();
-          if (hash(current) !== captured.sessionHash || hash(this._config()) !== captured.configHash) throw this._conflict();
+          if (hash(current) !== captured.sessionHash || hash(stableConfig(this._config())) !== captured.configHash) throw this._conflict();
           const grant = deviceGrant({ kind: 'device', ...tokens });
           if (!grant) throw new ConsoleError('auth');
           return { kind: 'grant', payload: { ...grant, savedAt: new Date().toISOString() } };
@@ -139,6 +153,47 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     const [apiRecord, sessionRecord] = await Promise.all([credentials?.readRecord(API_KEY), credentials?.readRecord(SESSION)]);
     return (await this._key(ref, baseURL, apiRecord, sessionRecord))?.key;
   }
+  /** Restore the persisted gateway catalog when it belongs to the active gateway. */
+  private _restoreModels(): void {
+    const config = this._config();
+    const snapshot = config.modelCatalog;
+    if (!snapshot || snapshot.baseURL !== config.baseURL) return;
+    this._models = snapshot.models;
+    this._modelsUpdatedAt = snapshot.updatedAt;
+  }
+  /**
+   * Persist the snapshot through the Host form service.
+   * `unsupported` means no settings service is composed (nothing to report);
+   * `unavailable` means the service exists but exposes no writable form for this plugin.
+   */
+  private async _persistModels(value: ModelCatalogSnapshot): Promise<'saved' | 'unsupported' | 'unavailable' | 'failed'> {
+    const settings = this.ctx.get('settings') as unknown as SettingsWriter | undefined;
+    if (!settings) return 'unsupported';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let descriptor: { ns: string; revision: number } | undefined;
+      try { descriptor = settings.describe().find(item => item.ns === SETTINGS_NS); }
+      catch { return 'unavailable'; }
+      if (!descriptor) return 'unavailable';
+      try {
+        await settings.update(SETTINGS_NS, { modelCatalog: value }, descriptor.revision);
+        return 'saved';
+      } catch { /* Retry once on a concurrent settings revision; the live catalog is unaffected. */ }
+    }
+    return 'failed';
+  }
+  /** Serialize snapshot writes so the newest successful refresh is the last one persisted. */
+  private _queueModelsWrite(snapshot: ModelCatalogSnapshot, epoch: number): void {
+    const serial = ++this._modelsWriteSerial;
+    this._modelsWrite = this._modelsWrite.then(async () => {
+      const result = await this._persistModels(snapshot);
+      if (serial !== this._modelsWriteSerial || epoch !== this._modelsEpoch) return;
+      if (result === 'unavailable') this._modelsError = '模型目录已更新，但当前配置服务不可写；重启后需要重新刷新。';
+      else if (result === 'failed') this._modelsError = '模型目录已更新，但保存失败；重启后需要重新刷新。';
+    }).catch(() => {
+      if (serial !== this._modelsWriteSerial || epoch !== this._modelsEpoch) return;
+      this._modelsError = '模型目录已更新，但保存失败；重启后需要重新刷新。';
+    });
+  }
   private _invalidateModels(): void {
     const changed = this._modelsUpdatedAt !== undefined;
     this._modelsEpoch++;
@@ -147,7 +202,8 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     this._models = MODELS;
     this._modelsUpdatedAt = undefined;
     this._modelsError = undefined;
-    if (changed) {
+    this._restoreModels();
+    if (changed || this._modelsUpdatedAt !== undefined) {
       try { this.dependencies.modelsChanged?.(); }
       catch { /* A notification failure cannot undo an accepted credential write or cache invalidation. */ }
     }
@@ -163,7 +219,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       this._modelsFingerprint = modelsFingerprint;
       this._invalidateModels();
     }
-    const fingerprint = hash(state);
+    const fingerprint = hash({ ...state, config: stableConfig(state.config) });
     if (fingerprint !== this._fingerprint) { this._fingerprint = fingerprint; this._revision = randomUUID(); }
     return state;
   }
@@ -217,15 +273,19 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
         if (signal.aborted || epoch !== this._modelsEpoch) return this.status();
         const previousModels = this._models;
         const previousUpdatedAt = this._modelsUpdatedAt;
+        const updatedAt = new Date().toISOString();
         this._models = models;
-        this._modelsUpdatedAt = new Date().toISOString();
+        this._modelsUpdatedAt = updatedAt;
         this._modelsError = undefined;
+        let accepted = true;
         try { this.dependencies.modelsChanged?.(); }
         catch {
+          accepted = false;
           this._models = previousModels;
           this._modelsUpdatedAt = previousUpdatedAt;
           this._modelsError = '模型目录已读取，但模型选择器更新失败，请重试。';
         }
+        if (accepted) this._queueModelsWrite({ baseURL: state.config.baseURL, updatedAt, models }, epoch);
       } catch (error) {
         if (!signal.aborted && epoch === this._modelsEpoch) this._modelsError = error instanceof ModelDiscoveryError ? error.message : '模型列表更新失败，请稍后重试。';
       }
@@ -380,7 +440,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     this._expect(request.expectedRevision);
     const expected = hash(state.apiRecord);
     await this._credentials().modifyRecord(API_KEY, async current => {
-      if (hash(current) !== expected || hash(this._config()) !== hash(state.config)) throw this._conflict();
+      if (hash(current) !== expected || hash(stableConfig(this._config())) !== hash(stableConfig(state.config))) throw this._conflict();
       return { kind: 'api-key', key: request.value };
     });
     return this.status();

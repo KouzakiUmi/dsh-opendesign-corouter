@@ -2,6 +2,7 @@ import Schema from '@deepseek-ai/schemastery';
 import { API_PROTOCOL_IDS, type ApiProtocol } from './protocol-options.js';
 import { parseModelSettingsMap, type ModelSettingsMap } from './model-settings.js';
 import { serializableTransform } from './schema-serialization.js';
+import { parseModelCatalogSnapshot, type ModelCatalogSnapshot } from './model-catalog-snapshot.js';
 import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES } from './image-budget.js';
 export { DEFAULT_MAX_REQUEST_IMAGE_BYTES } from './image-budget.js';
 export const SETTINGS_NS = 'llm-opendesign-corouter';
@@ -13,6 +14,7 @@ export const Config = Schema.object({
   baseURL: Schema.transform(Schema.string(), serializableTransform(assertBaseURL)).default(DEFAULT_BASE_URL).description('CoRouter 网关地址；不用于控制台登录或额度查询').volatile(),
   apiProtocol: Schema.union(API_PROTOCOL_IDS).default('chat-completions').description('网关支持的推理协议；模型目录通过该网关的兼容接口读取').volatile(),
   modelSettings: Schema.transform(Schema.dict(Schema.any<unknown>()), serializableTransform(parseModelSettingsMap)).default({}).description('逐模型启用状态、图片输入和请求参数').volatile(),
+  modelCatalog: Schema.transform(Schema.any<unknown>(), serializableTransform(parseModelCatalogSnapshot)).description('上次成功读取的网关模型目录快照；重启后继续使用，直到再次刷新').volatile(),
   useDesktopCredential: Schema.boolean().default(true).description('优先读取 OpenDesign 桌面端登录态查询额度').volatile(),
   emptyTurnGuard: Schema.boolean().default(true).description('保护 DeepSeek V4.1 Flash 工具对话：恢复空回答与已知协议残留结束').volatile(),
   turnCompletionReview: Schema.boolean().default(false).description('回复结束后追加有界的结构化收尾核验，要求模型调用收尾工具报告状态').volatile(),
@@ -28,6 +30,7 @@ export interface RuntimeConfig {
   apiKeyEnv: string; baseURL: string; useDesktopCredential: boolean; emptyTurnGuard: boolean; requestTimeoutMs: number; streamIdleTimeoutMs: number;
   apiProtocol?: ApiProtocol;
   modelSettings?: ModelSettingsMap;
+  modelCatalog?: ModelCatalogSnapshot;
   quotaRefreshSeconds?: number;
   maxRequestImageBytes?: number;
   turnCompletionReview?: boolean;
@@ -46,9 +49,11 @@ export function assertBaseURL(raw: string): string {
   return normalized;
 }
 export function readConfig(config: LiveConfig): RuntimeConfig {
+  const modelCatalog = parseModelCatalogSnapshot(config.modelCatalog.get());
   return {
     apiKeyEnv: config.apiKeyEnv.get(), baseURL: assertBaseURL(config.baseURL.get()),
     apiProtocol: config.apiProtocol.get(), modelSettings: parseModelSettingsMap(config.modelSettings.get()),
+    ...(modelCatalog === undefined ? {} : { modelCatalog }),
     quotaRefreshSeconds: config.quotaRefreshSeconds.get(),
     useDesktopCredential: config.useDesktopCredential.get(), emptyTurnGuard: config.emptyTurnGuard.get(),
     requestTimeoutMs: config.requestTimeoutMs.get(), streamIdleTimeoutMs: config.streamIdleTimeoutMs.get(),

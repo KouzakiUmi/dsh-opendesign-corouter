@@ -135,3 +135,41 @@ test('Host and JSON-decoded string bounds match the status transport', () => {
     assert.throws(() => validate({ baseURL: `https://example.com/${'中'.repeat(300)}` }), /2048/u);
   }
 });
+
+test('the persisted gateway catalog snapshot is validated and survives rehydration', () => {
+  const snapshot = {
+    baseURL: 'https://amr-link.open-design.ai/v1',
+    updatedAt: '2026-10-30T01:00:00.000Z',
+    models: [
+      { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', group: 'plan', contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'], reasoningEfforts: ['low', 'high'] },
+      { id: 'gpt-6-astra', name: 'GPT-6 Astra', group: 'paid' },
+    ],
+  };
+  assert.equal(readConfig(Config({})).modelCatalog, undefined);
+  assert.deepEqual(readConfig(Config({ modelCatalog: snapshot })).modelCatalog, snapshot);
+  const invalid: unknown[] = [
+    null, [], 'snapshot',
+    { ...snapshot, baseURL: '' },
+    { ...snapshot, baseURL: 'http://example.com/v1' },
+    { ...snapshot, baseURL: 'https://fixture-secret@example.com/v1' },
+    { ...snapshot, updatedAt: 'not-a-date' },
+    { ...snapshot, updatedAt: `2026-10-30T01:00:00.${'0'.repeat(80)}Z` },
+    { ...snapshot, models: [] },
+    { ...snapshot, models: [...snapshot.models, snapshot.models[0]] },
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'other' }] },
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', apiKey: 'fixture-secret' }] },
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', contextWindow: 0 }] },
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', inputModalities: ['audio'] }] },
+    // A snapshot must never pass here and then fail the status transport.
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', inputModalities: [] }] },
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', inputModalities: ['image'] }] },
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', inputModalities: ['text', 'text'] }] },
+    ...['__proto__', 'constructor', 'prototype'].map(id => ({ ...snapshot, models: [{ id, name: 'X', group: 'paid' }] })),
+    { ...snapshot, models: Array.from({ length: 513 }, (_, index) => ({ id: `model-${index}`, name: `Model ${index}`, group: 'paid' })) },
+  ];
+  for (const modelCatalog of invalid) assert.equal(readConfig(Config({ modelCatalog })).modelCatalog, undefined);
+  for (const validate of [(value: Parameters<typeof Config>[0]) => readConfig(Config(value)), rehydrateInFreshVM()]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(validate({ modelCatalog: snapshot }).modelCatalog)), snapshot);
+    assert.equal(validate({ modelCatalog: { models: 'nope' } }).modelCatalog, undefined);
+  }
+});
