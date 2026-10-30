@@ -188,6 +188,8 @@ test('status rejects a malformed payload instead of repairing it', () => {
   assert.throws(() => parseStatus({ ...status, models: [{ id: 'm', name: 'M', group: 'free' }] }), /模型分组/u);
   assert.throws(() => parseStatus({ ...status, models: [{ id: 'm', name: 'M', group: 'plan' }, { id: 'm', name: 'M2', group: 'paid' }] }), /重复/u);
   assert.throws(() => parseStatus({ ...status, config: { ...status.config, apiKeyEnv: 'NOT-AN-IDENT' } }), /凭据引用名/u);
+  // An unnamed profile travels as an empty string, so the client can leave the field blank.
+  assert.equal(parseStatus({ ...status, config: { ...status.config, apiKeyEnv: '' } }).config.apiKeyEnv, '');
   assert.throws(() => parseStatus({ ...status, quota: { ...status.quota, state: 'stale' } }), /额度状态/u);
   assert.throws(() => parseStatus(null), /状态必须是对象/u);
   assert.throws(() => parseStatus([]), /状态必须是对象/u);

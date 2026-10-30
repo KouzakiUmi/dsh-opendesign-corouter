@@ -23,6 +23,8 @@ import type { ReviewDecision, ReviewReason } from './turn-monitor-status.js';
 
 const h = React.createElement;
 const SETTINGS_NS = 'llm-opendesign-corouter';
+/** Must match `DEFAULT_API_KEY_REF` in src/config.ts; the browser bundle keeps its own copy. */
+const DEFAULT_KEY_REF = 'COROUTER_API_KEY';
 const OFFICIAL_SITE = 'https://corouter.open-design.ai/zh/';
 const TABS = [
   { id: 'overview', label: '概览' },
@@ -1325,6 +1327,10 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
   const selected = API_PROTOCOL_OPTIONS.find(option => option.id === protocol);
   const saveKeyRef = async () => {
     const value = apiKeyEnv.trim();
+    if (value === '') {
+      setKeyNotice({ kind: 'error', text: `未填写引用名；请求沿用默认引用 ${DEFAULT_KEY_REF}。若这里已存过引用名，需在配置里删除 apiKeyEnv 才能回到未命名状态。` });
+      return;
+    }
     if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(value)) {
       setKeyNotice({ kind: 'error', text: '引用名需为 1–128 位字母、数字或下划线，且不能以数字开头。' });
       return;
@@ -1391,15 +1397,16 @@ export function Advanced({ status, formSnapshot, setFormField, pendingField }: A
         h('small', { className: 'odc-hint' }, '地址由插件配置提供，无需在此填写；切换协议只改变请求路径与报文格式。'))),
     h('section', { className: 'odc-card' },
       h('h3', null, '凭据与网关'),
-      h('p', { className: 'odc-hint' }, '这里只保存凭据引用名称，不填写 Key 本身；网关地址由插件配置托管。'),
+      h('p', { className: 'odc-hint' }, '这里只保存凭据引用名称，不填写 Key 本身；网关地址由插件配置托管。不填写其他名称时，请求沿用 COROUTER_API_KEY。'),
       h('div', { className: 'odc-field' },
         h('label', { htmlFor: 'odc-api-key-env' }, 'API Key 环境变量 / 凭据引用名'),
         h('input', {
-          id: 'odc-api-key-env', className: 'odc-input', type: 'text', value: apiKeyEnv, disabled: !writable || pendingField.includes('apiKeyEnv'),
+          id: 'odc-api-key-env', className: 'odc-input', type: 'text', value: apiKeyEnv, placeholder: DEFAULT_KEY_REF,
+          disabled: !writable || pendingField.includes('apiKeyEnv'),
           autoCapitalize: 'off', spellCheck: false,
           onChange: (event: React.ChangeEvent<HTMLInputElement>) => setApiKeyEnv(event.target.value),
         }),
-        h('small', { className: 'odc-hint' }, '引用名对应的凭据仍优先于本插件保存的 Key。')),
+        h('small', { className: 'odc-hint' }, '引用名对应的凭据仍优先于本插件保存的 Key；DSH 模型页只报告这里设置的引用名，不显示本插件保存的 Key 与设备登录。')),
       h('div', { className: 'odc-actions', style: { marginTop: 10 } },
         h('button', { className: 'odc-button', type: 'button', disabled: !writable || pendingField.includes('apiKeyEnv'), onClick: () => { void saveKeyRef(); } }, '保存引用名')),
       h(NoticeView, { notice: keyNotice })),
@@ -1591,7 +1598,7 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
       setApiKey('');
       onStatus(next);
       setNotice({ kind: 'status', text: next.apiKeySource === 'reference'
-        ? `API Key 已保存；当前仍优先使用环境或凭据引用 ${next.config.apiKeyEnv}。`
+        ? `API Key 已保存；当前仍优先使用环境或凭据引用 ${next.config.apiKeyEnv || DEFAULT_KEY_REF}。`
         : next.apiKeySource === 'stored' ? 'API Key 已保存并用于当前网关。' : 'API Key 已保存。' });
     } catch {
       if (!mounted.current || version !== actionVersion.current) return;
@@ -1635,7 +1642,7 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
     }
   }, [state, login?.jobId, busy, keyBusy, opening, status]);
   const desktopChecked = formSnapshot.value?.useDesktopCredential ?? status?.config.useDesktopCredential ?? true;
-  const keySource = status?.apiKeySource === 'reference' ? `环境或凭据引用（${status.config.apiKeyEnv}）`
+  const keySource = status?.apiKeySource === 'reference' ? `环境或凭据引用（${status.config.apiKeyEnv || DEFAULT_KEY_REF}）`
     : status?.apiKeySource === 'stored' ? '已保存的 API Key'
     : status?.apiKeySource === 'device' ? '设备授权'
     : status?.apiKeyConfigured ? '尚未确认' : '未配置';

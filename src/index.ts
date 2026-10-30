@@ -18,7 +18,7 @@ import { fetchPricingSnapshot } from './pricing.js';
 import { applyModelSettings, isModelEnabled } from './model-settings.js';
 import { modelReasoningEfforts } from './reasoning.js';
 import type { CatalogModel } from './catalog.js';
-import { Config, SETTINGS_NS, PLAN_PROVIDER, PAID_PROVIDER, readConfig, type LiveConfig } from './config.js';
+import { Config, SETTINGS_NS, PLAN_PROVIDER, PAID_PROVIDER, apiKeyRef, readConfig, type LiveConfig } from './config.js';
 import { parseModelCatalogSnapshot, type ModelCatalogSnapshot } from './model-catalog-snapshot.js';
 import { MODELS } from './catalog.js';
 import { resolveSession, deviceGrant, isOfficialRuntimeUrl, type LoginGrant } from './auth.js';
@@ -39,6 +39,15 @@ const API_KEY = credentialKey(name, 'api-key');
 const SESSION = credentialKey(name, 'console');
 /** The Host settings service's revision-conflict code (`SettingsConflictError.code`). */
 const SETTINGS_CONFLICT = 'SETTINGS_CONFLICT';
+/**
+ * Both routes authenticate themselves: a saved API key, a profile-named reference, or an
+ * OpenDesign device sign-in. None of those is a Host credential reference, so the directory
+ * declares native auth with no environment variable and a stored sign-in behind it — the Host's
+ * model page then omits the key field it would otherwise offer and stops reporting a named
+ * reference as missing. The profile still names a reference whenever the user sets one, and that
+ * reference stays authoritative for requests.
+ */
+const NATIVE_AUTH = { env: [], oauth: true } as const;
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value) ?? '').digest('hex');
 /** The persisted catalog snapshot never participates in revision or login fingerprints. */
 const stableConfig = (config: ReturnType<typeof readConfig>): ReturnType<typeof readConfig> => {
@@ -219,7 +228,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   private async _state(): Promise<CapturedState> {
     const credentials = this.ctx.get('credentials'), config = this._config();
     const [apiRecord, sessionRecord] = await Promise.all([credentials?.readRecord(API_KEY), credentials?.readRecord(SESSION)]);
-    const resolved = await this._key(config.apiKeyEnv, config.baseURL, apiRecord, sessionRecord);
+    const resolved = await this._key(apiKeyRef(config), config.baseURL, apiRecord, sessionRecord);
     const key = resolved?.key;
     const state = { apiRecord, sessionRecord, key, keySource: resolved?.source, config };
     const modelsFingerprint = hash({ key, baseURL: config.baseURL });
@@ -243,7 +252,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       revision: this._revision, apiKeyConfigured: Boolean(state.key?.trim()),
       ...(state.keySource ? { apiKeySource: state.keySource } : {}),
       ...(this._quota.source ? { sessionSource: this._quota.source } : {}),
-      quota: this._quota, login: this._login.status(), config: state.config, guardedTurns: this.guardedTurns,
+      quota: this._quota, login: this._login.status(), config: { ...state.config, apiKeyEnv: state.config.apiKeyEnv ?? '' }, guardedTurns: this.guardedTurns,
       ...(this.turnMonitorStatus ? { turnMonitor: this.turnMonitorStatus() } : {}),
       models: this._models.map(row => {
         const { id, name, group, contextWindow, maxOutputTokens, inputModalities } = row;
@@ -496,7 +505,7 @@ export function apply(ctx: Context, config: LiveConfig): void {
   ctx.llm.registerModelDiscovery(SETTINGS_NS, async (request, signal) => {
     if (request.provider !== undefined && ![PLAN_PROVIDER, PAID_PROVIDER].includes(request.provider)) throw new LlmError('不是本插件的模型通道', 'INVALID_REQUEST');
     const config = current();
-    const key = request.apiKey ?? await service.resolveApiKey(config.apiKeyEnv, config.baseURL);
+    const key = request.apiKey ?? await service.resolveApiKey(apiKeyRef(config), config.baseURL);
     if (!key) throw new LlmError('请先配置 CoRouter API Key', 'MISSING_CREDENTIAL');
     // Model discovery is always OpenAI-compatible, irrespective of request.api or inference protocol.
     const models = await fetchModelCatalog(config.baseURL, key, signal);
@@ -506,8 +515,8 @@ export function apply(ctx: Context, config: LiveConfig): void {
     });
   });
   ctx.llm.registerConfigurableProviders([
-    { provider: PLAN_PROVIDER, displayName: 'OpenDesign CoRouter · 套餐赠送', settingsNs: SETTINGS_NS, settingsPath: [], defaultBaseURL: current().baseURL },
-    { provider: PAID_PROVIDER, displayName: 'OpenDesign CoRouter · 付费模型', settingsNs: SETTINGS_NS, settingsPath: [], defaultBaseURL: current().baseURL },
+    { provider: PLAN_PROVIDER, displayName: 'OpenDesign CoRouter · 套餐赠送', settingsNs: SETTINGS_NS, settingsPath: [], defaultBaseURL: current().baseURL, nativeAuth: NATIVE_AUTH },
+    { provider: PAID_PROVIDER, displayName: 'OpenDesign CoRouter · 付费模型', settingsNs: SETTINGS_NS, settingsPath: [], defaultBaseURL: current().baseURL, nativeAuth: NATIVE_AUTH },
   ]);
   ctx.effect(() => () => { adapter.dispose(); replayKeys.dispose(); });
 }

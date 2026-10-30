@@ -9,8 +9,17 @@ export const SETTINGS_NS = 'llm-opendesign-corouter';
 export const PLAN_PROVIDER = 'opendesign-corouter-plan';
 export const PAID_PROVIDER = 'opendesign-corouter-paid';
 export const DEFAULT_BASE_URL = 'https://amr-link.open-design.ai/v1';
+/**
+ * Reference resolved when no profile names one.
+ *
+ * The Host's model page reads a *named* reference out of this namespace and reports it as
+ * missing whenever that reference holds nothing, so an unset owner must stay unset: a schema
+ * default would claim the reference on every install and make the native page warn about a key
+ * the plugin never asked for. The plugin keeps using this default internally.
+ */
+export const DEFAULT_API_KEY_REF = 'COROUTER_API_KEY';
 export const Config = Schema.object({
-  apiKeyEnv: Schema.string().max(128).pattern(/^[A-Za-z_][A-Za-z0-9_]*$/u).default('COROUTER_API_KEY').description('CoRouter API Key 的环境变量或 DSH 凭据引用名').volatile(),
+  apiKeyEnv: Schema.string().max(128).pattern(/^[A-Za-z_][A-Za-z0-9_]*$/u).description(`CoRouter API Key 的环境变量或 DSH 凭据引用名；不设置时使用 ${DEFAULT_API_KEY_REF}`).volatile(),
   baseURL: Schema.transform(Schema.string(), serializableTransform(assertBaseURL)).default(DEFAULT_BASE_URL).description('CoRouter 网关地址；不用于控制台登录或额度查询').volatile(),
   apiProtocol: Schema.union(API_PROTOCOL_IDS).default('chat-completions').description('网关支持的推理协议；模型目录通过该网关的兼容接口读取').volatile(),
   modelSettings: Schema.transform(Schema.dict(Schema.any<unknown>()), serializableTransform(parseModelSettingsMap)).default({}).description('逐模型启用状态、图片输入和请求参数').volatile(),
@@ -27,7 +36,9 @@ export const Config = Schema.object({
 });
 export type LiveConfig = ReturnType<typeof Config>;
 export interface RuntimeConfig {
-  apiKeyEnv: string; baseURL: string; useDesktopCredential: boolean; emptyTurnGuard: boolean; requestTimeoutMs: number; streamIdleTimeoutMs: number;
+  /** Credential reference this profile names; absent when the profile names none. */
+  apiKeyEnv?: string;
+  baseURL: string; useDesktopCredential: boolean; emptyTurnGuard: boolean; requestTimeoutMs: number; streamIdleTimeoutMs: number;
   apiProtocol?: ApiProtocol;
   modelSettings?: ModelSettingsMap;
   modelCatalog?: ModelCatalogSnapshot;
@@ -48,10 +59,18 @@ export function assertBaseURL(raw: string): string {
   if (normalized.length > 2048) throw new Error('推理 Base URL 最多允许 2048 字符');
   return normalized;
 }
+/** The reference requests resolve when the profile names none; the profile itself stays unnamed. */
+export function apiKeyRef(config: RuntimeConfig): string {
+  const named = config.apiKeyEnv;
+  // A hand-edited patch can persist an empty name the schema never accepts; treat it as unnamed.
+  return named === undefined || named === '' ? DEFAULT_API_KEY_REF : named;
+}
 export function readConfig(config: LiveConfig): RuntimeConfig {
   const modelCatalog = parseModelCatalogSnapshot(config.modelCatalog.get());
+  const apiKeyEnv = config.apiKeyEnv.get();
   return {
-    apiKeyEnv: config.apiKeyEnv.get(), baseURL: assertBaseURL(config.baseURL.get()),
+    ...(apiKeyEnv === undefined ? {} : { apiKeyEnv }),
+    baseURL: assertBaseURL(config.baseURL.get()),
     apiProtocol: config.apiProtocol.get(), modelSettings: parseModelSettingsMap(config.modelSettings.get()),
     ...(modelCatalog === undefined ? {} : { modelCatalog }),
     quotaRefreshSeconds: config.quotaRefreshSeconds.get(),

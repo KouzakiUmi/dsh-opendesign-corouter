@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
-import { Config, assertBaseURL, readConfig } from '../src/config.js';
+import { Config, DEFAULT_API_KEY_REF, apiKeyRef, assertBaseURL, readConfig } from '../src/config.js';
 import Schema from '@deepseek-ai/schemastery';
-import { volatileForm } from '../node_modules/@deepseek-ai/dsh-settings/lib/types/schema.js';
+import { projectForm, volatileForm } from '../node_modules/@deepseek-ai/dsh-settings/lib/types/schema.js';
 test('configuration rejects unsafe URLs before persistence and exposes live defaults', () => {
   const config = readConfig(Config({}));
   assert.equal(config.emptyTurnGuard, true);
@@ -18,6 +18,8 @@ test('configuration rejects unsafe URLs before persistence and exposes live defa
   assert.deepEqual(config.modelSettings, {});
   assert.equal(config.quotaRefreshSeconds, 60);
   assert.equal(config.maxRequestImageBytes, 20 * 1024 * 1024);
+  assert.equal(config.apiKeyEnv, undefined);
+  assert.equal(apiKeyRef(config), DEFAULT_API_KEY_REF);
   assert.equal(assertBaseURL('https://example.com/v1/'), 'https://example.com/v1');
   for (const baseURL of ['https://user:password@example.com/v1', 'https://example.com/v1?secret=fixture', 'https://example.com/v1#fragment', 'http://example.com/v1', 'not a URL']) assert.throws(() => Config({ baseURL }));
   assert.equal(readConfig(Config({ baseURL: 'http://127.0.0.1:8080/v1' })).baseURL, 'http://127.0.0.1:8080/v1');
@@ -35,6 +37,27 @@ test('configuration rejects unsafe URLs before persistence and exposes live defa
   assert.equal(readConfig(Config({ maxRequestImageBytes: 8 * 1024 * 1024 })).maxRequestImageBytes, 8 * 1024 * 1024);
   assert.throws(() => Config({ maxRequestImageBytes: 1024 * 1024 - 1 }));
   assert.throws(() => Config({ maxRequestImageBytes: 100 * 1024 * 1024 + 1 }));
+});
+
+test('an unset key reference stays unnamed for the Host model page while requests still resolve one', () => {
+  // The Host model page reads a *named* credential reference out of this namespace and reports
+  // that reference as missing; a schema default would claim one on every install.
+  assert.equal(Config({}).apiKeyEnv.get(), undefined);
+  const form = volatileForm(Config);
+  assert.ok(form);
+  // Project the live value itself, exactly as the Host does: a schema default reappears here.
+  const projected = projectForm(form, readConfig(Config({}))) as Record<string, unknown>;
+  assert.equal(Object.prototype.hasOwnProperty.call(projected, 'apiKeyEnv'), false);
+  const projectedNamed = projectForm(form, readConfig(Config({ apiKeyEnv: 'TEAM_KEY' }))) as Record<string, unknown>;
+  assert.equal(projectedNamed.apiKeyEnv, 'TEAM_KEY');
+  // A profile that names a reference keeps projecting it: that is the reference the page reports on.
+  assert.equal((projectForm(form, { apiKeyEnv: 'TEAM_KEY' }) as Record<string, unknown>).apiKeyEnv, 'TEAM_KEY');
+  // Requests keep a reference without a named one: only the profile and the projection drop it.
+  assert.equal(apiKeyRef(readConfig(Config({}))), DEFAULT_API_KEY_REF);
+  // A hand-edited patch can persist an empty name the schema rejects; requests still resolve one.
+  assert.equal(apiKeyRef({ ...readConfig(Config({})), apiKeyEnv: '' }), DEFAULT_API_KEY_REF);
+  assert.equal(readConfig(Config({ apiKeyEnv: 'TEAM_KEY' })).apiKeyEnv, 'TEAM_KEY');
+  assert.equal(apiKeyRef(readConfig(Config({ apiKeyEnv: 'TEAM_KEY' }))), 'TEAM_KEY');
 });
 
 type DecodedConfig = (value: Parameters<typeof Config>[0]) => ReturnType<typeof readConfig>;
@@ -125,7 +148,7 @@ test('fresh-VM settings retain URL, model allowlist, bounds and safe errors', ()
 
 test('Host and JSON-decoded string bounds match the status transport', () => {
   for (const validate of [(value: Parameters<typeof Config>[0]) => readConfig(Config(value)), rehydrateInFreshVM()]) {
-    assert.equal(validate({ apiKeyEnv: 'A'.repeat(128) }).apiKeyEnv.length, 128);
+    assert.equal(validate({ apiKeyEnv: 'A'.repeat(128) }).apiKeyEnv?.length, 128);
     assert.throws(() => validate({ apiKeyEnv: 'A'.repeat(129) }));
     const baseURL = `https://example.com/${'a'.repeat(2028)}`;
     assert.equal(baseURL.length, 2048);

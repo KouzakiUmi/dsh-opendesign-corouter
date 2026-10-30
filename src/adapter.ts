@@ -5,7 +5,7 @@ import {
 } from '@deepseek-ai/dsh-llm';
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
 import { MODELS, type CatalogModel } from './catalog.js';
-import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, PLAN_PROVIDER, PAID_PROVIDER, type RuntimeConfig } from './config.js';
+import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, PLAN_PROVIDER, PAID_PROVIDER, apiKeyRef, type RuntimeConfig } from './config.js';
 import { chatMessages, chatTools, estimateTokens } from './conversion.js';
 import { gatewayError } from './stream.js';
 import { combinedSignal } from './util.js';
@@ -132,9 +132,10 @@ export class CoRouterAdapter extends LlmAdapter {
       validateClaudeSampling(row.id, options.temperature ?? setting.temperature, setting.topP);
       validateClaudeOutput(row.id, options.maxTokens ?? setting.maxTokens);
     }
-    const raw = await this.options.apiKey(config.apiKeyEnv, config.baseURL);
+    const keyRef = apiKeyRef(config);
+    const raw = await this.options.apiKey(keyRef, config.baseURL);
     if (!raw) throw new LlmError('未配置当前网关的推理凭据；请完成设备授权或配置对应 API Key', 'MISSING_CREDENTIAL');
-    const key = assertUsableApiKey(raw, 'dsh-opendesign-corouter', config.apiKeyEnv);
+    const key = assertUsableApiKey(raw, 'dsh-opendesign-corouter', keyRef);
     signal.throwIfAborted();
     let credentialIdentity: string | undefined;
     if (protocolId === 'messages') {

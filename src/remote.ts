@@ -39,7 +39,7 @@ export interface StatusConfig {
   turnCompletionReview?: boolean;
   useDesktopCredential: boolean;
   baseURL: string;
-  /** Credential reference name (an env var or a DSH credential ref), never the value. */
+  /** Credential reference name (an env var or a DSH credential ref), never the value; empty when the profile names none. */
   apiKeyEnv: string;
   apiProtocol?: ApiProtocol;
   modelSettings?: ModelSettingsMap;
@@ -312,8 +312,12 @@ function parseStatusModel(value: unknown): StatusModel {
 
 function parseStatusConfig(value: unknown): StatusConfig {
   if (!record(value)) throw new Error('配置视图必须是对象');
-  const apiKeyEnv = text(value.apiKeyEnv, '凭据引用名', MAX_ENV_REF);
-  if (!ENV_REF.test(apiKeyEnv)) throw new Error('凭据引用名必须是合法标识符');
+  // An empty name means the profile names none; requests then use the plugin's own default.
+  if (typeof value.apiKeyEnv !== 'string' || value.apiKeyEnv.length > MAX_ENV_REF) {
+    throw new Error(`凭据引用名必须是最多 ${MAX_ENV_REF} 字符的字符串`);
+  }
+  const apiKeyEnv = value.apiKeyEnv;
+  if (apiKeyEnv !== '' && !ENV_REF.test(apiKeyEnv)) throw new Error('凭据引用名必须是合法标识符');
   return {
     emptyTurnGuard: flag(value.emptyTurnGuard, '空轮保护开关'),
     ...(value.turnCompletionReview === undefined ? {} : { turnCompletionReview: flag(value.turnCompletionReview, '结束回合核验开关') }),

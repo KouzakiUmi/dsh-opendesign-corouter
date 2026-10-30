@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import { Context } from '@deepseek-ai/cordis';
 import { CredentialProvider, type CredentialKey, type CredentialRecord, type CredentialRef } from '@deepseek-ai/dsh-credentials';
 import { OpenDesignCoRouterService, type HostDependencies } from '../src/index.js';
+import { parseStatus } from '../src/remote.js';
 import type { RuntimeConfig } from '../src/config.js';
 import { ConsoleError, type QuotaSnapshot } from '../src/quota.js';
 class MemoryCredentials extends CredentialProvider {
   readonly data = new Map<CredentialKey, CredentialRecord>();
   constructor(ctx: Context) { super(ctx); }
-  async resolve(_ref: CredentialRef) { return undefined; }
+  readonly resolved: string[] = [];
+  async resolve(ref: CredentialRef) { this.resolved.push(String(ref)); return undefined; }
   async describe(_ref: CredentialRef) { return { configured: false, writable: true }; }
   async set(_ref: CredentialRef, _value: string) { throw new Error('references are not written'); }
   async unset(_ref: CredentialRef) { throw new Error('references are not written'); }
@@ -57,6 +59,23 @@ test('status preserves catalog modality evidence separately from the saved overr
     assert.equal(result.models.find(model => model.id === 'muse-wonder')?.inputModalities, undefined);
     assert.equal(result.config.modelSettings?.['gpt-6.1-sol']?.imageInput, false);
     assert.equal(result.config.modelSettings?.['muse-wonder']?.imageInput, true);
+  } finally { await fiber.dispose(); await credentials.dispose(); }
+});
+
+test('an unnamed reference reaches the client as an empty field while requests keep the default one', async () => {
+  const ctx = new Context();
+  const credentials = await ctx.plugin(MemoryCredentials);
+  const store = ctx.credentials as MemoryCredentials;
+  // The profile names nothing: the Host model page then gets no reference to report as missing.
+  const { apiKeyEnv: _named, ...unnamed } = config;
+  const fiber = await ctx.plugin(scope => { new OpenDesignCoRouterService(scope, () => unnamed, dependencies([])); });
+  try {
+    const result = await ctx.openDesignCoRouter.status();
+    assert.equal(result.config.apiKeyEnv, '');
+    // Requests still resolve the plugin's own default reference with nothing named.
+    assert.ok(store.resolved.includes('COROUTER_API_KEY'));
+    // The browser transport accepts that empty field verbatim.
+    assert.equal(parseStatus(JSON.parse(JSON.stringify(result))).config.apiKeyEnv, '');
   } finally { await fiber.dispose(); await credentials.dispose(); }
 });
 
