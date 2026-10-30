@@ -1310,9 +1310,12 @@ export function Advanced({ status, formSnapshot, setFormField, clearFormField, p
   const [apiKeyEnv, setApiKeyEnv] = React.useState(status?.config.apiKeyEnv ?? '');
   const [keyNotice, setKeyNotice] = React.useState<Notice | null>(null);
   const mounted = useMounted();
+  // The form is the authority once it is ready: a missing field means "unnamed", so a cleared
+  // reference never falls back to the name the last status read still carries.
+  const formReady = formSnapshot.status === 'ready' && formSnapshot.value !== undefined;
   React.useEffect(() => {
-    setApiKeyEnv(formSnapshot.value?.apiKeyEnv ?? status?.config.apiKeyEnv ?? '');
-  }, [formSnapshot.value?.apiKeyEnv, status?.config.apiKeyEnv]);
+    setApiKeyEnv(formReady ? (formSnapshot.value?.apiKeyEnv ?? '') : (status?.config.apiKeyEnv ?? ''));
+  }, [formReady, formSnapshot.value?.apiKeyEnv, status?.config.apiKeyEnv]);
   const writable = formSnapshot.status === 'ready' && formSnapshot.value !== undefined && formSnapshot.writable;
   const configuredProtocol = formSnapshot.value?.apiProtocol ?? status?.config.apiProtocol;
   const protocol = configuredProtocol !== undefined && API_PROTOCOL_OPTIONS.some(option => option.id === configuredProtocol)
