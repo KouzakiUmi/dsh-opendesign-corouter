@@ -1,6 +1,6 @@
 # 第三方代码与资料
 
-本项目的消息/图片兼容处理、套餐模型元数据参考 [dsh-opendesign-go 0.1.9](https://github.com/EliteOtaku/dsh-opendesign-go)。额度归一化及登录生命周期的基础处理改编自 [dsh-subusage 0.16.2](https://github.com/KouzakiUmi/dsh-subusage)；临时授权窗口的 Chrome 启动策略改编自 [dsh-subusage 0.16.3](https://github.com/KouzakiUmi/dsh-subusage) 的 `lib/cookie-login.js`。空轮判定参考 [dsh-empty-turn-guard 0.4.0](https://github.com/FYTXY/dsh-empty-turn-guard)。设置布局参考 [dsh-code-pill](https://github.com/KouzakiUmi/dsh-code-pill)。
+本项目的消息/图片兼容处理、套餐模型元数据、思考增量拼写兼容与配置写入的重试策略参考 [dsh-opendesign-go 0.1.11](https://github.com/EliteOtaku/dsh-opendesign-go)。额度归一化及登录生命周期的基础处理改编自 [dsh-subusage 0.16.2](https://github.com/KouzakiUmi/dsh-subusage)；临时授权窗口的 Chrome 启动策略改编自 [dsh-subusage 0.16.3](https://github.com/KouzakiUmi/dsh-subusage) 的 `lib/cookie-login.js`。空轮判定参考 [dsh-empty-turn-guard 0.4.0](https://github.com/FYTXY/dsh-empty-turn-guard)。设置布局参考 [dsh-code-pill](https://github.com/KouzakiUmi/dsh-code-pill)。
 
 离线主题夹具使用 [DeepSeek Harness 官方主题令牌](https://github.com/deepseek-ai/deepseek-harness/blob/22ddee3792402c3e70ec5f86a63c3e3e895a2f60/packages/client/ui-theme/src/styles/design-platform.css)，仅供测试，不随插件安装包分发。
 

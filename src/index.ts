@@ -37,6 +37,8 @@ export const name = 'llm-opendesign-corouter';
 export const inject = ['llm'];
 const API_KEY = credentialKey(name, 'api-key');
 const SESSION = credentialKey(name, 'console');
+/** The Host settings service's revision-conflict code (`SettingsConflictError.code`). */
+const SETTINGS_CONFLICT = 'SETTINGS_CONFLICT';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value) ?? '').digest('hex');
 /** The persisted catalog snapshot never participates in revision or login fingerprints. */
 const stableConfig = (config: ReturnType<typeof readConfig>): ReturnType<typeof readConfig> => {
@@ -165,6 +167,10 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
    * Persist the snapshot through the Host form service.
    * `unsupported` means no settings service is composed (nothing to report);
    * `unavailable` means the service exists but exposes no writable form for this plugin.
+   *
+   * A settings write rewrites the whole composed profile and may rebuild the plugin tree, so
+   * only a concurrent revision conflict (`SETTINGS_CONFLICT`) is worth re-reading the revision
+   * and trying once more. Every other failure repeats identically and is reported immediately.
    */
   private async _persistModels(value: ModelCatalogSnapshot): Promise<'saved' | 'unsupported' | 'unavailable' | 'failed'> {
     const settings = this.ctx.get('settings') as unknown as SettingsWriter | undefined;
@@ -177,7 +183,9 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       try {
         await settings.update(SETTINGS_NS, { modelCatalog: value }, descriptor.revision);
         return 'saved';
-      } catch { /* Retry once on a concurrent settings revision; the live catalog is unaffected. */ }
+      } catch (error) {
+        if (attempt > 0 || !record(error) || error.code !== SETTINGS_CONFLICT) return 'failed';
+      }
     }
     return 'failed';
   }

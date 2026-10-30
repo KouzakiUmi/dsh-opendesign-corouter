@@ -33,6 +33,23 @@ export function tokenUsage(value: Record<string, unknown>): TokenUsage | undefin
   };
 }
 
+/**
+ * 推理增量的三种已知拼写：`reasoning_content`、`reasoning` 与结构化的
+ * `reasoning_details[].text`。
+ *
+ * 网关常把同一段增量同时写进多个拼写，因此只取第一个有内容的那一种；同一拼写内部的
+ * 多个分片才拼接。漏读某个拼写会让思考块永远打不开，模型的整段输出随之丢失，最终
+ * 表现为没有原因的空响应。
+ */
+function reasoningDelta(delta: Record<string, unknown>): string {
+  if (typeof delta.reasoning_content === 'string' && delta.reasoning_content !== '') return delta.reasoning_content;
+  if (typeof delta.reasoning === 'string' && delta.reasoning !== '') return delta.reasoning;
+  if (!Array.isArray(delta.reasoning_details)) return '';
+  let text = '';
+  for (const part of delta.reasoning_details) if (record(part) && typeof part.text === 'string') text += part.text;
+  return text;
+}
+
 interface OpenText { index: number; text: string }
 interface OpenTool { index: number; id: string; name: string; arguments: string; started: boolean }
 
@@ -66,9 +83,9 @@ export async function* consumeSse(body: ReadableStream<Uint8Array>, signal: Abor
     if (!record(choice)) throw new LlmError('OpenDesign：无效的流式选项', 'INVALID_RESPONSE');
     const delta = record(choice.delta) ? choice.delta : {};
     const out: StreamChunk[] = [];
-    const hasDelta = typeof delta.content === 'string' && delta.content !== '' || typeof delta.reasoning_content === 'string' && delta.reasoning_content !== '' || Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0;
+    const thinking = reasoningDelta(delta);
+    const hasDelta = typeof delta.content === 'string' && delta.content !== '' || thinking !== '' || Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0;
     if (finish && hasDelta) throw new LlmError('OpenDesign：响应结束后仍收到内容', 'INVALID_RESPONSE');
-    const thinking = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : typeof delta.reasoning === 'string' ? delta.reasoning : '';
     if (thinking) {
       if (!reasoning) { reasoning = { index: nextIndex++, text: '' }; count++; out.push({ type: 'block-start', index: reasoning.index, blockType: 'reasoning' }); }
       reasoning.text += thinking;

@@ -15,6 +15,19 @@ test('SSE preserves split UTF8, CRLF, reasoning, and disjoint cache usage', asyn
   assert.deepEqual(chunks.at(-2), { type: 'usage', usage: { inputTokens: 70, outputTokens: 20, totalTokens: 120, cacheReadTokens: 30, reasoningTokens: 5 } });
   assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } });
 });
+test('structured reasoning_details is a third reasoning spelling and is never double counted', async () => {
+  // The gateway writes the same delta into `reasoning` and the structured array; only the first
+  // non-empty spelling counts, so the thinking block keeps the real text exactly once.
+  const raw = event({ choices: [{ delta: { reasoning_details: [{ type: 'reasoning.text', text: '想' }, { text: '一' }, { text: 7 }, null] } }] })
+    + event({ choices: [{ delta: { reasoning: '再三', reasoning_details: [{ text: '再三' }] } }] })
+    + event({ choices: [{ delta: { content: '答' } }] })
+    + event({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+  const chunks = await collect(raw);
+  assert.deepEqual(chunks.filter(x => x.type === 'reasoning-delta').map(x => x.text), ['想一', '再三']);
+  assert.deepEqual(chunks.filter(x => x.type === 'block-end').map(x => x.block), [{ type: 'reasoning', text: '想一再三' }, { type: 'text', text: '答' }]);
+  // Content after the terminal event is rejected in every spelling, including the structured one.
+  await assert.rejects(collect(event({ choices: [{ delta: { reasoning_details: [{ text: '前' }] }, finish_reason: 'stop' }] }) + event({ choices: [{ delta: { reasoning_details: [{ text: '尾' }] } }] })), { code: 'INVALID_RESPONSE' });
+});
 test('parallel tool calls and delayed ids retain all argument fragments', async () => {
   const raw = event({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{' } }, { index: 1, id: 'b', function: { name: 'second', arguments: '{}' } }] } }] }) + event({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'a', function: { name: 'first', arguments: '}' } }] } }] }) + event({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
   const chunks = await collect(raw);

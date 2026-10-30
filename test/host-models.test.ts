@@ -44,13 +44,20 @@ class MemorySettings extends Service {
   /** Hold every write until released, so concurrent refreshes overlap. */
   gate: Promise<void> | undefined;
   writes: Record<string, unknown>[] = [];
+  /** Every `update()` call, including the ones rejected by a conflict or a failure. */
+  attempts = 0;
+  /** Simulate a competing writer: the next N writes observe a stale revision. */
+  concurrentWrites = 0;
   onWrite: ((patch: Record<string, unknown>) => void) | undefined;
   constructor(ctx: Context) { super(ctx, 'settings'); }
   describe() { return this.hidden ? [] : [{ ns: SETTINGS_NS, revision: this.revision }]; }
   async update(_ns: string, patch: object, expected?: number) {
+    this.attempts++;
     if (this.gate) await this.gate;
     if (this.fail) throw new Error('fixture settings write failed');
-    if (expected !== undefined && expected !== this.revision) throw new Error('fixture revision conflict');
+    if (this.concurrentWrites > 0) { this.concurrentWrites--; this.revision++; }
+    // The Host raises `SettingsConflictError`; its code is the stable discriminator.
+    if (expected !== undefined && expected !== this.revision) throw Object.assign(new Error('fixture revision conflict'), { code: 'SETTINGS_CONFLICT' });
     this.revision++;
     this.patch = { ...this.patch, ...patch };
     this.writes.push({ ...patch });
@@ -552,6 +559,51 @@ test('a failing settings write keeps the live catalog and reports the unsaved st
     let error: string | undefined;
     for (let index = 0; index < 200 && error === undefined; index++) error = (await service.status()).modelsError;
     assert.equal(error, '模型目录已更新，但保存失败；重启后需要重新刷新。');
+    assert.deepEqual(service.modelCatalog().map(model => model.id), ['deepseek-v4.1-flash']);
+  } finally { await dispose(); }
+});
+
+test('a rejected settings write is reported without being repeated', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  const { service, settings, dispose } = await host(current, hostDependencies(calls, () => list('deepseek-v4.1-flash')), true);
+  if (settings) settings.fail = true;
+  try {
+    await saveFixtureKey(service);
+    await service.refreshModels();
+    let error: string | undefined;
+    for (let index = 0; index < 200 && error === undefined; index++) error = (await service.status()).modelsError;
+    assert.equal(error, '模型目录已更新，但保存失败；重启后需要重新刷新。');
+    // Only a revision conflict is transient; a rejected write repeats identically.
+    assert.equal(settings?.attempts, 1);
+  } finally { await dispose(); }
+});
+
+test('a concurrent revision conflict is retried once and still persists the catalog', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  const { service, settings, dispose } = await host(current, hostDependencies(calls, () => list('deepseek-v4.1-flash')), true);
+  if (settings) settings.concurrentWrites = 1;
+  try {
+    await saveFixtureKey(service);
+    await service.refreshModels();
+    await waitFor(() => settings !== undefined && settings.writes.length === 1);
+    assert.equal(settings?.attempts, 2);
+    assert.equal((settings?.patch.modelCatalog as ModelCatalogSnapshot).baseURL, BASE);
+    assert.equal((await service.status()).modelsError, undefined);
+  } finally { await dispose(); }
+});
+
+test('a settings write that keeps conflicting gives up after one retry', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  const { service, settings, dispose } = await host(current, hostDependencies(calls, () => list('deepseek-v4.1-flash')), true);
+  if (settings) settings.concurrentWrites = 10;
+  try {
+    await saveFixtureKey(service);
+    await service.refreshModels();
+    let error: string | undefined;
+    for (let index = 0; index < 200 && error === undefined; index++) error = (await service.status()).modelsError;
+    assert.equal(error, '模型目录已更新，但保存失败；重启后需要重新刷新。');
+    assert.equal(settings?.attempts, 2);
+    assert.deepEqual(settings?.writes, []);
     assert.deepEqual(service.modelCatalog().map(model => model.id), ['deepseek-v4.1-flash']);
   } finally { await dispose(); }
 });
