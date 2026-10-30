@@ -72,6 +72,10 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
     let modelsUpdatedAt;
     let modelsError;
     let snapshot = { status: 'ready', writable: true, value: config };
+    // A frozen status view lets a test hold the last read while the form moves on.
+    let frozenStatusConfig;
+    window.__freezeStatusConfig = () => { frozenStatusConfig = { ...config, apiKeyEnv: config.apiKeyEnv ?? '' }; };
+    window.__unfreezeStatusConfig = () => { frozenStatusConfig = undefined; };
     const listeners = new Set(), disposers = [];
     window.__holdQuota = true;
     window.__holdSaves = false;
@@ -90,7 +94,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
       const value = {
         revision: 'fixture-revision', apiKeyConfigured: true, apiKeySource, sessionSource: 'login', quota, login, guardedTurns: 2,
         // The Host sends an empty string when the profile names no reference.
-        config: { ...config, apiKeyEnv: config.apiKeyEnv ?? '' },
+        config: frozenStatusConfig ?? { ...config, apiKeyEnv: config.apiKeyEnv ?? '' },
         ...(turnMonitor === undefined ? {} : { turnMonitor }),
         models: models.map(model => ({ ...model, enabled: config.modelSettings?.[model.id]?.enabled ?? model.enabled ?? true })),
         modelsSource,
@@ -1174,11 +1178,14 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.getByRole('button', { name: '保存引用名', exact: true }).click();
   await page.waitForFunction(() => window.__config.apiKeyEnv === 'COROUTER_FIXTURE_REF');
   // An empty field means "name nothing": saving it drops the saved name instead of storing one.
+  // The status view is frozen here, so a field that fell back to it would show the old name.
+  await page.evaluate(() => window.__freezeStatusConfig());
   await reference.fill('');
   await page.getByRole('button', { name: '保存引用名', exact: true }).click();
   await page.waitForFunction(() => window.__config.apiKeyEnv === undefined);
-  assert.equal(await reference.inputValue(), '', 'a cleared name leaves the field blank');
+  assert.equal(await reference.inputValue(), '', 'a cleared name leaves the field blank, even against a stale status read');
   assert.equal(await reference.getAttribute('placeholder'), 'COROUTER_API_KEY', 'the default reference stays visible as a placeholder');
+  await page.evaluate(() => window.__unfreezeStatusConfig());
   await reference.fill('COROUTER_FIXTURE_REF');
   await page.getByRole('button', { name: '保存引用名', exact: true }).click();
   await page.waitForFunction(() => window.__config.apiKeyEnv === 'COROUTER_FIXTURE_REF');

@@ -1334,17 +1334,28 @@ export function Advanced({ status, formSnapshot, setFormField, clearFormField, p
   const saveKeyRef = async () => {
     const value = apiKeyEnv.trim();
     if (value === '') {
+      const saved = formReady ? formSnapshot.value?.apiKeyEnv : undefined;
+      if (saved === undefined) {
+        setKeyNotice({ kind: 'status', text: `当前未填写引用名；请求沿用默认引用 ${DEFAULT_KEY_REF}，无需保存。` });
+        return;
+      }
       // An empty field means "name nothing": drop the saved name instead of storing an empty one.
       setKeyNotice(null);
       try {
         const cleared = await clearFormField('apiKeyEnv');
         if (mounted.current) {
-          setKeyNotice(cleared
-            ? { kind: 'status', text: `已清除引用名；请求沿用默认引用 ${DEFAULT_KEY_REF}。` }
-            : { kind: 'error', text: '引用名未清除，请重试。' });
+          if (cleared) setKeyNotice({ kind: 'status', text: `已清除引用名；请求沿用默认引用 ${DEFAULT_KEY_REF}。` });
+          else {
+            // A refused clear leaves the saved name in place, so the field shows it again.
+            setApiKeyEnv(saved);
+            setKeyNotice({ kind: 'error', text: '引用名未清除，已保留原值，请重试。' });
+          }
         }
       } catch {
-        if (mounted.current) setKeyNotice({ kind: 'error', text: GENERIC_ERROR });
+        if (mounted.current) {
+          setApiKeyEnv(saved);
+          setKeyNotice({ kind: 'error', text: GENERIC_ERROR });
+        }
       }
       return;
     }

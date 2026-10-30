@@ -48,10 +48,14 @@ class FakeForm implements ConfigForm {
     this.clears.push(field);
     if (this.outcome === 'throw') return Promise.reject(new Error('clear failed'));
     if (this.outcome === 'reject') return Promise.resolve(false);
-    const next: Record<string, unknown> = { ...this.value };
-    Reflect.deleteProperty(next, field);
-    this.value = next as FormValues;
-    this.notify();
+    const apply = () => {
+      const next: Record<string, unknown> = { ...this.value };
+      Reflect.deleteProperty(next, field);
+      this.value = next as FormValues;
+      this.notify();
+    };
+    if (this.manual) return new Promise<boolean>((resolve) => { this.pending.push(() => { apply(); resolve(true); }); });
+    apply();
     return Promise.resolve(true);
   }
 
@@ -302,6 +306,15 @@ test('a cleared field is dropped by the Host instead of being written as a value
     // The form snapshot is authoritative again, so the control falls back to the unnamed state.
     assert.deepEqual(writes.getSnapshot(), { pendingFields: [], pendingValues: {} });
     assert.equal(Object.prototype.hasOwnProperty.call(form.getSnapshot().value, 'apiKeyEnv'), false);
+    // A queued clear locks the field without projecting a value for it.
+    form.value = { apiKeyEnv: 'TEAM_KEY' } as FormValues;
+    form.manual = true;
+    const queued = writes.clear('apiKeyEnv');
+    await flush();
+    assert.deepEqual(writes.getSnapshot(), { pendingFields: ['apiKeyEnv'], pendingValues: {} });
+    form.release();
+    form.manual = false;
+    assert.equal(await queued, true);
     // A rejected clear rolls back and stays retryable, like any other write.
     form.value = { apiKeyEnv: 'TEAM_KEY' } as FormValues;
     form.outcome = 'reject';

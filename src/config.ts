@@ -59,7 +59,12 @@ export function assertBaseURL(raw: string): string {
   if (normalized.length > 2048) throw new Error('推理 Base URL 最多允许 2048 字符');
   return normalized;
 }
-/** The reference requests resolve when the profile names none; the profile itself stays unnamed. */
+/**
+ * The reference requests resolve when the profile names none; the profile itself stays unnamed.
+ *
+ * No default and no inherited value: a patch that leaves this field out keeps the profile
+ * unnamed, which is also what lets the settings page clear it instead of writing a name back.
+ */
 export function apiKeyRef(config: RuntimeConfig): string {
   const named = config.apiKeyEnv;
   // A hand-edited patch can persist an empty name the schema never accepts; treat it as unnamed.
