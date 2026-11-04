@@ -170,6 +170,9 @@ test('the persisted gateway catalog snapshot is validated and survives rehydrati
   };
   assert.equal(readConfig(Config({})).modelCatalog, undefined);
   assert.deepEqual(readConfig(Config({ modelCatalog: snapshot })).modelCatalog, snapshot);
+  // A documented default survives only when it belongs to that row's own effort list.
+  const withDefault = { ...snapshot, models: [{ ...snapshot.models[0], defaultEffort: 'high' }, snapshot.models[1]] };
+  assert.deepEqual(readConfig(Config({ modelCatalog: withDefault })).modelCatalog, withDefault);
   const invalid: unknown[] = [
     null, [], 'snapshot',
     { ...snapshot, baseURL: '' },
@@ -187,12 +190,17 @@ test('the persisted gateway catalog snapshot is validated and survives rehydrati
     { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', inputModalities: [] }] },
     { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', inputModalities: ['image'] }] },
     { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', inputModalities: ['text', 'text'] }] },
+    // Core rejects a default outside its own effort list, so a snapshot must not restore one.
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', defaultEffort: 'low' }] },
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', reasoningEfforts: ['low', 'high'], defaultEffort: 'medium' }] },
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', reasoningEfforts: ['low'], defaultEffort: 'x'.repeat(33) }] },
     ...['__proto__', 'constructor', 'prototype'].map(id => ({ ...snapshot, models: [{ id, name: 'X', group: 'paid' }] })),
     { ...snapshot, models: Array.from({ length: 513 }, (_, index) => ({ id: `model-${index}`, name: `Model ${index}`, group: 'paid' })) },
   ];
   for (const modelCatalog of invalid) assert.equal(readConfig(Config({ modelCatalog })).modelCatalog, undefined);
   for (const validate of [(value: Parameters<typeof Config>[0]) => readConfig(Config(value)), rehydrateInFreshVM()]) {
     assert.deepEqual(JSON.parse(JSON.stringify(validate({ modelCatalog: snapshot }).modelCatalog)), snapshot);
+    assert.deepEqual(JSON.parse(JSON.stringify(validate({ modelCatalog: withDefault }).modelCatalog)), withDefault);
     assert.equal(validate({ modelCatalog: { models: 'nope' } }).modelCatalog, undefined);
   }
 });

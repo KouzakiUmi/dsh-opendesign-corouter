@@ -537,6 +537,25 @@ test('a successful discovery persists its catalog and the next Host start restor
   } finally { await dispose(); }
 });
 
+test('an older snapshot without a documented default is completed from the built-in catalog', async () => {
+  const current = runtimeConfig();
+  // Snapshots written before the catalog carried `defaultEffort` still restore, and the
+  // built-in entry supplies the documented default the effort selector needs.
+  current.modelCatalog = {
+    baseURL: BASE,
+    updatedAt: '2026-10-30T00:00:00.000Z',
+    models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna', group: 'plan', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'] }],
+  };
+  const { service, dispose } = await host(current, hostDependencies([], () => list()));
+  try {
+    assert.deepEqual(service.modelCatalog().map(model => model.id), ['gpt-6-luna']);
+    assert.equal(service.modelCatalog()[0]?.defaultEffort, 'medium');
+    const status = await service.status();
+    assert.equal(status.modelsSource, 'openai');
+    assert.equal(status.models[0]?.defaultEffort, 'medium');
+  } finally { await dispose(); }
+});
+
 test('a snapshot from another gateway never replaces the built-in catalog', async () => {
   const current = runtimeConfig();
   current.modelCatalog = { baseURL: 'https://other.invalid/v1', updatedAt: '2026-10-30T00:00:00.000Z', models: [{ id: 'foreign-model', name: 'Foreign', group: 'paid' }] };

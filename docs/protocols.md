@@ -14,7 +14,7 @@
 
 - Chat Completions 保留已有消息和工具转换方式。思考增量按 `reasoning_content`、`reasoning`、`reasoning_details[].text` 三种已知拼写读取，同一段增量只取第一个有内容的那一种——网关常把同一段思考同时写进多个拼写，叠加会把每个词报两遍；漏读任何一种会让思考块打不开，推理模型的输出整段丢弃，最终只剩一句难以归因的空响应。
 - Responses 使用 `store:false` 和完整输入历史，不依赖服务端的 `previous_response_id`。工具调用、文本、推理摘要与用量分别转换；不支持的 stop 序列和思考档位明确报错。
-- Messages 使用 Bearer 认证及 `anthropic-version: 2023-06-01`；输出上限优先采用调用或模型设置、目录限额，缺省无法获知时采用 4096。显式指定思考深度时使用 `adaptive` 与 `output_config.effort`，未指定时保留服务端默认：例如厂商的 Opus 4.8 默认不启用思考，可选择一个档位启用。`none` 仅在模型与协议都允许关闭时可用。仅支持旧版 `enabled + budget_tokens` 的上游可能拒绝 adaptive。
+- Messages 使用 Bearer 认证及 `anthropic-version: 2023-06-01`；输出上限优先采用调用或模型设置、目录限额，缺省无法获知时采用 4096。发送思考深度时使用 `adaptive` 与 `output_config.effort`；未显式选择时插件按目录的厂商默认档位发送（Claude 系为 high，Opus 5.5 与 Haiku 5.5 为 medium），因此请求不会落到厂商“完全省略思考配置”的情形——Opus 4.8 在省略时默认不启用思考，只有给出档位才启用。`none` 仅在模型与协议都允许关闭时可用。仅支持旧版 `enabled + budget_tokens` 的上游可能拒绝 adaptive。
 
 模型的实际兼容性以服务端为准，不按模型厂商名称限制协议。目录中八个 Claude 型号在 Messages 协议下只能单独使用默认温度 1 或默认 top-p 0.99，两者不能同时设置；建议均留空。其他值会在请求前报错，历史配置可在模型页清除。新版 `2026-10-21` API 拒绝任何采样参数，当前插件仍使用上述旧版兼容头；网关对其他协议的实际转发尚未验证。这些型号的同步 Messages 输出上限按厂商资料限制为 128000；高思考档位可能需要调大部分型号的 4096 默认输出，实际 token 消耗以服务端为准。
 

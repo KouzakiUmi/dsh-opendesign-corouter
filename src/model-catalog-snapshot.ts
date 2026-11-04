@@ -25,7 +25,7 @@ export interface ModelCatalogSnapshot {
 export function parseModelCatalogSnapshot(value: unknown): ModelCatalogSnapshot | undefined {
   const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/u;
   const GROUPS = ['plan', 'paid'];
-  const KEYS = ['id', 'name', 'group', 'contextWindow', 'maxOutputTokens', 'inputModalities', 'reasoningEfforts'];
+  const KEYS = ['id', 'name', 'group', 'contextWindow', 'maxOutputTokens', 'inputModalities', 'reasoningEfforts', 'defaultEffort'];
   /** Same reserved keys the per-model settings reject; they must not reach a plain copy. */
   const RESERVED = ['__proto__', 'constructor', 'prototype'];
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
@@ -78,6 +78,12 @@ export function parseModelCatalogSnapshot(value: unknown): ModelCatalogSnapshot 
         efforts.push(effort);
       }
       model.reasoningEfforts = efforts;
+    }
+    if (item.defaultEffort !== undefined) {
+      if (typeof item.defaultEffort !== 'string' || item.defaultEffort.length === 0 || item.defaultEffort.length > 32) return undefined;
+      // Core rejects a default that is not one of the advertised efforts; do not restore one from a snapshot.
+      if (!(model.reasoningEfforts ?? []).includes(item.defaultEffort)) return undefined;
+      model.defaultEffort = item.defaultEffort;
     }
     seen.add(id);
     models.push(model);

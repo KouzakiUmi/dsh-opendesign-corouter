@@ -62,6 +62,8 @@ export interface StatusModel {
   contextWindow?: number;
   maxOutputTokens?: number;
   reasoningEfforts?: readonly string[];
+  /** Vendor-declared default effort of the catalog entry, always one of `reasoningEfforts`; omission means the vendor declares none. */
+  defaultEffort?: string;
 }
 
 /** Public website quotes, independent of account entitlements and gateway discovery. */
@@ -307,7 +309,15 @@ function parseStatusModel(value: unknown): StatusModel {
     ...(value.contextWindow === undefined ? {} : { contextWindow: positiveInteger(value.contextWindow, '上下文预算', 100_000_000) }),
     ...(value.maxOutputTokens === undefined ? {} : { maxOutputTokens: positiveInteger(value.maxOutputTokens, '最大输出', 10_000_000) }),
     ...(value.reasoningEfforts === undefined ? {} : { reasoningEfforts: parseEfforts(value.reasoningEfforts) }),
+    ...(value.defaultEffort === undefined ? {} : { defaultEffort: parseEffort(value.defaultEffort) }),
   };
+}
+
+/** One documented effort id; the value is displayed, so keep it a short opaque token. */
+function parseEffort(value: unknown): string {
+  const effort = text(value, '默认思考档位', 32);
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/u.test(effort)) throw new Error('默认思考档位格式无效');
+  return effort;
 }
 
 function parseStatusConfig(value: unknown): StatusConfig {

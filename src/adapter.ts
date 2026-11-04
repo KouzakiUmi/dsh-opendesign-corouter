@@ -15,7 +15,7 @@ import { applyModelSettings, isModelEnabled, type ModelSettings } from './model-
 import { protocolFor } from './protocols/index.js';
 import { PrematureEndError } from './protocols/errors.js';
 import type { ApiProtocol } from './protocol-options.js';
-import { modelReasoningEfforts } from './reasoning.js';
+import { defaultReasoningEffort, modelReasoningEfforts, vendorDefaultEffort } from './reasoning.js';
 import { validateClaudeOutput, validateClaudeSampling } from './claude-parameters.js';
 import { claudeOutputError, hasRestrictedClaudeSampling } from './claude-capabilities.js';
 
@@ -40,10 +40,13 @@ function outputReserve(model: CatalogModel, protocol: ApiProtocol): number | und
 }
 function metadata(provider: string, row: CatalogModel, config: RuntimeConfig): LlmResolvedModelInfo {
   const setting = config.modelSettings?.[row.id];
-  const proposedReserve = setting?.maxTokens ?? outputReserve(row, config.apiProtocol ?? 'chat-completions');
-  const reserve = claudeOutputError(row.id, config.apiProtocol ?? 'chat-completions', proposedReserve) === undefined ? proposedReserve : undefined;
-  const efforts = modelReasoningEfforts(row, config.apiProtocol ?? 'chat-completions');
-  const defaultEffort = setting?.reasoningEffort !== undefined && efforts?.includes(setting.reasoningEffort) ? setting.reasoningEffort : undefined;
+  const protocol = config.apiProtocol ?? 'chat-completions';
+  const proposedReserve = setting?.maxTokens ?? outputReserve(row, protocol);
+  const reserve = claudeOutputError(row.id, protocol, proposedReserve) === undefined ? proposedReserve : undefined;
+  const efforts = modelReasoningEfforts(row, protocol);
+  // Report the effective default so the Host selects a concrete tier instead of a
+  // provider-default entry that a relay can resolve to "thinking off".
+  const defaultEffort = defaultReasoningEffort(row, protocol, setting?.reasoningEffort);
   return {
     provider, id: row.id, name: row.name,
     ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
@@ -126,8 +129,13 @@ export class CoRouterAdapter extends LlmAdapter {
     signal.throwIfAborted();
     const setting: ModelSettings = config.modelSettings?.[row.id] ?? {};
     const protocolId = config.apiProtocol ?? 'chat-completions';
-    const effort = options.reasoningEffort ?? (setting.reasoningEffort ? ReasoningEffortId(setting.reasoningEffort) : undefined);
-    if (effort !== undefined && !modelReasoningEfforts(row, protocolId)?.includes(effort)) throw new LlmError('所选思考深度不适用于当前模型或协议；请修改默认值或选择其他档位', 'UNSUPPORTED_OPTION');
+    const configured = setting.reasoningEffort;
+    const explicit = options.reasoningEffort ?? (configured === undefined ? undefined : ReasoningEffortId(configured));
+    if (explicit !== undefined && !modelReasoningEfforts(row, protocolId)?.includes(explicit)) throw new LlmError('所选思考深度不适用于当前模型或协议；请修改默认值或选择其他档位', 'UNSUPPORTED_OPTION');
+    // An omitted effort still travels explicitly as the documented vendor default, so a
+    // relay cannot answer "no effort named" with its own idea of thinking off.
+    const vendorDefault = vendorDefaultEffort(row, protocolId);
+    const effort = explicit ?? (vendorDefault === undefined ? undefined : ReasoningEffortId(vendorDefault));
     if (protocolId === 'messages') {
       validateClaudeSampling(row.id, options.temperature ?? setting.temperature, setting.topP);
       validateClaudeOutput(row.id, options.maxTokens ?? setting.maxTokens);

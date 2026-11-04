@@ -31,12 +31,13 @@ try {
     window.__ModuleLoader__ = { load(bundle) { window.__plugin = bundle.factory(name => { if (name === 'react') return window.__React; throw new Error('Unexpected external: ' + name); }); } };
   });
   await page.addScriptTag({ content: client });
-const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWindow, maxOutputTokens, reasoningEfforts }) => ({
+const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWindow, maxOutputTokens, reasoningEfforts, defaultEffort }) => ({
   id, name, group,
   ...(inputModalities === undefined ? {} : { inputModalities }),
   ...(contextWindow === undefined ? {} : { contextWindow }),
   ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
   ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
+  ...(defaultEffort === undefined ? {} : { defaultEffort }),
 }));
   await page.evaluate(({ rawModels, wireSchema }) => {
     // Decode the real Host-projected form, including its extra JSON serialization hop.
@@ -687,7 +688,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await lunaTiers.locator('.odc-context-option').evaluateAll(options => options.every(option => option.getBoundingClientRect().height >= 32)), true, 'each tier keeps a usable target size');
   await page.locator('#root').evaluate(root => { root.style.width = ''; });
   assert.equal(await effortEditor.getAttribute('data-mode'), 'summary');
-  assert.equal(await effortEditor.locator('.odc-effort-value').innerText(), '继承默认');
+  assert.equal(await effortEditor.locator('.odc-effort-value').innerText(), '模型默认（medium）');
   const savesBeforeEffort = await page.evaluate(() => window.__saveCalls.length);
   await editEffort.click();
   let effort = luna.getByLabel('默认思考深度', { exact: true });
@@ -730,7 +731,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await effort.selectOption('');
   await luna.getByRole('button', { name: '保存默认思考深度', exact: true }).click();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.reasoningEffort === undefined);
-  assert.equal(await effortEditor.locator('.odc-effort-value').innerText(), '继承默认', 'inherit deletes the saved default');
+  assert.equal(await effortEditor.locator('.odc-effort-value').innerText(), '模型默认（medium）', 'clearing the override returns the documented vendor default');
   await editEffort.click();
   await effort.selectOption('high');
   await luna.getByRole('button', { name: '保存默认思考深度', exact: true }).click();
@@ -766,14 +767,14 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await unknownEdit.click();
   const unknownEffort = unknownModel.getByLabel('默认思考深度', { exact: true });
   assert.equal(await unknownEffort.isEnabled(), true);
-  await unknownModel.getByText('当前草稿不适用于此模型或协议，请选择其他档位或继承默认。', { exact: true }).waitFor();
+  await unknownModel.getByText('当前草稿不适用于此模型或协议，请选择其他档位或改用模型默认。', { exact: true }).waitFor();
   assert.equal(await unknownEffort.getAttribute('aria-invalid'), 'true');
   assert.equal(await unknownEffort.locator('option[value=high]').isDisabled(), true);
   await unknownEffort.selectOption('');
   assert.equal(await page.evaluate(() => window.__config.modelSettings?.['muse-wonder']?.reasoningEffort), 'high', 'clearing a stale draft still requires an explicit save');
   await unknownModel.getByRole('button', { name: '保存默认思考深度', exact: true }).click();
   await page.waitForFunction(() => window.__config.modelSettings?.['muse-wonder'] === undefined);
-  assert.equal(await unknownEffortEditor.locator('.odc-effort-value').innerText(), '继承默认');
+  assert.equal(await unknownEffortEditor.locator('.odc-effort-value').innerText(), '不指定档位');
   assert.equal(await unknownEdit.isDisabled(), true);
   // Discovery success: source, timestamp and the new row become visible.
   await page.getByRole('button', { name: '刷新模型目录', exact: true }).click();

@@ -247,6 +247,45 @@ test('全 39 型号的思考档位矩阵按厂商官方文档逐型号固定', (
   }
 });
 
+/**
+ * 目录采用的默认档位。绝大多数取 docs/reasoning-evidence.md 的“官方默认”列；
+ * gpt-6-astra 与 muse-spark-1.3 的厂商未声明默认，取已发布实现记录的路由默认
+ * （Codex CLI 注册表 Astra=low、Meta 合作客户端 Muse Spark 1.3=high）。
+ * 未列出的型号表示没有任何有出处的默认：目录必须保持缺省，不猜一个档位。
+ */
+const DEFAULT_EFFORT_MATRIX = new Map<string, string>([
+  ['gpt-6.1-sol', 'medium'], ['gpt-6.1-terra', 'medium'], ['gpt-6-luna', 'medium'],
+  ['gpt-6-sol', 'medium'], ['gpt-5.6-luna', 'medium'], ['gpt-5.6-sol', 'medium'], ['gpt-5.6-terra', 'medium'],
+  ['gpt-6-astra', 'low'],
+  ['claude-fable-5.1', 'high'], ['claude-fable-5', 'high'], ['claude-opus-5.5', 'medium'],
+  ['claude-opus-5', 'high'], ['claude-opus-4.8', 'high'], ['claude-sonnet-5.5', 'high'],
+  ['claude-sonnet-5', 'high'], ['claude-haiku-5.5', 'medium'],
+  ['deepseek-v4.1-flash', 'high'], ['deepseek-v4-pro', 'high'],
+  ['deepseek-v4-flash', 'high'], ['deepseek-v4-flash-vision-exp', 'high'],
+  ['glm-5.3-flashx', 'max'], ['glm-5.3-flash', 'max'], ['glm-5.2', 'max'],
+  ['kimi-k3', 'max'], ['kimi-k3.1-pro', 'max'],
+  ['gemini-4-argon', 'medium'], ['gemini-3.8-flash', 'medium'], ['gemini-3.7-flash', 'medium'],
+  ['grok-4.7', 'high'], ['grok-4.6', 'high'], ['grok-4.5', 'high'],
+  ['hy4-preview', 'high'], ['minimax-m3.1-flash', 'max'], ['muse-spark-1.3', 'high'],
+]);
+
+test('每个可调档位的型号都带一个有出处的默认档位，未知型号保持缺省', () => {
+  for (const model of MODELS) {
+    const expected = DEFAULT_EFFORT_MATRIX.get(model.id);
+    if (expected === undefined) {
+      // 无离散档位（kimi-k2.7-code、MiMo、Qwen3.7 Max）与档位未知的 Muse Wonder 没有默认档位。
+      assert.equal(model.defaultEffort, undefined, `${model.id} 没有有出处的默认档位时不应携带 defaultEffort`);
+      continue;
+    }
+    assert.equal(model.defaultEffort, expected, `${model.id} defaultEffort`);
+    assert.ok((model.reasoningEfforts ?? []).includes(expected), `${model.id} 的默认档位必须属于该型号的档位集合`);
+  }
+  // 每个带档位集合的型号都必须有默认值，否则模型选择器会退回 provider-default 项。
+  for (const model of MODELS.filter(row => (row.reasoningEfforts ?? []).length > 0)) {
+    assert.ok(model.defaultEffort !== undefined, `${model.id} 带档位集合却没有默认档位`);
+  }
+});
+
 test('思考档位只取厂商文档化的取值，且 none 只出现在官方确认支持的型号上', () => {
   for (const model of MODELS) {
     for (const effort of model.reasoningEfforts ?? []) {

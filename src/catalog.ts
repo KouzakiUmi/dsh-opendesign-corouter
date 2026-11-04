@@ -45,6 +45,14 @@ export interface CatalogModel {
   inputModalities?: readonly ('text' | 'image')[];
   /** Undefined means unconfirmed; an empty array means no discrete effort selector. */
   reasoningEfforts?: readonly string[];
+  /**
+   * Vendor-documented default effort, always a member of `reasoningEfforts`.
+   * The adapter reports it as the route default, so a request that names no
+   * effort sends this documented value instead of leaving the choice to an
+   * untrusted relay. Omission means the vendor documents no default: nothing
+   * is guessed and the provider's own default stands.
+   */
+  defaultEffort?: string;
 }
 
 const TEXT_ONLY = ['text'] as const;
@@ -62,10 +70,14 @@ const EFFORTS_MUSE = ['minimal', ...EFFORTS_REASONING] as const;
 /**
  * `plan` 为官网 12 款 Core / Design Plan 模型，加预检确认覆盖的 M3.1 Flash；
  * 其余 26 项归 `paid`（Plan / 钱包付费通道）。
+ *
+ * `defaultEffort` 只写有出处的默认档位：厂商文档声明的默认（docs/reasoning-evidence.md 矩阵），
+ * 或在厂商未声明时由已发布实现记录的路由默认（GPT-6 Astra=low、Muse Spark 1.3=high）。
+ * muse-wonder 的档位集合本身未知，保持缺省：请求不发送档位，由上游决定。
  */
 export const MODELS: readonly CatalogModel[] = [
   // ── OpenAI（8） ─────────────────────────────────────────────
-  { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
+  { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING, defaultEffort: 'medium' },
   {
     id: 'gpt-6.1-terra',
     name: 'GPT-6.1 Terra',
@@ -74,8 +86,10 @@ export const MODELS: readonly CatalogModel[] = [
     maxOutputTokens: 128_000,
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_OPENAI,
+    defaultEffort: 'medium',
   },
-  { id: 'gpt-6-astra', name: 'GPT-6 Astra', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
+  // 厂商页只列出档位、未声明默认值；low 取自 Codex CLI 模型注册表的默认 effort 与网关记录。
+  { id: 'gpt-6-astra', name: 'GPT-6 Astra', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING, defaultEffort: 'low' },
   {
     id: 'gpt-6-luna',
     name: 'GPT-6 Luna',
@@ -84,20 +98,21 @@ export const MODELS: readonly CatalogModel[] = [
     maxOutputTokens: 128_000,
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_OPENAI,
+    defaultEffort: 'medium',
   },
-  { id: 'gpt-6-sol', name: 'GPT-6 Sol', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI },
-  { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI },
-  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI },
-  { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI },
+  { id: 'gpt-6-sol', name: 'GPT-6 Sol', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI, defaultEffort: 'medium' },
+  { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI, defaultEffort: 'medium' },
+  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI, defaultEffort: 'medium' },
+  { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', group: 'paid', contextWindow: 1_050_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_OPENAI, defaultEffort: 'medium' },
 
   // ── Anthropic（8） ──────────────────────────────────────────
-  { id: 'claude-fable-5.1', name: 'Claude Fable 5.1', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-fable-5', name: 'Claude Fable 5', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-opus-5', name: 'Claude Opus 5', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-opus-4.8', name: 'Claude Opus 4.8', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-sonnet-5.5', name: 'Claude Sonnet 5.5', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
-  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
+  { id: 'claude-fable-5.1', name: 'Claude Fable 5.1', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING, defaultEffort: 'high' },
+  { id: 'claude-fable-5', name: 'Claude Fable 5', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING, defaultEffort: 'high' },
+  { id: 'claude-opus-5.5', name: 'Claude Opus 5.5', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING, defaultEffort: 'medium' },
+  { id: 'claude-opus-5', name: 'Claude Opus 5', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING, defaultEffort: 'high' },
+  { id: 'claude-opus-4.8', name: 'Claude Opus 4.8', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING, defaultEffort: 'high' },
+  { id: 'claude-sonnet-5.5', name: 'Claude Sonnet 5.5', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING, defaultEffort: 'high' },
+  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING, defaultEffort: 'high' },
   {
     id: 'claude-haiku-5.5',
     name: 'Claude Haiku 5.5',
@@ -106,6 +121,7 @@ export const MODELS: readonly CatalogModel[] = [
     maxOutputTokens: 128_000,
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_REASONING,
+    defaultEffort: 'medium',
   },
 
   // ── DeepSeek（4） ───────────────────────────────────────────
@@ -117,6 +133,7 @@ export const MODELS: readonly CatalogModel[] = [
     maxOutputTokens: 384_000,
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_LOW_HIGH,
+    defaultEffort: 'high',
   },
   {
     id: 'deepseek-v4-pro',
@@ -125,6 +142,7 @@ export const MODELS: readonly CatalogModel[] = [
     contextWindow: 1_000_000,
     maxOutputTokens: 384_000,
     reasoningEfforts: EFFORTS_LOW_HIGH,
+    defaultEffort: 'high',
   },
   {
     id: 'deepseek-v4-flash',
@@ -134,6 +152,7 @@ export const MODELS: readonly CatalogModel[] = [
     maxOutputTokens: 384_000,
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_LOW_HIGH,
+    defaultEffort: 'high',
   },
   {
     id: 'deepseek-v4-flash-vision-exp',
@@ -143,6 +162,7 @@ export const MODELS: readonly CatalogModel[] = [
     maxOutputTokens: 384_000,
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_LOW_HIGH,
+    defaultEffort: 'high',
   },
 
   // ── Z.ai（3） ───────────────────────────────────────────────
@@ -154,6 +174,7 @@ export const MODELS: readonly CatalogModel[] = [
     maxOutputTokens: 128_000,
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_LOW_HIGH,
+    defaultEffort: 'max',
   },
   {
     id: 'glm-5.3-flash',
@@ -163,8 +184,9 @@ export const MODELS: readonly CatalogModel[] = [
     maxOutputTokens: 128_000,
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: EFFORTS_LOW_HIGH,
+    defaultEffort: 'max',
   },
-  { id: 'glm-5.2', name: 'GLM-5.2', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_ONLY, reasoningEfforts: EFFORTS_GLM52 },
+  { id: 'glm-5.2', name: 'GLM-5.2', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_ONLY, reasoningEfforts: EFFORTS_GLM52, defaultEffort: 'max' },
 
   // ── Moonshot（3） ───────────────────────────────────────────
   {
@@ -176,18 +198,18 @@ export const MODELS: readonly CatalogModel[] = [
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: [],
   },
-  { id: 'kimi-k3', name: 'Kimi K3', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LOW_HIGH },
-  { id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LOW_HIGH },
+  { id: 'kimi-k3', name: 'Kimi K3', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LOW_HIGH, defaultEffort: 'max' },
+  { id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LOW_HIGH, defaultEffort: 'max' },
 
   // ── Google（3） ─────────────────────────────────────────────
-  { id: 'gemini-4-argon', name: 'Gemini 4 Argon', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS },
-  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS },
-  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS },
+  { id: 'gemini-4-argon', name: 'Gemini 4 Argon', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS, defaultEffort: 'medium' },
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS, defaultEffort: 'medium' },
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS, defaultEffort: 'medium' },
 
   // ── xAI（3） ────────────────────────────────────────────────
-  { id: 'grok-4.7', name: 'Grok 4.7', group: 'paid', contextWindow: 500_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_GROK },
-  { id: 'grok-4.6', name: 'Grok 4.6', group: 'paid', contextWindow: 500_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_GROK },
-  { id: 'grok-4.5', name: 'Grok 4.5', group: 'paid', contextWindow: 500_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS },
+  { id: 'grok-4.7', name: 'Grok 4.7', group: 'paid', contextWindow: 500_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_GROK, defaultEffort: 'high' },
+  { id: 'grok-4.6', name: 'Grok 4.6', group: 'paid', contextWindow: 500_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_GROK, defaultEffort: 'high' },
+  { id: 'grok-4.5', name: 'Grok 4.5', group: 'paid', contextWindow: 500_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LEVELS, defaultEffort: 'high' },
 
   // ── Xiaomi（2） ─────────────────────────────────────────────
   {
@@ -218,14 +240,16 @@ export const MODELS: readonly CatalogModel[] = [
     maxOutputTokens: 64_000,
     inputModalities: TEXT_ONLY,
     reasoningEfforts: ['none', 'high'],
+    defaultEffort: 'high',
   },
 
   // ── Alibaba（1） ────────────────────────────────────────────
   { id: 'qwen3.7-max', name: 'Qwen3.7 Max', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_ONLY, reasoningEfforts: [] },
 
   // Official API additions; display labels for undocumented entries are local formatting.
-  { id: 'minimax-m3.1-flash', name: 'MiniMax M3.1 Flash', group: 'plan', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING },
-  { id: 'muse-spark-1.3', name: 'Muse Spark 1.3', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_MUSE },
+  { id: 'minimax-m3.1-flash', name: 'MiniMax M3.1 Flash', group: 'plan', contextWindow: 1_000_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_REASONING, defaultEffort: 'max' },
+  // 厂商只说默认“由模型决定”；high 取自 Meta 合作客户端与网关实现的默认 effort。
+  { id: 'muse-spark-1.3', name: 'Muse Spark 1.3', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_MUSE, defaultEffort: 'high' },
   { id: 'muse-wonder', name: 'Muse Wonder', group: 'paid', contextWindow: 1_048_576 },
 ];
 

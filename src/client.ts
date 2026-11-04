@@ -878,6 +878,8 @@ function EffortField({ id, model, value, disabled, pending, disabledReason, onSa
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | undefined>(undefined);
   const listed = model.reasoningEfforts ?? [];
+  const modelDefault = model.defaultEffort;
+  const defaultLabel = modelDefault === undefined ? '不指定档位' : `模型默认（${modelDefault}）`;
   const invalidDefault = value !== undefined && !listed.includes(value);
   const invalidDraft = editing && draft !== '' && !listed.includes(draft);
   const options = [...listed];
@@ -890,11 +892,12 @@ function EffortField({ id, model, value, disabled, pending, disabledReason, onSa
   const externallyChanged = editing && value !== baseValue && !(saving && value === draft);
   const hint = reason ?? (editing
     ? externallyChanged ? '配置已从其他位置更新；取消可查看最新值，保存将使用当前草稿。'
-      : invalidDraft ? '当前草稿不适用于此模型或协议，请选择其他档位或继承默认。'
-        : '选择“继承默认”会删除已保存档位；保存前仅修改本地草稿。'
-    : invalidDefault ? '已保存的档位不适用于当前模型或协议，可编辑后选择其他档位或继承默认。'
+      : invalidDraft ? '当前草稿不适用于此模型或协议，请选择其他档位或改用模型默认。'
+        : `选择“${defaultLabel}”会删除已保存档位；保存前仅修改本地草稿。`
+    : invalidDefault ? '已保存的档位不适用于当前模型或协议，可编辑后选择其他档位或改用模型默认。'
       : unavailable ? '当前模型或协议未提供可调整的思考档位。'
-        : '未设置时使用服务端默认档位。');
+        : modelDefault === undefined ? '该模型未声明默认档位，未设置时不发送档位设置。'
+          : `未设置时按模型默认档位「${modelDefault}」发送，不留给上游决定。`);
   const cancel = () => {
     if (saving) return;
     setEditing(false);
@@ -937,7 +940,7 @@ function EffortField({ id, model, value, disabled, pending, disabledReason, onSa
         'aria-describedby': `${id}-hint${error === undefined ? '' : ` ${id}-error`}`, 'aria-invalid': invalidDraft || error !== undefined,
         onChange: (event: React.ChangeEvent<HTMLSelectElement>) => { setDraft(event.target.value); setError(undefined); },
       }, [
-        h('option', { key: '', value: '' }, '继承默认'),
+        h('option', { key: '', value: '' }, defaultLabel),
         ...options.map(effort => h('option', { key: effort, value: effort, disabled: !listed.includes(effort) }, listed.includes(effort) ? effort : `${effort}（当前不可用）`)),
       ]),
       h('div', { className: 'odc-effort-actions' },
@@ -951,7 +954,7 @@ function EffortField({ id, model, value, disabled, pending, disabledReason, onSa
             'aria-label': '编辑默认思考深度', 'aria-describedby': `${id}-hint`,
             onClick: () => { setDraft(value ?? ''); setBaseValue(value); setError(undefined); setEditing(true); },
           }, '编辑')),
-        h('p', { className: 'odc-effort-value' }, invalidDefault ? `${value}（当前不可用）` : value ?? '继承默认')),
+        h('p', { className: 'odc-effort-value' }, invalidDefault ? `${value}（当前不可用）` : value ?? defaultLabel)),
     h('small', {
       className: 'odc-hint', id: `${id}-hint`,
     }, hint),
@@ -1066,7 +1069,7 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
     `自动输出预留 ${formatTokens(autoReserve)}`,
     ...(model.reasoningEfforts === undefined || model.reasoningEfforts.length === 0
       ? []
-      : [`思考档位 ${model.reasoningEfforts.join(' / ')}`]),
+      : [`思考档位 ${model.reasoningEfforts.join(' / ')}${model.defaultEffort === undefined ? '' : `（模型默认 ${model.defaultEffort}）`}`]),
   ].join(' · ');
   return h('li', { className: 'odc-model-item' },
     h('div', { className: 'odc-model-head' },
@@ -1102,7 +1105,7 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
       h('p', { className: 'odc-model-meta' }, facts),
       model.id === 'claude-opus-5.5' && model.contextWindow === 1_000_000 ? h('p', { className: 'odc-hint' }, '上下文 1,000,000 为厂商参考，网关实际容量未验证；档位总窗口不会超过该参考容量。') : null,
       model.id === 'muse-wonder' && model.contextWindow === 1_048_576 ? h('p', { className: 'odc-hint' }, '上下文 1,048,576 为暂定参考，网关型号映射及实际容量未验证；档位总窗口不会超过该参考容量。') : null,
-      samplingRestricted && model.id === 'claude-opus-4.8' ? h('p', { className: 'odc-hint' }, '厂商默认关闭思考，选择思考深度可启用自适应思考；网关实际行为可能不同。') : null,
+      samplingRestricted && model.id === 'claude-opus-4.8' ? h('p', { className: 'odc-hint' }, '未选择档位时按厂商默认档位 high 发送自适应思考；厂商在完全省略思考配置时不启用。') : null,
       samplingRestricted && model.maxOutputTokens === undefined && settings.maxTokens === undefined ? h('p', { className: 'odc-hint' }, 'Messages 默认最大输出 4096；较高思考深度可能需要增大。') : null,
       price === undefined ? null : h(PriceDetails, { tiers: price.tiers }),
       h('p', { className: 'odc-hint' }, '数值离开输入框后保存，留空继承默认；上下文窗口为三档互斥选择。'),

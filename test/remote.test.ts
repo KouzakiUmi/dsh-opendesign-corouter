@@ -224,6 +224,16 @@ test('quota periods, local refresh plans and model settings survive the actual R
   assert.deepEqual(through('refreshQuota', extended.quota), extended.quota);
 });
 
+test('a model default effort travels as one bounded documented token', () => {
+  const model = status.models[0]!;
+  const withDefault = { ...status, models: [{ ...model, reasoningEfforts: ['low', 'high'], defaultEffort: 'high' }] };
+  assert.deepEqual(through('status', withDefault), withDefault);
+  // The value reaches a display, so it stays a short opaque token instead of free text.
+  assert.throws(() => parseStatus({ ...status, models: [{ ...model, defaultEffort: 'Medium 5' }] }), /默认思考档位/u);
+  assert.throws(() => parseStatus({ ...status, models: [{ ...model, defaultEffort: '' }] }), /默认思考档位/u);
+  assert.throws(() => parseStatus({ ...status, models: [{ ...model, defaultEffort: 'x'.repeat(33) }] }), /默认思考档位/u);
+});
+
 test('login state never carries the session it is proving', () => {
   assert.deepEqual(parseLoginState({ jobId: null, state: 'idle' }), { jobId: null, state: 'idle' });
   assert.deepEqual(

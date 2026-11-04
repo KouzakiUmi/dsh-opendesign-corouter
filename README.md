@@ -63,7 +63,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.15.tg
 
 推理协议可选 **OpenAI Chat Completions、OpenAI Responses、Anthropic Messages**。模型发现始终使用当前网关的 OpenAI 兼容 `/models` 接口，不随推理协议切换。
 
-思考档位按精确型号的厂商文档维护，并按当前协议筛选。34 款提供离散档位，4 款为固定思考或开关/预算控制，Muse Wonder 的精确别名尚待确认。旧配置中的无效默认档位可在参数设置中改为“继承默认”。[逐模型来源与网关验证状态](docs/reasoning-evidence.md)
+思考档位按精确型号的厂商文档维护，并按当前协议筛选。34 款提供离散档位，4 款为固定思考或开关/预算控制，Muse Wonder 的精确别名尚待确认。34 款都带目录默认档位：未选择档位时插件按该值显式发送，模型选择器因此不提供“Default”项。默认取厂商声明；GPT-6 Astra（low）与 Muse Spark 1.3（high）的厂商未声明默认，取已发布实现记录的路由默认。旧配置中的无效默认档位可在参数设置中改为模型默认。[逐模型来源与网关验证状态](docs/reasoning-evidence.md)
 
 > **分组不等于计费隔离。** 赠送额度耗尽后是否转扣套餐余额或钱包，由服务端和账号权益决定。选择“套餐赠送”不能保证绝不消耗钱包余额。
 

@@ -50,6 +50,7 @@ test('GET {base}/models carries Bearer auth, attribution and refuses redirects',
     contextWindow: 1_000_000,
     inputModalities: ['text'],
     reasoningEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    defaultEffort: 'max',
   }]);
   assert.equal(calls.length, 1);
   const call = calls[0]!;
@@ -153,6 +154,7 @@ test('discovery preserves GPT-6.1 Terra catalog metadata', async () => {
     id: 'gpt-6.1-terra', name: 'GPT-6.1 Terra', group: 'paid',
     contextWindow: 1_050_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'],
     reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    defaultEffort: 'medium',
   });
 });
 

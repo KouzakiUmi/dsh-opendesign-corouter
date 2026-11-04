@@ -16,11 +16,11 @@ import type { TurnMonitorStatus } from './turn-monitor-status.js';
 import { fetchModelCatalog, ModelDiscoveryError } from './model-discovery.js';
 import { fetchPricingSnapshot } from './pricing.js';
 import { applyModelSettings, isModelEnabled } from './model-settings.js';
-import { modelReasoningEfforts } from './reasoning.js';
+import { modelReasoningEfforts, vendorDefaultEffort } from './reasoning.js';
 import type { CatalogModel } from './catalog.js';
 import { Config, SETTINGS_NS, PLAN_PROVIDER, PAID_PROVIDER, apiKeyRef, readConfig, type LiveConfig } from './config.js';
 import { parseModelCatalogSnapshot, type ModelCatalogSnapshot } from './model-catalog-snapshot.js';
-import { MODELS } from './catalog.js';
+import { MODELS, findModel } from './catalog.js';
 import { resolveSession, deviceGrant, isOfficialRuntimeUrl, type LoginGrant } from './auth.js';
 import { ConsoleLogin, type LoginOptions } from './login.js';
 import { ActivationLauncher, type ActivationLauncherOptions } from './browser-open.js';
@@ -171,7 +171,13 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     const config = this._config();
     const snapshot = config.modelCatalog;
     if (!snapshot || snapshot.baseURL !== config.baseURL) return;
-    this._models = snapshot.models;
+    this._models = snapshot.models.map(row => {
+      const known = findModel(row.id);
+      // Snapshots written before the catalog carried a documented default keep the entry's
+      // evidence field, so the selector stops offering a provider-default entry after upgrade.
+      if (known?.defaultEffort === undefined || row.defaultEffort !== undefined) return row;
+      return (row.reasoningEfforts ?? []).includes(known.defaultEffort) ? { ...row, defaultEffort: known.defaultEffort } : row;
+    });
     this._modelsUpdatedAt = snapshot.updatedAt;
   }
   /**
@@ -258,13 +264,16 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       ...(this.turnMonitorStatus ? { turnMonitor: this.turnMonitorStatus() } : {}),
       models: this._models.map(row => {
         const { id, name, group, contextWindow, maxOutputTokens, inputModalities } = row;
-        const reasoningEfforts = modelReasoningEfforts(row, state.config.apiProtocol ?? 'chat-completions');
+        const protocol = state.config.apiProtocol ?? 'chat-completions';
+        const reasoningEfforts = modelReasoningEfforts(row, protocol);
+        const defaultEffort = vendorDefaultEffort(row, protocol);
         return {
           id, name, group, enabled: isModelEnabled(id, state.config.modelSettings),
           ...(inputModalities === undefined ? {} : { inputModalities }),
           ...(contextWindow === undefined ? {} : { contextWindow }),
           ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
           ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
+          ...(defaultEffort === undefined ? {} : { defaultEffort }),
         };
       }),
       modelsSource: this._modelsUpdatedAt ? 'openai' : 'builtin',

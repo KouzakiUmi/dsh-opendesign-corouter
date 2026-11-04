@@ -83,7 +83,7 @@ test('device approval offers a Host window button and keeps the official link as
 const models: readonly StatusModel[] = [
   {
     id: 'gpt-6-luna', name: 'GPT-6 Luna', group: 'plan', enabled: true,
-    inputModalities: ['text', 'image'], contextWindow: 1_050_000, maxOutputTokens: 128_000, reasoningEfforts: ['low', 'medium', 'high'],
+    inputModalities: ['text', 'image'], contextWindow: 1_050_000, maxOutputTokens: 128_000, reasoningEfforts: ['low', 'medium', 'high'], defaultEffort: 'medium',
   },
   { id: 'gpt-6-astra', name: 'GPT-6 Astra', group: 'paid', enabled: false, inputModalities: ['text'] },
   { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', group: 'paid', enabled: true, contextWindow: 200_000, maxOutputTokens: 8_192 },
@@ -470,7 +470,7 @@ test('Claude Messages sampling shows compatible values and marks stale values cl
   const opus = renderToStaticMarkup(h(ModelRow, {
     model: { id: 'claude-opus-4.8', name: 'Claude Opus 4.8', group: 'paid' }, settings: {}, authoritative: true, writable: true, pending: false, protocol: 'messages', onCommit: async () => true,
   }));
-  assert.match(opus, /厂商默认关闭思考，选择思考深度可启用/u);
+  assert.match(opus, /未选择档位时按厂商默认档位 high 发送自适应思考/u);
   assert.match(opus, /默认最大输出 4096/u);
 });
 
@@ -565,7 +565,9 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
   assert.equal((html.match(/type="radio"/g) ?? []).length, models.length * 3);
   assert.equal((html.match(/<legend[^>]*>上下文窗口（输入 \+ 输出合计）<\/legend>/gu) ?? []).length, models.length);
   assert.equal((html.match(/aria-label="编辑默认思考深度"/g) ?? []).length, 3);
-  assert.equal((html.match(/class="odc-effort-value">继承默认<\/p>/g) ?? []).length, 3);
+  // The saved default is the documented vendor default; models without one say so.
+  assert.equal((html.match(/class="odc-effort-value">模型默认（medium）<\/p>/g) ?? []).length, 1);
+  assert.equal((html.match(/class="odc-effort-value">不指定档位<\/p>/g) ?? []).length, 2);
   assert.doesNotMatch(html, /<label for="[^"]+">默认思考深度<\/label>/u, 'the effort selector appears only after entering edit mode');
   assert.match(html, /GPT-6 Astra/u);
   assert.match(html, /已禁用/u);
@@ -721,11 +723,11 @@ test('invalid saved efforts remain clearable and are not presented as supported 
   const edit = html.match(/<button[^>]*aria-label="编辑默认思考深度"[^>]*>编辑<\/button>/u)?.[0] ?? '';
   assert.doesNotMatch(edit, /disabled/u);
   assert.match(html, /已保存的档位不适用于当前模型或协议/u);
-  assert.match(html, /继承默认/u);
+  assert.match(html, /改用模型默认/u);
 });
 
 test('settings effort choices also respect the pending protocol selection', () => {
-  const next = { ...status, models: [{ ...models[0]!, reasoningEfforts: ['minimal', 'low', 'ultra'] }] };
+  const next = { ...status, models: [{ ...models[0]!, reasoningEfforts: ['minimal', 'low', 'ultra'], defaultEffort: 'low' }] };
   const html = renderModels(next, { ...snapshot, value: { ...snapshot.value, apiProtocol: 'messages' } });
   assert.match(html, /思考档位 low/u);
   assert.doesNotMatch(html, /minimal|ultra/u);

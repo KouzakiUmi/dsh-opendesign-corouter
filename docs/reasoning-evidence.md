@@ -9,11 +9,24 @@
 
 ## 使用规则
 
-- 厂商默认档位只作记录，不自动写入用户设置；用户未选择时由上游按其默认执行。
+- 厂商声明的默认档位写进目录的 `defaultEffort`：适配器把它作为该路由的默认档位回传给宿主，未命名档位的请求也按该值显式发送，不把“未指定”留给上游或中转解释。
+- 厂商未声明默认档位的型号，取已发布实现记录的路由默认（见下节），同样写入 `defaultEffort`；没有任何出处的默认保持缺省，请求不发送档位设置。
+- 用户为某个模型保存的默认档位优先于厂商默认；该值必须仍在该型号与当前协议的交集内。
 - 厂商未公布档位时保持缺省，不构造能力列表。
-- 历史上保存的、已不在当前档位集合内的默认值可以清除。
+- 历史上保存的、已不在当前档位集合内的默认值可以清除，且请求在凭据与网络 I/O 之前失败。
 - 协议层可用值 = 该模型官方档位集合 ∩ 当前协议支持集合；交集为空即该协议下不可调。
 - 本记录不涉及媒体模型选择、上下文容量与计费归属。
+
+## 路由默认补充（厂商未声明）
+
+两款型号的厂商页只列出档位、不声明默认值。目录采用的默认来自已发布实现记录的**路由默认**，证据等级低于厂商声明：
+
+| 模型 ID | 目录默认 | 证据 | 冲突记录 |
+| --- | --- | --- | --- |
+| gpt-6-astra | low | Codex CLI 0.153.4 模型注册表（2026-09-07 抓取）：Astra 为默认模型且 `Default effort` 为 low；[LLM Stats 发布说明](https://llm-stats.com/blog/research/gpt-6-astra-launch)记录其网关“gateway default is low”；[Codex SDK 模型与推理配置](https://codex-sdk.hexdocs.pm/0.21.1/07-models-and-reasoning.html)给出 `default_reasoning_effort` 字段 | 一个第三方目录提交（[LangAlpha](https://github.com/ginlix-ai/LangAlpha/commit/f1c20d1fab055cf0a836a223898d78436d7ea280)）记 medium；无厂商页面支持该值 |
+| muse-spark-1.3 | high | [Cursor 模型文档](https://cursor.com/docs/models/muse-spark-1-3)：“minimal, low, medium, high (the default), extra high, and max”；`@openclaw/meta-provider` 同样以 high 为默认 | [EmpirioLabs](https://empiriolabs.ai/models/muse-spark-1-3) 记 medium；Meta 官方只说省略时“由模型决定”，两者都非厂商默认声明 |
+
+两款都只影响本地默认档位，不表示网关已按该值转发；网关实际行为仍未验证。Muse Wonder 的档位集合本身未知，保持缺省。
 
 ## 目录实现对应
 
@@ -31,7 +44,7 @@
 | 空数组 `[]` | 无离散档位 | MiMo V2.6 Pro、MiMo V2.6 Flash、Kimi K2.7 Code、Qwen3.7 Max |
 | 缺省 | 未知 | Muse Wonder |
 
-合计 34 款可调档位、4 款固定思考或仅开关/预算控制、1 款未知。
+合计 34 款可调档位、4 款固定思考或仅开关/预算控制、1 款未知。34 款全部带目录 `defaultEffort`：32 款取厂商声明的默认，GPT-6 Astra 与 Muse Spark 1.3 取上一节的路由默认；Muse Wonder 的档位本身未知，保持缺省。
 
 ## 证据矩阵
 
