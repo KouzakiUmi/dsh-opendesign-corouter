@@ -2,9 +2,9 @@
 // 全部为内存合成数据；不读凭据、不联网、不触碰宿主 Profile。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
 import { applyModelSettings, isModelEnabled, parseModelSettingsMap } from '../src/model-settings.js';
 import { findModel, type CatalogModel } from '../src/catalog.js';
-import { CONTEXT_WINDOW_PRESETS } from '../src/context-budget.js';
 
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'] as const;
 const MAX_ENTRIES = 512;
@@ -107,7 +107,7 @@ test('explicit output capacity must be smaller than explicit context capacity', 
 
 test('context tiers are allowlisted separately from legacy numeric windows', () => {
   const row = findModel('deepseek-v4.1-flash')!;
-  for (const [contextTier, window] of [['default', 272_000], ['extended', 500_000], ['maximum', 872_000]] as const) {
+  for (const [contextTier, window] of [['default', 256_000], ['extended', 512_000], ['maximum', 1_000_000]] as const) {
     const settings = { model: { contextTier } };
     assert.deepEqual(parseModelSettingsMap(settings), settings);
     assert.equal(applyModelSettings(row, { contextTier }).contextWindow, window);
@@ -117,17 +117,52 @@ test('context tiers are allowlisted separately from legacy numeric windows', () 
   }
   assert.throws(() => parseModelSettingsMap({ model: { contextWindow: 500_000, contextTier: 'extended' } }), /不能同时设置/u);
   assert.throws(() => applyModelSettings(row, { contextWindow: 500_000, contextTier: 'extended' }), /不能同时设置/u);
-  assert.throws(() => parseModelSettingsMap({ model: { contextTier: 'extended', maxTokens: 500_000 } }), /小于档位总窗口/u);
+  assert.deepEqual(parseModelSettingsMap({ model: { contextTier: 'extended', maxTokens: 500_000 } }), { model: { contextTier: 'extended', maxTokens: 500_000 } });
   const small = { ...row, contextWindow: 96_000 };
-  assert.equal(applyModelSettings(small).contextWindow, 96_000);
+  assert.equal(applyModelSettings(small).contextWindow, 32_000);
   assert.equal(applyModelSettings(small, { contextTier: 'maximum' }).contextWindow, 96_000);
   assert.equal(applyModelSettings(small, { contextWindow: 500_000 }).contextWindow, 500_000, 'legacy overrides are not reinterpreted as tiers');
 });
 
-test('self-contained schema tier limits stay aligned with the shared policy', () => {
-  for (const { id: contextTier, tokens } of CONTEXT_WINDOW_PRESETS) {
-    assert.doesNotThrow(() => parseModelSettingsMap({ model: { contextTier, maxTokens: tokens - 1 } }));
-    assert.throws(() => parseModelSettingsMap({ model: { contextTier, maxTokens: tokens } }), /小于档位总窗口/u);
+test('schema accepts tier and output independently without a model reference, including after fresh-realm reconstruction', () => {
+  // The browser reconstructs this callback without access to module bindings.
+  const rebuilt = runInNewContext(`(${parseModelSettingsMap.toString()})`) as typeof parseModelSettingsMap;
+  for (const parse of [parseModelSettingsMap, rebuilt]) {
+    for (const contextTier of ['default', 'extended', 'maximum'] as const) {
+      for (const maxTokens of [32_000, 256_000, 272_000, 500_000, 512_000, 872_000, 1_000_000, 10_000_000]) {
+        const settings = { model: { contextTier, maxTokens } };
+        assert.deepEqual(JSON.parse(JSON.stringify(parse(settings))), settings, `${contextTier}/${maxTokens}`);
+      }
+    }
+    assert.throws(() => parse({ model: { contextWindow: 512_000, maxTokens: 512_000 } }), /maxTokens 必须小于 contextWindow/u);
+    assert.throws(() => parse({ model: { contextWindow: 512_000, contextTier: 'extended' } }), /不能同时设置/u);
+    assert.throws(() => parse({ model: { contextTier: 'invalid' } }), /contextTier/u);
+    assert.throws(() => parse({ model: { contextTier: 'maximum', maxTokens: 10_000_001 } }), /maxTokens/u);
+  }
+});
+
+test('model reference selects its own tiers while unknown rows and legacy numbers retain their meaning', () => {
+  const row = findModel('deepseek-v4.1-flash')!;
+  for (const [reference, expected] of [
+    [1_050_000, [256_000, 512_000, 1_050_000]],
+    [1_048_576, [262_144, 524_288, 1_048_576]],
+    [262_144, [65_536, 131_072, 262_144]],
+    [500_000, [128_000, 256_000, 500_000]],
+    [96_000, [32_000, 64_000, 96_000]],
+  ] as const) {
+    const referenceRow = { ...row, contextWindow: reference };
+    for (const [index, contextTier] of (['default', 'extended', 'maximum'] as const).entries()) {
+      assert.equal(applyModelSettings(referenceRow, { contextTier }).contextWindow, expected[index]);
+    }
+    assert.equal(referenceRow.contextWindow, reference);
+  }
+  const unknown: CatalogModel = { id: 'unknown-model', name: 'Unknown', group: 'paid' };
+  for (const contextTier of [undefined, 'default', 'extended', 'maximum'] as const) {
+    assert.equal(applyModelSettings(unknown, contextTier === undefined ? {} : { contextTier }).contextWindow, undefined);
+  }
+  for (const contextWindow of [65_536, 256_000, 512_000, 1_000_000, 100_000_000]) {
+    assert.equal(applyModelSettings({ ...row, contextWindow: 96_000 }, { contextWindow }).contextWindow, contextWindow);
+    assert.equal(applyModelSettings(unknown, { contextWindow }).contextWindow, contextWindow);
   }
 });
 
@@ -146,12 +181,12 @@ test('applyModelSettings overrides capacity on a copy and never mutates the cata
   assert.equal(row.contextWindow, 1_000_000);
   assert.equal(row.maxOutputTokens, 384_000);
   // 缺省使用工作总窗口，目录参考本身不变；采样参数仍属于请求。
-  const defaultRow = { ...row, contextWindow: 272_000 };
+  const defaultRow = { ...row, contextWindow: 256_000 };
   assert.deepEqual(applyModelSettings(row), defaultRow);
   assert.deepEqual(applyModelSettings(row, {}), defaultRow);
   assert.deepEqual(applyModelSettings(row, { temperature: 0.3, topP: 0.8, reasoningEffort: 'low' }), defaultRow);
   assert.equal(applyModelSettings(row, { contextWindow: 200_000 }).maxOutputTokens, row.maxOutputTokens);
-  assert.equal(applyModelSettings(row, { maxTokens: 8_000 }).contextWindow, 272_000);
+  assert.equal(applyModelSettings(row, { maxTokens: 8_000 }).contextWindow, 256_000);
   // 动态发现且无容量的模型可由用户显式补上，仍然不推断其它能力。
   const paid: CatalogModel = { id: 'future-model', name: 'Future model', group: 'paid' };
   const tuned = applyModelSettings(paid, { contextWindow: 300_000, maxTokens: 16_000 });

@@ -175,6 +175,7 @@ export class CoRouterAdapter extends LlmAdapter {
       validateClaudeSampling(row.id, options.temperature ?? setting.temperature, setting.topP);
       validateClaudeOutput(row.id, options.maxTokens ?? setting.maxTokens);
     }
+    if (options.maxTokens !== undefined && (!Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1 || (row.contextWindow !== undefined && options.maxTokens >= row.contextWindow))) throw new LlmError('模型最大输出必须是小于当前总窗口的正整数', 'INVALID_REQUEST');
     const keyRef = apiKeyRef(config);
     const raw = captured ? capturedKey : await this.options.apiKey(keyRef, config.baseURL);
     if (!raw) throw new LlmError('未配置当前网关的推理凭据；请完成设备授权或配置对应 API Key', 'MISSING_CREDENTIAL');

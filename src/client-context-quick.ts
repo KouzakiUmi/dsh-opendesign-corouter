@@ -3,7 +3,7 @@ import type { ConfigForm, RpcCaller } from './client.js';
 import type { Status } from './remote.js';
 import type { ModelSettings } from './model-settings.js';
 import { configWritesFor } from './client-config-writes.js';
-import { CONTEXT_WINDOW_PRESETS, contextWindowPreset, effectiveContextWindow, type ContextWindowPresetId } from './context-budget.js';
+import { contextWindowPresets, contextWindowPreset, contextTierAvailable, effectiveContextWindow, type ContextWindowPresetId } from './context-budget.js';
 
 const h = React.createElement;
 const EMPTY_GROUPS: readonly unknown[] = [];
@@ -28,7 +28,9 @@ export interface ContextQuickProps { directory: QuickDirectoryStore; form: Confi
 export function isCoRouterProvider(provider: string): boolean {
   return provider === 'opendesign-corouter-plan' || provider === 'opendesign-corouter-paid';
 }
-export function quickWindowLabel(tokens: number): string {
+export function quickWindowLabel(tokens: number | undefined): string {
+  if (tokens === undefined) return '容量未知';
+  if (tokens % 1_000_000 === 0) return `${tokens / 1_000_000}M`;
   return tokens % 1000 === 0 ? `${tokens / 1000}K` : tokens.toLocaleString('en-US');
 }
 
@@ -175,13 +177,13 @@ function ContextQuickControl({ provider, modelId, selecting, directoryUnavailabl
     wasPending.current = pending;
   }, [pending, open]);
   const choose = async (nextTier: ContextWindowPresetId) => {
-    if (reason !== undefined || row === undefined) return;
+    if (reason !== undefined || row === undefined || !contextTierAvailable(nextTier, row.contextWindow)) return;
     const candidate: ModelSettings = { ...settings };
     delete candidate.contextWindow;
     if (nextTier === 'default') delete candidate.contextTier;
     else candidate.contextTier = nextTier;
     const capacity = effectiveContextWindow(row.contextWindow, undefined, nextTier);
-    if (candidate.maxTokens !== undefined && candidate.maxTokens >= capacity) {
+    if (candidate.maxTokens !== undefined && capacity !== undefined && candidate.maxTokens >= capacity) {
       setError(`最大输出 ${candidate.maxTokens.toLocaleString('en-US')} 不小于所选总窗口 ${capacity.toLocaleString('en-US')}；请先在设置页清空或减小最大输出。`);
       return;
     }
@@ -200,7 +202,7 @@ function ContextQuickControl({ provider, modelId, selecting, directoryUnavailabl
     panel.showPopover(); position();
     if (!loading) void loadStatus();
   };
-  const label = row === undefined ? '上下文…' : `${tier === undefined ? '自定义 ' : ''}${quickWindowLabel(windowSize)}`;
+  const label = row === undefined ? '上下文…' : windowSize === undefined ? '容量未知' : `${tier === undefined ? '自定义 ' : ''}${quickWindowLabel(windowSize)}`;
   return h('div', { className: 'odc-quick' },
     h('button', {
       ref: button, className: 'odc-quick-trigger', type: 'button', 'aria-label': `CoRouter 上下文：${label}`,
@@ -220,13 +222,13 @@ function ContextQuickControl({ provider, modelId, selecting, directoryUnavailabl
       h('p', null, '修改此模型的默认值，其他会话同步。'),
       h('fieldset', { className: 'odc-quick-options', 'aria-describedby': `${popupId}-reason` },
         h('legend', null, '上下文档位'),
-        CONTEXT_WINDOW_PRESETS.map(preset => {
-          const available = preset.id === 'default' || row?.contextWindow === undefined || preset.tokens <= row.contextWindow;
+        contextWindowPresets(row?.contextWindow).map(preset => {
+          const available = contextTierAvailable(preset.id, row?.contextWindow);
           return h('label', { className: 'odc-quick-option', key: preset.id },
             h('input', { type: 'radio', name: popupId, checked: tier === preset.id, disabled: reason !== undefined || !available, 'aria-describedby': `${popupId}-reason`, onChange: () => { void choose(preset.id); } }),
-            h('span', null, `${preset.label} ${quickWindowLabel(preset.tokens)}`, !available ? h('small', null, `超过参考容量 ${row?.contextWindow?.toLocaleString('en-US')}`) : null));
+            h('span', null, `${preset.label}${preset.tokens === undefined ? '' : ` ${quickWindowLabel(preset.tokens)}`}`, preset.tokens === undefined ? h('small', null, '模型参考容量未核实') : !available ? h('small', null, '与较低档位相同') : null));
         })),
-      h('p', { id: `${popupId}-reason`, role: 'status' }, reason ?? `当前总窗口 ${windowSize.toLocaleString('en-US')} tokens（含输出预留）。${tier === undefined ? '旧自定义值按原值保留，选择档位可替换。' : ''}`),
+      h('p', { id: `${popupId}-reason`, role: 'status' }, reason ?? (windowSize === undefined ? '模型参考容量未核实，暂不设置本地窗口上限。' : `当前总窗口 ${windowSize.toLocaleString('en-US')} tokens（含输出预留）。${tier === undefined ? '旧自定义值按原值保留，选择档位可替换。' : ''}`)),
       loadError ? h('button', { type: 'button', className: 'odc-button', onClick: () => { void loadStatus(); } }, '重试读取模型信息') : null,
       error === undefined ? null : h('p', { className: 'odc-quick-error', role: 'alert' }, error),
       notice === undefined ? null : h('p', { role: 'status' }, notice)));

@@ -6,6 +6,7 @@ import { ReasoningEffortId, type GenerateOptions, type StreamChunk } from '@deep
 import { AttachmentId, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
 import { EMPTY_TURN_MESSAGE } from '../src/empty-turn.js';
 import { OPENDESIGN_EOT } from '../src/eot-code.js';
+import { findModel, type CatalogModel } from '../src/catalog.js';
 // Existing stream fixtures specifically exercise the explicit Chat wire contract.
 const base: RuntimeConfig = { apiProtocol: 'chat-completions', apiKeyEnv: 'FIXTURE_KEY', baseURL: 'https://amr-link.open-design.ai/v1', useDesktopCredential: false, emptyTurnGuard: true, requestTimeoutMs: 10000, streamIdleTimeoutMs: 1000 };
 const options = (provider = PLAN_PROVIDER, model = 'deepseek-v4.1-flash'): GenerateOptions => ({ provider, model, messages: [{ role: 'user', content: [{ type: 'text', text: 'fixture' }] }] });
@@ -185,8 +186,8 @@ test('prepareCall binds metadata and dispatch to a single settings generation', 
   config = { ...config, baseURL: 'https://example.com/new' };
   await collect(call.stream(options()));
   assert.equal(called[0], `${base.baseURL}/chat/completions`);
-  assert.equal(call.model.context?.contextWindow, 272_000);
-  assert.equal(call.model.defaultMaxTokens, 68_000);
+  assert.equal(call.model.context?.contextWindow, 256_000);
+  assert.equal(call.model.defaultMaxTokens, 64_000);
 });
 test('credential routing receives the prepared gateway even after configuration changes', async () => {
   let config = { ...base, baseURL: 'https://custom.example/v1' };
@@ -234,14 +235,14 @@ test('saved model parameters affect metadata and the actual request while per-ca
 test('context tiers change resolved working budgets and default output in all protocols', async () => {
   for (const apiProtocol of ['chat-completions', 'responses', 'messages'] as const) {
     let config: RuntimeConfig = { ...base, apiProtocol };
-    let expectedOutput = 68_000;
+    let expectedOutput = 64_000;
     const adapter = new CoRouterAdapter({ config: () => config, apiKey: async () => 'fixture-key', fetch: async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       assert.equal(body[apiProtocol === 'responses' ? 'max_output_tokens' : 'max_tokens'], expectedOutput);
       return new Response('{}', { status: 401 });
     } });
     try {
-      for (const [contextTier, context, output] of [['default', 272_000, 68_000], ['extended', 500_000, 125_000], ['maximum', 872_000, 218_000]] as const) {
+      for (const [contextTier, context, output] of [['default', 256_000, 64_000], ['extended', 512_000, 128_000], ['maximum', 1_000_000, 250_000]] as const) {
         expectedOutput = output;
         config = { ...base, apiProtocol, modelSettings: { 'deepseek-v4.1-flash': { contextTier } } };
         const resolved = await adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash');
@@ -265,7 +266,98 @@ test('a newly smaller default never rewrites historical explicit output and fail
     config = { ...base, modelSettings: { 'deepseek-v4.1-flash': { maxTokens: 384_000, contextTier: 'extended' } } };
     assert.equal((await adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash')).defaultMaxTokens, 384_000);
     config = base;
-    assert.equal((await adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash')).defaultMaxTokens, 68_000);
+    assert.equal((await adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash')).defaultMaxTokens, 64_000);
+  } finally { adapter.dispose(); }
+});
+
+test('exact references determine all protocol windows and automatic output stays inside both limits', async () => {
+  const referenceRow = findModel('deepseek-v4.1-flash')!;
+  const cases = [
+    [1_050_000, 384_000, [256_000, 512_000, 1_050_000], [64_000, 128_000, 262_500]],
+    [1_048_576, 384_000, [262_144, 524_288, 1_048_576], [65_536, 131_072, 262_144]],
+    [262_144, 384_000, [65_536, 131_072, 262_144], [16_384, 32_768, 65_536]],
+    [500_000, 384_000, [128_000, 256_000, 500_000], [32_000, 64_000, 125_000]],
+    [96_000, 384_000, [32_000, 64_000, 96_000], [8_000, 16_000, 24_000]],
+    [1_000_000, 32_000, [256_000, 512_000, 1_000_000], [32_000, 32_000, 32_000]],
+  ] as const;
+  for (const apiProtocol of ['chat-completions', 'responses', 'messages'] as const) {
+    for (const [reference, maxOutputTokens, windows, outputs] of cases) {
+      const row = { ...referenceRow, contextWindow: reference, maxOutputTokens };
+      let config: RuntimeConfig = { ...base, apiProtocol };
+      let expectedOutput = 0;
+      const adapter = new CoRouterAdapter({ config: () => config, models: () => [row], apiKey: async () => 'fixture', fetch: async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        assert.equal(body[apiProtocol === 'responses' ? 'max_output_tokens' : 'max_tokens'], expectedOutput);
+        return new Response('{}', { status: 401 });
+      } });
+      try {
+        for (const [index, contextTier] of (['default', 'extended', 'maximum'] as const).entries()) {
+          config = { ...base, apiProtocol, modelSettings: { [row.id]: { contextTier } } };
+          expectedOutput = outputs[index]!;
+          const resolved = await adapter.resolveModel(PLAN_PROVIDER, row.id);
+          assert.equal(resolved.context?.contextWindow, windows[index], `${reference}/${apiProtocol}/${contextTier}`);
+          assert.equal(resolved.defaultMaxTokens, expectedOutput);
+          await assert.rejects(collect(adapter.stream(options())), { code: 'AUTH' });
+        }
+        assert.equal(row.contextWindow, reference);
+        assert.equal(row.maxOutputTokens, maxOutputTokens);
+      } finally { adapter.dispose(); }
+    }
+  }
+});
+
+test('output equal to or above an effective tier is rejected before credentials, binding or network', async () => {
+  let credentials = 0, bindings = 0, requests = 0;
+  let config: RuntimeConfig = base;
+  const row = { ...findModel('deepseek-v4.1-flash')!, contextWindow: 96_000 };
+  const adapter = new CoRouterAdapter({ config: () => config, models: () => [row],
+    apiKey: async () => { credentials++; return 'fixture'; },
+    replayBindingSecret: async () => { bindings++; return Buffer.alloc(32, 1); },
+    fetch: async () => { requests++; return sse('unexpected'); } });
+  try {
+    for (const apiProtocol of ['chat-completions', 'responses', 'messages'] as const) {
+      for (const [contextTier, window] of [['default', 32_000], ['extended', 64_000], ['maximum', 96_000]] as const) {
+        for (const maxTokens of [window, window + 1]) {
+          const saved = { contextTier, maxTokens };
+          config = { ...base, apiProtocol, modelSettings: { [row.id]: saved } };
+          assert.throws(() => adapter.stream(options()), { code: 'INVALID_REQUEST' });
+          await assert.rejects(adapter.resolveModel(PLAN_PROVIDER, row.id), { code: 'INVALID_REQUEST' });
+          await assert.rejects(adapter.prepareCall(PLAN_PROVIDER, row.id), { code: 'INVALID_REQUEST' });
+          assert.deepEqual(config.modelSettings?.[row.id], saved, 'conflicting saved values must survive rejection');
+          config = { ...base, apiProtocol, modelSettings: { [row.id]: { contextTier } } };
+          await assert.rejects(collect(adapter.stream({ ...options(), maxTokens })), { code: 'INVALID_REQUEST' });
+          assert.equal(credentials, 0, `${apiProtocol}/${contextTier}/${maxTokens}`);
+          assert.equal(bindings, 0);
+          assert.equal(requests, 0);
+        }
+      }
+    }
+  } finally { adapter.dispose(); }
+});
+
+test('prepared calls retain their full reference, tier and output snapshot after gateway and settings changes', async () => {
+  const original = findModel('deepseek-v4.1-flash')!;
+  let rows: CatalogModel[] = [{ ...original }];
+  let config: RuntimeConfig = { ...base, modelSettings: { [original.id]: { contextTier: 'maximum' } } };
+  const sent: number[] = [];
+  const adapter = new CoRouterAdapter({ config: () => config, models: () => rows, apiKey: async () => 'fixture', fetch: async (_url, init) => {
+    sent.push(JSON.parse(String(init?.body)).max_tokens);
+    return sse('ok');
+  } });
+  try {
+    const prepared = await adapter.prepareCall(PLAN_PROVIDER, original.id);
+    rows = [{ ...original, contextWindow: 96_000 }];
+    config = { ...base };
+    const next = await adapter.prepareCall(PLAN_PROVIDER, original.id);
+    assert.deepEqual(prepared.model.context, { contextWindow: 1_000_000 });
+    assert.equal(prepared.model.defaultMaxTokens, 250_000);
+    assert.deepEqual(next.model.context, { contextWindow: 32_000 });
+    assert.equal(next.model.defaultMaxTokens, 8_000);
+    await collect(prepared.stream(options()));
+    await collect(next.stream(options()));
+    assert.deepEqual(sent, [250_000, 8_000]);
+    config = { ...base, modelSettings: { [original.id]: { contextWindow: 1_000_000 } } };
+    assert.equal((await adapter.resolveModel(PLAN_PROVIDER, original.id)).context?.contextWindow, 1_000_000, 'legacy numeric maximum remains uncapped by a lower reference');
   } finally { adapter.dispose(); }
 });
 
@@ -273,13 +365,13 @@ test('Opus context reports the whole working window, honours legacy overrides, a
   let configured: RuntimeConfig = { ...base, apiProtocol: 'messages' };
   const adapter = new CoRouterAdapter({ config: () => configured, apiKey: async () => 'test-key' });
   const initial = await adapter.prepareCall(PAID_PROVIDER, 'claude-opus-5.5');
-  assert.deepEqual(initial.model.context, { contextWindow: 272_000 });
+  assert.deepEqual(initial.model.context, { contextWindow: 256_000 });
   assert.equal(initial.model.defaultMaxTokens, 4096);
   configured = { ...configured, modelSettings: { 'claude-opus-5.5': { contextWindow: 200_000, maxTokens: 8_192 } } };
   const overridden = await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5');
   assert.deepEqual(overridden.context, { contextWindow: 200_000 });
   assert.equal(overridden.defaultMaxTokens, 8_192);
-  assert.deepEqual(initial.model.context, { contextWindow: 272_000 }, 'prepared calls keep their captured metadata');
+  assert.deepEqual(initial.model.context, { contextWindow: 256_000 }, 'prepared calls keep their captured metadata');
 });
 
 test('an explicit output limit is not reduced to the automatic quarter-window default', async () => {

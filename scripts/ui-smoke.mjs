@@ -574,17 +574,51 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await kimiTemperature.fill('0.3');
   await kimiTemperature.blur();
   await page.waitForFunction(() => window.__config.modelSettings?.['kimi-k2.7-code']?.temperature === 0.3);
-  // A model whose reference is below a tier cannot select that tier; the default is clamped.
+  // Small models receive three useful relative tiers rather than two disabled fixed choices.
   const kimiTiers = kimi.locator('.odc-context');
   const kimiDefault = kimiTiers.getByRole('radio', { name: '默认' });
   assert.equal(await kimiDefault.isEnabled(), true, 'the default tier stays selectable for a small reference');
   assert.equal(await kimiDefault.isChecked(), true);
-  assert.equal(await kimiTiers.getByRole('radio', { name: '扩展' }).isDisabled(), true, 'a tier above the reference is not selectable');
-  assert.equal(await kimiTiers.getByRole('radio', { name: '最大' }).isDisabled(), true);
-  await kimi.locator('.odc-context-option[data-preset=extended]').getByText('超过参考容量 262,144', { exact: false }).waitFor();
+  assert.equal(await kimiTiers.getByRole('radio', { name: '扩展' }).isEnabled(), true);
+  assert.equal(await kimiTiers.getByRole('radio', { name: '最大' }).isEnabled(), true);
+  for (const [tier, tokens] of [['default', '65,536'], ['extended', '131,072'], ['maximum', '262,144']]) {
+    await kimi.locator(`.odc-context-option[data-preset=${tier}]`).getByText(`${tokens} tokens`, { exact: true }).waitFor();
+  }
+  await kimi.getByText('当前总窗口 65,536 tokens（含输出预留）', { exact: false }).waitFor();
+  await kimiTiers.getByRole('radio', { name: '扩展' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['kimi-k2.7-code']?.contextTier === 'extended');
+  await kimi.getByText('当前总窗口 131,072 tokens（含输出预留）', { exact: false }).waitFor();
+  await kimiTiers.getByRole('radio', { name: '最大' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['kimi-k2.7-code']?.contextTier === 'maximum');
   await kimi.getByText('当前总窗口 262,144 tokens（含输出预留）', { exact: false }).waitFor();
   await kimi.getByRole('button', { name: '重置', exact: true }).click();
   await page.waitForFunction(() => !('kimi-k2.7-code' in (window.__config.modelSettings ?? {})));
+  // A decimal 1M model reaches its actual reference, while unknown capacity is never fabricated.
+  const knownFlash = modelRow('deepseek-v4.1-flash');
+  await knownFlash.locator('summary').click();
+  const knownFlashTiers = knownFlash.locator('.odc-context');
+  for (const [tier, tokens] of [['default', '256,000'], ['extended', '512,000'], ['maximum', '1,000,000']]) {
+    await knownFlash.locator(`.odc-context-option[data-preset=${tier}]`).getByText(`${tokens} tokens`, { exact: true }).waitFor();
+  }
+  await knownFlashTiers.getByRole('radio', { name: '最大' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['deepseek-v4.1-flash']?.contextTier === 'maximum');
+  await knownFlash.getByText('当前总窗口 1,000,000 tokens（含输出预留）', { exact: false }).waitFor();
+  await knownFlashTiers.getByRole('radio', { name: '默认' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['deepseek-v4.1-flash']?.contextTier === undefined);
+  await knownFlash.locator('summary').click();
+  const eco = modelRow('deepseek-v4.1-flash-eco');
+  await eco.locator('summary').click();
+  await eco.getByText('当前总窗口 — tokens（含输出预留）；模型参考容量未核实，暂不设置本地窗口上限。', { exact: true }).waitFor();
+  assert.equal(await eco.locator('.odc-context').getByRole('radio', { name: '默认' }).isEnabled(), true);
+  assert.equal(await eco.locator('.odc-context').getByRole('radio', { name: '扩展' }).isDisabled(), true);
+  assert.equal(await eco.locator('.odc-context').getByRole('radio', { name: '最大' }).isDisabled(), true);
+  assert.doesNotMatch(await eco.locator('.odc-context').innerText(), /272,000|872,000|256,000|512,000/u);
+  await page.evaluate(() => window.__setModelSettings('deepseek-v4.1-flash-eco', { contextWindow: 872000 }));
+  await eco.getByText('旧自定义 872,000，选择档位替换', { exact: true }).waitFor();
+  await eco.locator('.odc-context').getByRole('radio', { name: '默认' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['deepseek-v4.1-flash-eco'] === undefined);
+  await eco.getByText('当前总窗口 — tokens（含输出预留）；模型参考容量未核实，暂不设置本地窗口上限。', { exact: true }).waitFor();
+  await eco.locator('summary').click();
   // Reset deletes the whole map entry; the ready form must win over the now-stale catalog flag.
   await luna.getByRole('button', { name: '重置', exact: true }).click();
   await page.waitForFunction(() => !('gpt-6-luna' in (window.__config.modelSettings ?? {})));
@@ -662,6 +696,7 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended');
   await lunaMaximum.check();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'maximum');
+  await luna.getByText('当前总窗口 1,050,000 tokens（含输出预留）', { exact: false }).waitFor();
   await lunaDefault.check();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === undefined);
   assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.contextWindow), undefined, 'the default tier stores no numeric override');
@@ -699,6 +734,9 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await luna.getByText('旧自定义 500,000，选择档位替换', { exact: true }).waitFor();
   assert.equal(await lunaExtended.isChecked(), false, 'a legacy 500,000 never selects the extended tier');
   assert.equal(await luna.getByText('当前总窗口 500,000 tokens（含输出预留）', { exact: false }).count(), 1);
+  await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { contextWindow: 872000 }));
+  await luna.getByText('旧自定义 872,000，选择档位替换', { exact: true }).waitFor();
+  assert.equal(await lunaMaximum.isChecked(), false, 'the old maximum number remains custom, not the new maximum tier');
   await lunaExtended.check();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended'
     && window.__config.modelSettings?.['gpt-6-luna']?.contextWindow === undefined);
@@ -706,7 +744,7 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await lunaDefault.check();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === undefined);
   await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { maxTokens: 384000 }));
-  await luna.getByText('最大输出 384,000 不小于当前总窗口 272,000（含输出预留）；可清空或减小最大输出，或改选更大的上下文档位。', { exact: true }).waitFor();
+  await luna.getByText('最大输出 384,000 不小于当前总窗口 256,000（含输出预留）；可清空或减小最大输出，或改选更大的上下文档位。', { exact: true }).waitFor();
   assert.equal(await maxTokens.getAttribute('aria-invalid'), 'true');
   assert.equal(await maxTokens.isEnabled(), true, 'the invalid output limit stays clearable');
   await maxTokens.fill('');
@@ -719,7 +757,7 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await maxTokens.blur();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.maxTokens === 400000);
   await lunaDefault.click();
-  await luna.getByText('无法切换到「默认」档：最大输出 400,000 不小于该档位的总窗口 272,000（含输出预留）；请先清空或减小最大输出，当前档位保持不变。', { exact: true }).waitFor();
+  await luna.getByText('无法切换到「默认」档：最大输出 400,000 不小于该档位的总窗口 256,000（含输出预留）；请先清空或减小最大输出，当前档位保持不变。', { exact: true }).waitFor();
   assert.equal(await lunaMaximum.isChecked(), true, 'a rejected tier change keeps the saved tier');
   assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier), 'maximum');
   // Clearing the output frees the smaller tier again; the limit is never rewritten silently.
@@ -893,7 +931,7 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   const quickPanel = quickA.locator('.odc-quick-panel');
   await quickButton.waitFor();
   await waitQuickReady();
-  assert.match(await quickButton.innerText(), /272K/u, 'the default tier is the current window');
+  assert.match(await quickButton.innerText(), /256K/u, 'the default tier is the model-relative current window');
   // A third-party model has no CoRouter window to change.
   await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'openai', model: 'gpt-4o' } }));
   await page.waitForFunction(() => !document.querySelector('#conversation-input .odc-quick'));
@@ -913,12 +951,12 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await waitQuickReady();
   assert.match(await quickPanel.innerText(), /上下文档位/u);
   assert.equal(await quickPanel.getByRole('radio').count(), 3, 'the quick switch offers the three tiers');
-  assert.match(await quickPanel.innerText(), /当前总窗口 272,000 tokens（含输出预留）。/u);
+  assert.match(await quickPanel.innerText(), /当前总窗口 256,000 tokens（含输出预留）。/u);
   // A tier choice is written as the global model default and shows up in the settings page.
   await quickPanel.getByRole('radio', { name: '扩展' }).check();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended');
   await quickPanel.getByText('上下文档位已保存。', { exact: true }).waitFor();
-  assert.match(await quickButton.innerText(), /500K/u, 'the button shows the selected tier');
+  assert.match(await quickButton.innerText(), /512K/u, 'the button shows the selected relative tier');
   const lunaRow = modelRow('gpt-6-luna');
   if (await lunaRow.locator('details').evaluate(element => !element.open)) await lunaRow.locator('summary').click();
   assert.equal(await lunaRow.locator('.odc-context-option[data-preset=extended] input').isChecked(), true, 'the settings page shows the same tier');
@@ -939,14 +977,34 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await quickPanel.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier), 'maximum');
   assert.equal(await quickPanel.getByRole('radio', { name: '最大' }).isChecked(), true, 'a rejected quick save restores the accepted tier');
-  // A model with a smaller reference cannot take a tier above it.
+  // The chat entry shares the same three useful small-model tiers as settings.
   await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'kimi-k2.7-code' } }));
-  await page.waitForFunction(() => document.querySelector('#conversation-input .odc-quick button')?.textContent?.includes('262,144'));
+  await page.waitForFunction(() => document.querySelector('#conversation-input .odc-quick button')?.textContent?.includes('65,536'));
   await quickButton.click();
   await quickPanel.waitFor();
   await waitQuickReady();
-  assert.equal(await quickPanel.getByRole('radio', { name: '扩展' }).isDisabled(), true, 'a tier above the reference is not selectable');
+  assert.equal(await quickPanel.getByRole('radio', { name: '扩展' }).isEnabled(), true);
+  assert.equal(await quickPanel.getByRole('radio', { name: '最大' }).isEnabled(), true);
   assert.equal(await quickPanel.getByRole('radio', { name: '默认' }).isEnabled(), true, 'the default tier stays selectable');
+  await quickPanel.getByRole('radio', { name: '最大' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['kimi-k2.7-code']?.contextTier === 'maximum');
+  await quickPanel.getByText('当前总窗口 262,144 tokens（含输出预留）。', { exact: true }).waitFor();
+  await quickPanel.getByRole('radio', { name: '默认' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['kimi-k2.7-code']?.contextTier === undefined);
+  // A catalogued but unverified-capacity model is different from a catalog still loading.
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'deepseek-v4.1-flash-eco' } }));
+  await page.waitForFunction(() => document.querySelector('#conversation-input .odc-quick button')?.textContent?.includes('容量未知'));
+  await quickButton.click();
+  await quickPanel.waitFor();
+  await waitQuickReady();
+  await quickPanel.getByText('模型参考容量未核实，暂不设置本地窗口上限。', { exact: true }).waitFor();
+  assert.equal(await quickPanel.getByRole('radio', { name: '扩展' }).isDisabled(), true);
+  assert.equal(await quickPanel.getByRole('radio', { name: '最大' }).isDisabled(), true);
+  assert.doesNotMatch(await quickPanel.innerText(), /272,000|872,000|256,000|512,000/u);
+  await page.evaluate(() => window.__setModelSettings('deepseek-v4.1-flash-eco', { contextTier: 'maximum' }));
+  await quickPanel.getByRole('radio', { name: '默认' }).check();
+  await page.waitForFunction(() => window.__config.modelSettings?.['deepseek-v4.1-flash-eco'] === undefined);
+  assert.match(await quickButton.innerText(), /容量未知/u);
   // An explicit output that does not fit keeps the saved tier and asks for the settings page.
   await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { maxTokens: 384000 }));
   await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'gpt-6-luna' } }));
@@ -954,7 +1012,7 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await quickPanel.waitFor();
   await waitQuickReady();
   await quickPanel.getByRole('radio', { name: '默认' }).click();
-  await quickPanel.getByText('最大输出 384,000 不小于所选总窗口 272,000；请先在设置页清空或减小最大输出。', { exact: true }).waitFor();
+  await quickPanel.getByText('最大输出 384,000 不小于所选总窗口 256,000；请先在设置页清空或减小最大输出。', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier), 'maximum', 'a conflicting tier keeps the saved value');
   // A read-only or loading configuration never writes.
   await page.evaluate(() => window.__setFormState('ready', false));
@@ -982,11 +1040,11 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   const quickB = page.locator('#conversation-input-b .odc-quick');
   const quickButtonB = quickB.getByRole('button', { name: /^CoRouter 上下文/u });
   await quickButtonB.waitFor();
-  await page.waitForFunction(() => document.querySelector('#conversation-input-b .odc-quick button')?.textContent?.includes('872K'));
-  assert.match(await quickButtonB.innerText(), /872K/u, 'the second session shows its own window');
+  await page.waitForFunction(() => document.querySelector('#conversation-input-b .odc-quick button')?.textContent?.includes('1M'));
+  assert.match(await quickButtonB.innerText(), /1M/u, 'the second session reaches its own full 1M reference');
   const labelB = await quickButtonB.innerText();
   await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'claude-haiku-5.5' } }));
-  await page.waitForFunction(() => document.querySelector('#conversation-input .odc-quick button')?.textContent?.includes('272K'));
+  await page.waitForFunction(() => document.querySelector('#conversation-input .odc-quick button')?.textContent?.includes('256K'));
   assert.equal(await quickButtonB.innerText(), labelB, 'the other session is unaffected by the first one');
   // Switching the model closes the popover and never writes a late result to the new model.
   await quickButton.click();

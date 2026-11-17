@@ -12,7 +12,8 @@ import {
 import type { QuotaSnapshot, QuotaWindow } from './quota.js';
 import { inferenceEndpoint, effectiveProtocol, API_PROTOCOL_OPTIONS, type ApiProtocol, type ProtocolSelection } from './protocol-options.js';
 import type { ModelSettings, ModelSettingsMap } from './model-settings.js';
-import { CONTEXT_WINDOW_PRESETS, contextWindowPreset, effectiveContextWindow, type ContextWindowPresetId } from './context-budget.js';
+import { contextWindowPresets, contextWindowPreset, contextTierAvailable, effectiveContextWindow, type ContextWindowPresetId } from './context-budget.js';
+export { contextTierAvailable } from './context-budget.js';
 import { validateActivationUrl } from './device-auth.js';
 import { modelReasoningEfforts } from './reasoning.js';
 import { CLAUDE_MESSAGES_MAX_OUTPUT, claudeOutputError, claudeSamplingError, hasRestrictedClaudeSampling } from './claude-capabilities.js';
@@ -716,16 +717,8 @@ export function selectedContextTier(settings: ModelSettings): ContextWindowPrese
   return contextWindowPreset(settings.contextWindow, settings.contextTier);
 }
 
-/** A tier above the known reference cannot be selected; the default tier is clamped instead. */
-export function contextTierAvailable(tier: ContextWindowPresetId, reference: number | undefined): boolean {
-  if (tier === 'default') return true;
-  const preset = CONTEXT_WINDOW_PRESETS.find(item => item.id === tier);
-  if (preset === undefined) return false;
-  return reference === undefined || preset.tokens <= reference;
-}
-
 /** The working window a tier would produce for this model. */
-export function contextTierWindow(tier: ContextWindowPresetId, reference: number | undefined): number {
+export function contextTierWindow(tier: ContextWindowPresetId, reference: number | undefined): number | undefined {
   return effectiveContextWindow(reference, undefined, tier);
 }
 
@@ -734,7 +727,7 @@ export function contextCapacityConflict(reference: number | undefined, next: Mod
   const output = next.maxTokens;
   if (output === undefined) return undefined;
   const window = effectiveContextWindow(reference, next.contextWindow, next.contextTier);
-  if (output < window) return undefined;
+  if (window === undefined || output < window) return undefined;
   return `最大输出 ${formatTokens(output)} 不小于当前总窗口 ${formatTokens(window)}（含输出预留）；可清空或减小最大输出，或改选更大的上下文档位。`;
 }
 
@@ -742,8 +735,8 @@ export function contextCapacityConflict(reference: number | undefined, next: Mod
 export function contextTierConflict(reference: number | undefined, tier: ContextWindowPresetId, output: number | undefined): string | undefined {
   if (output === undefined) return undefined;
   const window = contextTierWindow(tier, reference);
-  if (output < window) return undefined;
-  const preset = CONTEXT_WINDOW_PRESETS.find(item => item.id === tier);
+  if (window === undefined || output < window) return undefined;
+  const preset = contextWindowPresets(reference).find(item => item.id === tier);
   return `无法切换到「${preset?.label ?? tier}」档：最大输出 ${formatTokens(output)} 不小于该档位的总窗口 ${formatTokens(window)}（含输出预留）；请先清空或减小最大输出，当前档位保持不变。`;
 }
 
@@ -811,7 +804,7 @@ function OptionalNumberField({ id, field, value, disabled, restricted = false, i
 
 /**
  * The mutually exclusive context-window tiers. Each tier is a combined input-plus-output
- * working window; the vendor reference stays the evidence value and only caps the tiers.
+ * working window; each model's reference determines its three tier sizes.
  */
 function ContextWindowField({ id, reference, settings, disabled, reason, onSelect }: {
   id: string;
@@ -825,17 +818,15 @@ function ContextWindowField({ id, reference, settings, disabled, reason, onSelec
   const legacy = settings.contextTier === undefined && settings.contextWindow !== undefined;
   const both = settings.contextTier !== undefined && settings.contextWindow !== undefined;
   const current = effectiveContextWindow(reference, settings.contextWindow, settings.contextTier);
-  // A legacy number keeps its own value; only a tier is capped by the known reference.
-  const requested = legacy ? undefined : CONTEXT_WINDOW_PRESETS.find(preset => preset.id === (tier ?? 'default'))?.tokens;
-  const clamped = requested !== undefined && reference !== undefined && current < requested;
+  const presets = contextWindowPresets(reference);
   const note = legacy
     ? '；旧自定义窗口按原值继续生效'
-    : clamped ? `；参考容量 ${formatTokens(reference ?? 0)}，所选档位已按参考容量限幅` : '';
+    : current === undefined ? '；模型参考容量未核实，暂不设置本地窗口上限' : '';
   const reasonId = `${id}-reason`;
   return h('fieldset', { className: 'odc-context', 'aria-describedby': reason === undefined ? undefined : reasonId },
     h('legend', { className: 'odc-context-legend' }, '上下文窗口（输入 + 输出合计）'),
     h('div', { className: 'odc-context-options' },
-      CONTEXT_WINDOW_PRESETS.map(preset => {
+      presets.map(preset => {
         const available = contextTierAvailable(preset.id, reference);
         const inputId = `${id}-${preset.id}`;
         const hintId = `${inputId}-hint`;
@@ -852,9 +843,9 @@ function ContextWindowField({ id, reference, settings, disabled, reason, onSelec
           }),
           h('span', { className: 'odc-context-copy' },
             h('strong', null, preset.label),
-            h('small', { className: 'odc-hint', id: hintId }, available
-              ? `${formatTokens(preset.tokens)} tokens`
-              : `${formatTokens(preset.tokens)} tokens · 超过参考容量 ${formatTokens(reference ?? 0)}`)));
+            h('small', { className: 'odc-hint', id: hintId }, preset.tokens === undefined
+              ? '模型参考容量未核实'
+              : `${formatTokens(preset.tokens)} tokens${available ? '' : ' · 与较低档位相同'}`)));
       })),
     reason === undefined ? null : h('small', { className: 'odc-hint', id: reasonId }, reason),
     legacy ? h('p', { className: 'odc-context-legacy', role: 'status' }, `旧自定义 ${formatTokens(settings.contextWindow ?? 0)}，选择档位替换`) : null,
@@ -1008,7 +999,7 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
   // The automatic reservation follows the adapter: a quarter of the working window, never
   // above the model's output capability. An unknown capability stays unknown.
   const outputCap = model.maxOutputTokens ?? (protocol === 'messages' ? 4096 : undefined);
-  const reserveCandidate = outputCap === undefined ? undefined : Math.min(outputCap, Math.floor(effectiveWindow / 4));
+  const reserveCandidate = outputCap === undefined ? undefined : effectiveWindow === undefined ? outputCap : Math.min(outputCap, Math.floor(effectiveWindow / 4));
   const autoReserve = reserveCandidate !== undefined && claudeOutputError(model.id, protocol, reserveCandidate) === undefined
     ? reserveCandidate
     : undefined;

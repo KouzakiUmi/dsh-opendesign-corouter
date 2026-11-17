@@ -1,39 +1,55 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CONTEXT_WINDOW_PRESETS, contextWindowPreset, effectiveContextWindow } from '../src/context-budget.js';
+import { contextWindowPresets, contextWindowPreset, effectiveContextWindow } from '../src/context-budget.js';
 
-test('context presets are fixed decimal-token combined windows', () => {
-  assert.deepEqual(CONTEXT_WINDOW_PRESETS.map(({ id, tokens }) => ({ id, tokens })), [
-    { id: 'default', tokens: 272_000 },
-    { id: 'extended', tokens: 500_000 },
-    { id: 'maximum', tokens: 872_000 },
-  ]);
+const windows = [
+  [1_000_000, [256_000, 512_000, 1_000_000]],
+  [1_050_000, [256_000, 512_000, 1_050_000]],
+  [1_048_576, [262_144, 524_288, 1_048_576]],
+  [262_144, [65_536, 131_072, 262_144]],
+  [500_000, [128_000, 256_000, 500_000]],
+  [96_000, [32_000, 64_000, 96_000]],
+  [4_096, [1_024, 2_048, 4_096]],
+  [4_095, [1_024, 2_048, 4_095]],
+  [3, [1, 2, 3]],
+  [2, [1, 1, 2]],
+  [1, [1, 1, 1]],
+] as const;
+
+test('context presets derive three combined windows from the exact reference', () => {
+  for (const [reference, expected] of windows) {
+    const presets = contextWindowPresets(reference);
+    assert.deepEqual(presets.map(({ id }) => id), ['default', 'extended', 'maximum']);
+    assert.deepEqual(presets.map(({ tokens }) => tokens), [...expected], String(reference));
+    assert.ok(presets.every(({ label }) => typeof label === 'string' && label.length > 0));
+    for (const [index, tier] of ['default', 'extended', 'maximum'].entries()) {
+      assert.equal(effectiveContextWindow(reference, undefined, tier as 'default' | 'extended' | 'maximum'), expected[index], `${reference}/${tier}`);
+    }
+    assert.equal(effectiveContextWindow(reference), expected[0]);
+  }
+});
+
+test('unknown and invalid references never fabricate a model window', () => {
+  assert.deepEqual(contextWindowPresets().map(({ tokens }) => tokens), [undefined, undefined, undefined]);
+  for (const reference of [undefined, 0, -1, 1.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.deepEqual(contextWindowPresets(reference).map(({ tokens }) => tokens), [undefined, undefined, undefined], String(reference));
+    for (const tier of [undefined, 'default', 'extended', 'maximum'] as const) {
+      assert.equal(effectiveContextWindow(reference, undefined, tier), undefined, `${reference}/${tier}`);
+    }
+  }
+});
+
+test('only explicit tier ids select a preset', () => {
   assert.equal(contextWindowPreset(undefined), 'default');
-  assert.equal(contextWindowPreset(undefined, 'default'), 'default');
-  assert.equal(contextWindowPreset(undefined, 'extended'), 'extended');
-  assert.equal(contextWindowPreset(undefined, 'maximum'), 'maximum');
+  for (const tier of ['default', 'extended', 'maximum'] as const) {
+    assert.equal(contextWindowPreset(undefined, tier), tier);
+  }
 });
 
-test('default and explicit presets are limited by the known reference', () => {
-  assert.equal(effectiveContextWindow(1_000_000), 272_000);
-  assert.equal(effectiveContextWindow(1_000_000, undefined, 'extended'), 500_000);
-  assert.equal(effectiveContextWindow(1_000_000, undefined, 'maximum'), 872_000);
-  assert.equal(effectiveContextWindow(262_144), 262_144);
-  assert.equal(effectiveContextWindow(262_144, undefined, 'extended'), 262_144);
-  assert.equal(effectiveContextWindow(96_000, undefined, 'maximum'), 96_000);
-  assert.equal(effectiveContextWindow(500_000, undefined, 'maximum'), 500_000);
-});
-
-test('unknown references still receive an explicit local working budget', () => {
-  assert.equal(effectiveContextWindow(undefined), 272_000);
-  assert.equal(effectiveContextWindow(undefined, undefined, 'extended'), 500_000);
-  assert.equal(effectiveContextWindow(undefined, undefined, 'maximum'), 872_000);
-});
-
-test('legacy custom windows stay distinguishable and unchanged until replaced', () => {
-  for (const saved of [8_192, 200_000, 272_000, 500_000, 512_000, 872_000, 1_000_000, 100_000_000]) {
+test('legacy custom windows stay distinguishable and uncapped even when equal to a tier', () => {
+  for (const saved of [1, 8_192, 65_536, 128_000, 256_000, 262_144, 272_000, 500_000, 512_000, 872_000, 1_000_000, 1_050_000, 100_000_000]) {
     assert.equal(contextWindowPreset(saved), undefined);
-    assert.equal(effectiveContextWindow(500_000, saved), saved);
+    assert.equal(effectiveContextWindow(96_000, saved), saved);
     assert.equal(effectiveContextWindow(undefined, saved), saved);
   }
 });

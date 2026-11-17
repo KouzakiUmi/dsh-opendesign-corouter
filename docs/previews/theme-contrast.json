@@ -8,7 +8,7 @@
     },
     {
       "label": "1-light-模型",
-      "checked": 454,
+      "checked": 450,
       "minimum": 5.27
     },
     {
@@ -23,12 +23,12 @@
     },
     {
       "label": "1-light-model-options",
-      "checked": 458,
+      "checked": 454,
       "minimum": 4.97
     },
     {
       "label": "1-light-context-quick",
-      "checked": 467,
+      "checked": 463,
       "minimum": 4.97
     },
     {
@@ -48,7 +48,7 @@
     },
     {
       "label": "2-dark-模型",
-      "checked": 454,
+      "checked": 450,
       "minimum": 9.25
     },
     {
@@ -63,12 +63,12 @@
     },
     {
       "label": "2-dark-model-options",
-      "checked": 458,
+      "checked": 454,
       "minimum": 9.25
     },
     {
       "label": "2-dark-context-quick",
-      "checked": 467,
+      "checked": 463,
       "minimum": 9.25
     },
     {
@@ -88,7 +88,7 @@
     },
     {
       "label": "3-light-模型",
-      "checked": 454,
+      "checked": 450,
       "minimum": 5.27
     },
     {
@@ -103,12 +103,12 @@
     },
     {
       "label": "3-light-model-options",
-      "checked": 458,
+      "checked": 454,
       "minimum": 4.97
     },
     {
       "label": "3-light-context-quick",
-      "checked": 467,
+      "checked": 463,
       "minimum": 4.97
     },
     {
@@ -133,17 +133,17 @@
     },
     {
       "label": "forced-colors-compact-image-controls",
-      "checked": 454,
+      "checked": 450,
       "minimum": 13.98
     },
     {
       "label": "forced-colors-context-quick",
-      "checked": 463,
+      "checked": 459,
       "minimum": 13.98
     },
     {
       "label": "forced-colors-effort-editor",
-      "checked": 458,
+      "checked": 454,
       "minimum": 13.98
     },
     {

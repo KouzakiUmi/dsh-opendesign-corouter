@@ -95,10 +95,8 @@ export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
       if (settings.contextTier !== 'default' && settings.contextTier !== 'extended' && settings.contextTier !== 'maximum') throw new Error('模型设置的 contextTier 不在允许的取值内');
       if (parsed.contextWindow !== undefined) throw new Error('上下文档位与旧自定义窗口不能同时设置');
       parsed.contextTier = settings.contextTier;
-      // This callback is reconstructed without module bindings in the browser.
-      // Keep local tier limits aligned with CONTEXT_WINDOW_PRESETS (covered by tests).
-      const window = parsed.contextTier === 'default' ? 272_000 : parsed.contextTier === 'extended' ? 500_000 : 872_000;
-      if (parsed.maxTokens !== undefined && parsed.maxTokens >= window) throw new Error('模型设置的 maxTokens 必须小于档位总窗口');
+      // The callback has no model reference after browser rehydration. Validate
+      // capacity against the exact current model at the UI and adapter boundaries.
     }
     if (settings.reasoningEffort !== undefined) {
       if (typeof settings.reasoningEffort !== 'string' || !efforts.includes(settings.reasoningEffort)) throw new Error('模型设置的 reasoningEffort 不在允许的取值内');
@@ -122,9 +120,10 @@ export function applyModelSettings(row: CatalogModel, settings?: ModelSettings):
   if (contextTier !== undefined) parseModelSettingsMap({ model: { contextTier, ...(contextWindow === undefined ? {} : { contextWindow }) } });
   if (maxTokens !== undefined) parseModelSettingsMap({ model: { maxTokens } });
   if (imageInput !== undefined) parseModelSettingsMap({ model: { imageInput } });
+  const window = effectiveContextWindow(row.contextWindow, contextWindow, contextTier);
   return {
     ...row,
-    contextWindow: effectiveContextWindow(row.contextWindow, contextWindow, contextTier),
+    ...(window === undefined ? {} : { contextWindow: window }),
     ...(maxTokens === undefined ? {} : { maxOutputTokens: maxTokens }),
     ...(imageInput === undefined ? {} : { inputModalities: imageInput ? ['text', 'image'] : ['text'] }),
   };

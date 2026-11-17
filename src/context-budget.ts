@@ -1,11 +1,40 @@
-/** Client working windows, including both input and reserved output tokens. */
-export const CONTEXT_WINDOW_PRESETS = [
-  { id: 'default', label: '默认', tokens: 272_000 },
-  { id: 'extended', label: '扩展', tokens: 500_000 },
-  { id: 'maximum', label: '最大', tokens: 872_000 },
+/** Model-relative working windows, including both input and reserved output. */
+const CONTEXT_TIERS = [
+  { id: 'default', label: '默认' },
+  { id: 'extended', label: '扩展' },
+  { id: 'maximum', label: '最大' },
 ] as const;
 
-export type ContextWindowPresetId = typeof CONTEXT_WINDOW_PRESETS[number]['id'];
+export type ContextWindowPresetId = typeof CONTEXT_TIERS[number]['id'];
+export interface ContextWindowPreset {
+  id: ContextWindowPresetId;
+  label: string;
+  tokens: number | undefined;
+}
+
+/**
+ * Use familiar quarter/half-size working budgets and the exact reference as maximum.
+ * Decimal references use decimal K; exact binary windows retain binary subdivisions.
+ * Missing references stay unknown instead of inheriting another model's capacity.
+ */
+export function contextWindowPresets(reference?: number): readonly ContextWindowPreset[] {
+  if (reference === undefined || !Number.isSafeInteger(reference) || reference < 1) {
+    return CONTEXT_TIERS.map(tier => ({ ...tier, tokens: undefined }));
+  }
+  const unit = reference < 4096 ? 1 : Number.isInteger(Math.log2(reference)) ? 1024 : 1000;
+  const extended = Math.min(reference, Math.max(1, 2 ** Math.round(Math.log2(reference / (2 * unit))) * unit));
+  const windows = [Math.max(1, Math.floor(extended / 2)), extended, reference];
+  return CONTEXT_TIERS.map((tier, index) => ({ ...tier, tokens: windows[index]! }));
+}
+
+/** Default can always clear an old override; unknown/duplicate higher tiers cannot be selected. */
+export function contextTierAvailable(tier: ContextWindowPresetId, reference: number | undefined): boolean {
+  if (tier === 'default') return true;
+  const presets = contextWindowPresets(reference);
+  const index = presets.findIndex(preset => preset.id === tier);
+  const tokens = presets[index]?.tokens;
+  return tokens !== undefined && !presets.slice(0, index).some(preset => preset.tokens === tokens);
+}
 
 /** Saved numbers are always legacy custom windows; only an explicit tier selects a preset. */
 export function contextWindowPreset(legacyOverride: number | undefined, tier?: ContextWindowPresetId): ContextWindowPresetId | undefined {
@@ -13,12 +42,10 @@ export function contextWindowPreset(legacyOverride: number | undefined, tier?: C
 }
 
 /**
- * Presets never increase a known catalog/gateway reference. Historical custom
- * numbers retain their prior meaning until the user explicitly chooses a preset.
- * An unknown reference does not imply model capacity: the preset is a local budget.
+ * Tiers follow the current catalog/gateway reference. Historical custom numbers
+ * retain their prior meaning until the user explicitly chooses a tier.
  */
-export function effectiveContextWindow(reference: number | undefined, override?: number, tier?: ContextWindowPresetId): number {
+export function effectiveContextWindow(reference: number | undefined, override?: number, tier?: ContextWindowPresetId): number | undefined {
   if (tier === undefined && override !== undefined) return override;
-  const requested = (CONTEXT_WINDOW_PRESETS.find(preset => preset.id === (tier ?? 'default')) ?? CONTEXT_WINDOW_PRESETS[0]).tokens;
-  return reference === undefined ? requested : Math.min(requested, reference);
+  return contextWindowPresets(reference).find(preset => preset.id === (tier ?? 'default'))?.tokens;
 }

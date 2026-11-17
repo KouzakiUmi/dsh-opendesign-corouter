@@ -44,11 +44,16 @@ test('only the plugin\'s own channels count as a CoRouter model', () => {
 });
 
 test('the quick window label stays short and readable', () => {
-  assert.equal(quickWindowLabel(272_000), '272K');
-  assert.equal(quickWindowLabel(500_000), '500K');
-  assert.equal(quickWindowLabel(872_000), '872K');
+  assert.equal(quickWindowLabel(256_000), '256K');
+  assert.equal(quickWindowLabel(512_000), '512K');
+  assert.equal(quickWindowLabel(1_000_000), '1M');
+  assert.equal(quickWindowLabel(1_050_000), '1050K');
   assert.equal(quickWindowLabel(200_000), '200K');
-  assert.equal(quickWindowLabel(262_144), '262,144', 'a clamped window keeps its exact value');
+  assert.equal(quickWindowLabel(262_144), '262,144', 'a binary capacity keeps its exact value');
+  assert.equal(quickWindowLabel(65_536), '65,536');
+  assert.equal(quickWindowLabel(131_072), '131,072');
+  assert.equal(quickWindowLabel(1_048_576), '1,048,576');
+  assert.equal(quickWindowLabel(undefined), '容量未知');
 });
 
 test('a foreign provider has no CoRouter context to change', () => {

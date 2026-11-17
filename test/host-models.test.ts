@@ -310,19 +310,63 @@ test('inference protocol and per-model settings never invalidate the discovered 
 
 test('a lower gateway window reaches resolved Host metadata while saved overrides remain authoritative', async () => {
   const current = runtimeConfig(), calls: Wire[] = [];
+  current.apiProtocol = 'messages';
+  let reference = 500_000;
   const { service, dispose } = await host(current, hostDependencies(calls, () => Response.json({ data: [
-    { id: 'claude-opus-5.5', context_length: 500_000, metadata: { output_budget: 2_000 } },
+    { id: 'claude-opus-5.5', context_length: reference, metadata: { output_budget: 2_000 } },
   ] })));
   const adapter = new CoRouterAdapter({ config: () => current, models: () => service.modelCatalog(), apiKey: async () => KEY });
   try {
     await saveFixtureKey(service);
     const refreshed = await service.refreshModels();
     assert.equal(refreshed.models[0]?.contextWindow, 500_000);
-    assert.equal((await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5')).context?.contextWindow, 272_000);
+    assert.equal((await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5')).context?.contextWindow, 128_000);
     assert.equal(refreshed.models[0]?.maxOutputTokens, undefined);
-    current.modelSettings = { 'claude-opus-5.5': { contextWindow: 200_000 } };
-    assert.equal((await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5')).context?.contextWindow, 200_000);
-    assert.equal(service.modelCatalog()[0]?.contextWindow, 500_000);
+    for (const [gatewayReference, expectedWindows] of [
+      [500_000, [128_000, 256_000, 500_000]],
+      [262_144, [65_536, 131_072, 262_144]],
+      [96_000, [32_000, 64_000, 96_000]],
+    ] as const) {
+      reference = gatewayReference;
+      const refreshed = await service.refreshModels();
+      for (const [index, contextTier] of (['default', 'extended', 'maximum'] as const).entries()) {
+        current.modelSettings = { 'claude-opus-5.5': { contextTier } };
+        const resolved = await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5');
+        assert.equal(resolved.context?.contextWindow, expectedWindows[index], `${reference}/${contextTier}`);
+        assert.equal(resolved.defaultMaxTokens, 4096, 'gateway output budget does not become a model output cap');
+      }
+      for (const contextWindow of [200_000, 512_000, 1_000_000]) {
+        current.modelSettings = { 'claude-opus-5.5': { contextWindow } };
+        assert.equal((await adapter.resolveModel(PAID_PROVIDER, 'claude-opus-5.5')).context?.contextWindow, contextWindow);
+      }
+      assert.equal(refreshed.models[0]?.contextWindow, reference);
+      assert.equal(service.modelCatalog()[0]?.contextWindow, reference);
+      assert.equal(service.modelCatalog()[0]?.maxOutputTokens, undefined);
+    }
+  } finally { adapter.dispose(); await dispose(); }
+});
+
+test('unknown discovery capacity stays absent through every tier and Messages keeps only its protocol output default', async () => {
+  const current = runtimeConfig(), calls: Wire[] = [];
+  const { service, dispose } = await host(current, hostDependencies(calls, () => list('future-model')));
+  const adapter = new CoRouterAdapter({ config: () => current, models: () => service.modelCatalog(), apiKey: async () => KEY });
+  try {
+    await saveFixtureKey(service);
+    const refreshed = await service.refreshModels();
+    assert.equal(refreshed.models[0]?.contextWindow, undefined);
+    assert.equal(refreshed.models[0]?.maxOutputTokens, undefined);
+    for (const apiProtocol of ['chat-completions', 'responses', 'messages'] as const) {
+      current.apiProtocol = apiProtocol;
+      for (const contextTier of ['default', 'extended', 'maximum'] as const) {
+        current.modelSettings = { 'future-model': { contextTier } };
+        const resolved = await adapter.resolveModel(PAID_PROVIDER, 'future-model');
+        assert.equal(resolved.context, undefined);
+        assert.equal(resolved.defaultMaxTokens, apiProtocol === 'messages' ? 4096 : undefined);
+      }
+      current.modelSettings = { 'future-model': { contextWindow: 512_000 } };
+      assert.deepEqual((await adapter.resolveModel(PAID_PROVIDER, 'future-model')).context, { contextWindow: 512_000 });
+      assert.equal(service.modelCatalog()[0]?.contextWindow, undefined);
+    }
   } finally { adapter.dispose(); await dispose(); }
 });
 
