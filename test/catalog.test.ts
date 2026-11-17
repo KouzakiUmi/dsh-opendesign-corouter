@@ -92,8 +92,8 @@ const GO_CAPACITY = new Map<string, {
 const EFFORT_MATRIX = new Map<string, readonly string[] | null>([
   ['claude-fable-5.2', ['low', 'medium', 'high', 'xhigh', 'max']],
   ['deepseek-v4.1-flash-eco', null], ['gemini-4-carbon', null], ['muse-ember-1.0', null],
-  // Hy4 no_think is not an established mapping to the plugin's effort enum.
-  ['hy4', ['high']], ['hy4-flash', ['high']], ['qwen4-max', ['low', 'high', 'xhigh']],
+  // 2026-11-18 official audit: Hy4 Chat no_think is a switch, not another depth level.
+  ['hy4', ['none', 'high']], ['hy4-flash', ['none', 'high']], ['qwen4-max', ['low', 'high', 'xhigh']],
   // OpenAI：`reasoning.effort` 支持集合；GPT-6.1 Sol 与 GPT-6 Astra 官方明文不支持 `none`。
   ['gpt-6.1-sol', ['low', 'medium', 'high', 'xhigh', 'max']],
   ['gpt-6.1-terra', ['none', 'low', 'medium', 'high', 'xhigh', 'max']],
@@ -113,10 +113,10 @@ const EFFORT_MATRIX = new Map<string, readonly string[] | null>([
   ['claude-sonnet-5', ['low', 'medium', 'high', 'xhigh', 'max']],
   ['claude-haiku-5.5', ['low', 'medium', 'high', 'xhigh', 'max']],
   // DeepSeek / Z.ai / Moonshot / Google / xAI / Xiaomi / Tencent / Alibaba。
-  ['deepseek-v4.1-flash', ['low', 'high', 'max']],
-  ['deepseek-v4-pro', ['low', 'high', 'max']],
-  ['deepseek-v4-flash', ['low', 'high', 'max']],
-  ['deepseek-v4-flash-vision-exp', ['low', 'high', 'max']],
+  ['deepseek-v4.1-flash', ['none', 'low', 'high', 'max']],
+  ['deepseek-v4-pro', ['none', 'low', 'high', 'max']],
+  ['deepseek-v4-flash', ['none', 'low', 'high', 'max']],
+  ['deepseek-v4-flash-vision-exp', ['none', 'low', 'high', 'max']],
   ['glm-5.3-flashx', ['low', 'high', 'max']],
   ['glm-5.3-flash', ['low', 'high', 'max']],
   ['glm-5.2', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
@@ -129,10 +129,10 @@ const EFFORT_MATRIX = new Map<string, readonly string[] | null>([
   ['grok-4.7', ['low', 'medium', 'high', 'xhigh']],
   ['grok-4.6', ['low', 'medium', 'high', 'xhigh']],
   ['grok-4.5', ['low', 'medium', 'high']],
-  ['mimo-v2.6-pro', []],
-  ['mimo-v2.6-flash', []],
+  ['mimo-v2.6-pro', ['none', 'high']],
+  ['mimo-v2.6-flash', ['none', 'high']],
   ['hy4-preview', ['none', 'high']],
-  ['qwen3.7-max', []],
+  ['qwen3.7-max', ['none', 'high']],
   // 官方 API 新增项。
   ['minimax-m3.1-flash', ['low', 'medium', 'high', 'xhigh', 'max']],
   ['muse-spark-1.3', ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']],
@@ -282,13 +282,15 @@ const DEFAULT_EFFORT_MATRIX = new Map<string, string>([
   ['gemini-4-argon', 'medium'], ['gemini-3.8-flash', 'medium'], ['gemini-3.7-flash', 'medium'],
   ['grok-4.7', 'high'], ['grok-4.6', 'high'], ['grok-4.5', 'high'],
   ['hy4-preview', 'high'], ['minimax-m3.1-flash', 'max'], ['muse-spark-1.3', 'high'],
+  // MiMo and Qwen3.7 default enabled; high is internal on, never a claimed intensity.
+  ['mimo-v2.6-pro', 'high'], ['mimo-v2.6-flash', 'high'], ['qwen3.7-max', 'high'],
 ]);
 
 test('每个可调档位的型号都带一个有出处的默认档位，未知型号保持缺省', () => {
   for (const model of MODELS) {
     const expected = DEFAULT_EFFORT_MATRIX.get(model.id);
     if (expected === undefined) {
-      // 无离散档位（kimi-k2.7-code、MiMo、Qwen3.7 Max）与档位未知的 Muse Wonder 没有默认档位。
+      // Fixed Kimi and all four unknown rows have no adjustable default.
       assert.equal(model.defaultEffort, undefined, `${model.id} 没有有出处的默认档位时不应携带 defaultEffort`);
       continue;
     }
@@ -328,15 +330,28 @@ test('思考档位只取厂商文档化的取值，且 none 只出现在官方�
   }
 });
 
-test('没有可调档位的型号用空集合，档位未确认的型号保持缺省', () => {
-  for (const id of ['kimi-k2.7-code', 'mimo-v2.6-pro', 'mimo-v2.6-flash', 'qwen3.7-max']) {
+test('fixed与toggle按完整精确矩阵区分，未知型号不伪造控制', () => {
+  const modes = new Map<string, 'toggle' | 'fixed'>([
+    ['kimi-k2.7-code', 'fixed'], ['mimo-v2.6-pro', 'toggle'], ['mimo-v2.6-flash', 'toggle'],
+    ['qwen3.7-max', 'toggle'], ['hy4', 'toggle'], ['hy4-flash', 'toggle'], ['hy4-preview', 'toggle'],
+  ]);
+  for (const model of MODELS) assert.equal(model.reasoningMode, modes.get(model.id), model.id);
+  for (const id of ['kimi-k2.7-code']) {
     const model = findModel(id);
     assert.ok(model);
     assert.deepEqual(model.reasoningEfforts, [], `${id} 应为空档位集合`);
   }
-  const unknown = findModel('muse-wonder');
-  assert.ok(unknown);
-  assert.equal(unknown.reasoningEfforts, undefined, 'muse-wonder 档位未确认，应保持缺省');
+  for (const id of ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'qwen3.7-max', 'hy4', 'hy4-flash']) {
+    assert.deepEqual(findModel(id)!.reasoningEfforts, ['none', 'high'], `${id} internal off/on only`);
+    assert.equal(findModel(id)!.defaultEffort, 'high', `${id} defaults enabled`);
+  }
+  for (const id of ['muse-wonder', 'deepseek-v4.1-flash-eco', 'gemini-4-carbon', 'muse-ember-1.0']) {
+    const unknown = findModel(id);
+    assert.ok(unknown);
+    assert.equal(unknown.reasoningEfforts, undefined, `${id} 档位未确认，应保持缺省`);
+    assert.equal(unknown.reasoningMode, undefined);
+    assert.equal(unknown.defaultEffort, undefined);
+  }
 });
 
 test('findModel 精确匹配，已收录 ID 命中对应分组', () => {

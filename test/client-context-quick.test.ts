@@ -47,12 +47,12 @@ test('the quick window label stays short and readable', () => {
   assert.equal(quickWindowLabel(256_000), '256K');
   assert.equal(quickWindowLabel(512_000), '512K');
   assert.equal(quickWindowLabel(1_000_000), '1M');
-  assert.equal(quickWindowLabel(1_050_000), '1050K');
+  assert.equal(quickWindowLabel(1_050_000), '1.05M');
   assert.equal(quickWindowLabel(200_000), '200K');
-  assert.equal(quickWindowLabel(262_144), '262,144', 'a binary capacity keeps its exact value');
-  assert.equal(quickWindowLabel(65_536), '65,536');
-  assert.equal(quickWindowLabel(131_072), '131,072');
-  assert.equal(quickWindowLabel(1_048_576), '1,048,576');
+  assert.equal(quickWindowLabel(262_144), '256K', 'binary references use compact binary subdivisions');
+  assert.equal(quickWindowLabel(65_536), '64K');
+  assert.equal(quickWindowLabel(131_072), '128K');
+  assert.equal(quickWindowLabel(1_048_576), '1M');
   assert.equal(quickWindowLabel(undefined), '容量未知');
 });
 
@@ -71,25 +71,24 @@ test('a foreign provider has no CoRouter context to change', () => {
   assert.equal(foreign, '', 'a third-party model renders no CoRouter quick switch');
 });
 
-test('the quick button names the channel and waits for the catalog reference', () => {
+test('the inline group names the channel and waits for the catalog reference without fake tiers', () => {
   const html = renderToStaticMarkup(h(ContextQuickSwitch, { directory: ownDirectory, form, caller }));
   assert.match(html, /class="odc-quick"/u);
   assert.match(html, /aria-label="CoRouter 上下文[^"]*"/u);
   // Without a catalog row the window is unknown; the control says so instead of guessing.
-  assert.match(html, /上下文…/u);
+  assert.match(html, /容量未知/u);
   assert.match(html, /正在读取模型参考容量…/u);
-  assert.match(html, /<input[^>]*type="radio"[^>]*disabled=""/u, 'the tiers wait for the catalog reference');
+  assert.doesNotMatch(html, /data-preset=|<input/u, 'unknown capacity does not render invented tier buttons');
   assert.doesNotMatch(html, /上下文预算（tokens）/u, 'the quick switch is not a numeric field');
 });
 
-test('the popover offers the three tiers and states that the change is global', () => {
+test('the quick control uses the shared inline group without a dialog or trigger', () => {
   const html = renderToStaticMarkup(h(ContextQuickSwitch, { directory: ownDirectory, form, caller }));
-  assert.match(html, /class="odc-quick-panel"/u);
-  assert.match(html, /role="dialog"/u);
+  assert.match(html, /class="odc-context odc-context-control" role="group"/u);
+  assert.doesNotMatch(html, /odc-quick-panel|role="dialog"|popover|aria-haspopup/u);
   assert.match(html, /上下文窗口/u);
-  assert.match(html, /修改此模型的默认值，其他会话同步。/u);
-  assert.match(html, /上下文档位/u);
-  assert.equal((html.match(/type="radio"/g) ?? []).length, 3);
+  assert.match(html, /使用此模型的其他会话同步/u);
+  assert.match(html, /CoRouter 上下文 · gpt-6-luna/u);
 });
 
 test('a pending model selection cannot be written through the quick switch', () => {
@@ -105,5 +104,5 @@ test('a pending model selection cannot be written through the quick switch', () 
     caller,
   }));
   assert.match(pending, /正在切换模型，请稍候。/u);
-  assert.match(pending, /<input[^>]*type="radio"[^>]*disabled=""/u);
+  assert.doesNotMatch(pending, /data-preset=/u);
 });

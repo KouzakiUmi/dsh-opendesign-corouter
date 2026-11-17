@@ -93,7 +93,7 @@ test('known ids inherit catalog grouping and capabilities; new ids are paid rows
     data: [
       { id: 'claude-opus-5', object: 'model', name: 'api-supplied-name' },
       { id: 'deepseek-v4.1-flash', object: 'model', name: 'api-supplied-name' },
-      { id: 'brand-new-chat', object: 'model', name: '  Brand New  ', context_budget: 999999, capabilities: { vision: true }, architecture: { output_modalities: ['image'] }, nativeProtocol: 'messages' },
+      { id: 'brand-new-chat', object: 'model', name: '  Brand New  ', context_budget: 999999, capabilities: { vision: true }, architecture: { output_modalities: ['image'] }, nativeProtocol: 'messages', reasoningMode: 'toggle', reasoningEfforts: ['none', 'high'], defaultEffort: 'high' },
     ],
   }));
   const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
@@ -110,7 +110,7 @@ test('known ids inherit catalog grouping and capabilities; new ids are paid rows
   assert.equal(plan.group, 'plan');
   assert.equal(plan.contextWindow, 1_000_000);
   assert.deepEqual(plan.inputModalities, ['text', 'image']);
-  assert.deepEqual(plan.reasoningEfforts, ['low', 'high', 'max']);
+  assert.deepEqual(plan.reasoningEfforts, ['none', 'low', 'high', 'max']);
   // 新 id：只保留 id/name 并归 paid，未识别的上游能力字段一律不猜。
   const fresh = rows[2]!;
   assert.deepEqual(fresh, { id: 'brand-new-chat', name: 'Brand New', group: 'paid' });
@@ -118,6 +118,7 @@ test('known ids inherit catalog grouping and capabilities; new ids are paid rows
   assert.equal(fresh.maxOutputTokens, undefined);
   assert.equal(fresh.inputModalities, undefined);
   assert.equal(fresh.reasoningEfforts, undefined);
+  assert.equal(fresh.reasoningMode, undefined, 'untrusted catalog hints never create a toggle');
   assert.equal(fresh.nativeProtocol, undefined, 'untrusted protocol hints are not native-route evidence');
 });
 
@@ -154,8 +155,8 @@ test('seven scoped additions preserve only individually evidenced capabilities',
     { id: 'claude-fable-5.2', contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'], reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high', nativeProtocol: 'messages', group: 'paid' },
     { id: 'deepseek-v4.1-flash-eco', group: 'plan' },
     { id: 'gemini-4-carbon', group: 'paid' },
-    { id: 'hy4', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: ['text', 'image'], reasoningEfforts: ['high'], defaultEffort: 'high', group: 'paid' },
-    { id: 'hy4-flash', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: ['text', 'image'], reasoningEfforts: ['high'], defaultEffort: 'high', group: 'paid' },
+    { id: 'hy4', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: ['text', 'image'], reasoningMode: 'toggle', reasoningEfforts: ['none', 'high'], defaultEffort: 'high', group: 'paid' },
+    { id: 'hy4-flash', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: ['text', 'image'], reasoningMode: 'toggle', reasoningEfforts: ['none', 'high'], defaultEffort: 'high', group: 'paid' },
     { id: 'muse-ember-1.0', group: 'paid' },
     { id: 'qwen4-max', contextWindow: 1_000_000, maxOutputTokens: 131_072, inputModalities: ['text', 'image'], reasoningEfforts: ['low', 'high', 'xhigh'], defaultEffort: 'high', group: 'paid' },
   ];
@@ -163,6 +164,23 @@ test('seven scoped additions preserve only individually evidenced capabilities',
   const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
   assert.equal(rows.length, 7);
   assert.deepEqual(rows.map(({ name: _label, ...row }) => row), expected);
+});
+
+test('discovery carries exact fixed/toggle evidence without treating switches as graded depth', async () => {
+  const matrix = [
+    ['kimi-k2.7-code', 'fixed', [], undefined],
+    ['mimo-v2.6-pro', 'toggle', ['none', 'high'], 'high'],
+    ['mimo-v2.6-flash', 'toggle', ['none', 'high'], 'high'],
+    ['qwen3.7-max', 'toggle', ['none', 'high'], 'high'],
+  ] as const;
+  const { fetcher } = stub(() => Response.json({ data: matrix.map(([id]) => ({ id, reasoningMode: 'invented', reasoningEfforts: ['low', 'medium', 'high'] })) }));
+  const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
+  for (const [id, mode, efforts, defaultEffort] of matrix) {
+    const row = rows.find(item => item.id === id)!;
+    assert.equal(row.reasoningMode, mode);
+    assert.deepEqual(row.reasoningEfforts, efforts);
+    assert.equal(row.defaultEffort, defaultEffort);
+  }
 });
 
 test('discovery preserves GPT-6.1 Terra catalog metadata', async () => {

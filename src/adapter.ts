@@ -15,7 +15,7 @@ import { applyModelSettings, isModelEnabled, type ModelSettings } from './model-
 import { protocolFor } from './protocols/index.js';
 import { PrematureEndError } from './protocols/errors.js';
 import { effectiveProtocol, type ApiProtocol } from './protocol-options.js';
-import { defaultReasoningEffort, modelReasoningEfforts, vendorDefaultEffort } from './reasoning.js';
+import { defaultReasoningEffort, modelReasoningEfforts, reasoningEffortName, usesReasoningContent, vendorDefaultEffort } from './reasoning.js';
 import { validateClaudeOutput, validateClaudeSampling } from './claude-parameters.js';
 import { claudeOutputError, hasRestrictedClaudeSampling } from './claude-capabilities.js';
 
@@ -55,7 +55,7 @@ function metadata(provider: string, row: CatalogModel, config: RuntimeConfig): L
     ...(row.contextWindow === undefined ? {} : { context: { contextWindow: row.contextWindow } }),
     ...(reserve === undefined ? {} : { defaultMaxTokens: reserve }),
     ...(efforts?.length ? { reasoning: {
-      efforts: efforts.map(id => ({ id: ReasoningEffortId(id), name: ({ none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '较高', ultra: '极高', max: '最高' } as Record<string, string>)[id] ?? id })),
+      efforts: efforts.map(id => ({ id: ReasoningEffortId(id), name: reasoningEffortName(id, row.reasoningMode) })),
       ...(defaultEffort === undefined ? {} : { defaultEffort: ReasoningEffortId(defaultEffort) }),
     } } : {}),
   };
@@ -225,7 +225,7 @@ export class CoRouterAdapter extends LlmAdapter {
           : block),
       }),
     };
-    const messages = chatMessages(projectedOptions, ref => images.get(ref.attachmentId), row.id.startsWith('deepseek-') || row.id.startsWith('kimi-'));
+    const messages = chatMessages(projectedOptions, ref => images.get(ref.attachmentId), usesReasoningContent(row.id));
     const tools = chatTools(options);
     let maxTokens = options.maxTokens ?? setting.maxTokens ?? outputReserve(row, protocolId);
     if (maxTokens !== undefined) {

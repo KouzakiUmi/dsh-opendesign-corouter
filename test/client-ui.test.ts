@@ -424,7 +424,7 @@ test('image input distinguishes manual overrides, catalog facts and unknown-atte
   const imageStateId = imageCheckbox.match(/aria-describedby="([^"]+)"/u)?.[1];
   assert.ok(imageStateId);
   assert.match(unknown, new RegExp(`<small class="odc-image-state" id="${imageStateId}">自动 · 未知，尝试发送</small>`, 'u'));
-  assert.ok(unknown.indexOf('图片输入') < unknown.indexOf('<details'), 'image policy stays outside advanced parameters');
+  assert.ok(unknown.indexOf('图片输入') < unknown.indexOf('<details class="odc-model-details">'), 'image policy stays outside advanced parameters');
   assert.match(unknown, /<details class="odc-model-details">/u, 'advanced parameters start collapsed');
   assert.doesNotMatch(unknown, />恢复自动<\/button>/u, 'unchanged defaults do not add a disabled action');
 
@@ -557,18 +557,18 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
   });
   assert.equal((html.match(/type="checkbox"/g) ?? []).length, 6);
   assert.equal((html.match(/type="checkbox"[^>]*checked=""/g) ?? []).length, 4);
-  assert.equal((html.match(/<summary[^>]*>参数设置 · (?:已自定义|使用默认值)<\/summary>/g) ?? []).length, 3);
+  assert.equal((html.match(/<summary[^>]*>高级参数 · (?:已自定义|使用默认值)<\/summary>/g) ?? []).length, 3);
   for (const label of ['温度', 'Top P', '最大输出（tokens）']) {
     assert.match(html, new RegExp(`<label for="[^"]+">${label}</label>`));
   }
   // The context window is a three-tier choice, not another numeric field.
   assert.doesNotMatch(html, /上下文预算（tokens）/u);
-  assert.equal((html.match(/type="radio"/g) ?? []).length, models.length * 3);
-  assert.equal((html.match(/<legend[^>]*>上下文窗口（输入 \+ 输出合计）<\/legend>/gu) ?? []).length, models.length);
-  assert.equal((html.match(/aria-label="编辑默认思考深度"/g) ?? []).length, 3);
+  assert.equal((html.match(/data-preset=/g) ?? []).length, 6, 'the unknown model has no invented tier buttons');
+  assert.equal((html.match(/role="group" aria-label="上下文窗口"/gu) ?? []).length, models.length);
+  assert.equal((html.match(/aria-label="编辑默认思考深度"/g) ?? []).length, 1);
   // The saved default is the documented vendor default; models without one say so.
-  assert.equal((html.match(/class="odc-effort-value">模型默认（medium）<\/p>/g) ?? []).length, 1);
-  assert.equal((html.match(/class="odc-effort-value">不指定档位<\/p>/g) ?? []).length, 2);
+  assert.equal((html.match(/class="odc-effort-value">模型默认（中 · medium）<\/p>/g) ?? []).length, 1);
+  assert.equal((html.match(/class="odc-effort-value">思考能力未核实<\/p>/g) ?? []).length, 2);
   assert.doesNotMatch(html, /<label for="[^"]+">默认思考深度<\/label>/u, 'the effort selector appears only after entering edit mode');
   assert.match(html, /GPT-6 Astra/u);
   assert.match(html, /已禁用/u);
@@ -581,9 +581,9 @@ test('model rows expose a switch, an editable parameter block and reset', () => 
   assert.equal((html.match(/<button[^>]*disabled=""[^>]*>重置<\/button>/g) ?? []).length, 2);
 });
 
-/** The rendered input tag of one context tier; attribute order is React's, not the test's. */
-function contextRadio(html: string, preset: string): string {
-  return html.match(new RegExp(`<input[^>]*value="${preset}"[^>]*>`, 'u'))?.[0] ?? '';
+/** Inspect the native capacity button, independent of attribute order. */
+function contextButton(html: string, preset: string): string {
+  return html.match(new RegExp(`<button[^>]*data-preset="${preset}"[^>]*>`, 'u'))?.[0] ?? '';
 }
 
 test('the context window offers three tiers and keeps the vendor reference separate', () => {
@@ -592,37 +592,37 @@ test('the context window offers three tiers and keeps the vendor reference separ
     model, settings, authoritative: true, writable: true, pending, onCommit: async () => true,
   }));
   const html = render({});
-  assert.equal((html.match(/type="radio"/g) ?? []).length, 3);
-  assert.match(contextRadio(html, 'default'), /checked=""/u, 'an absent override is the default tier');
-  assert.doesNotMatch(contextRadio(html, 'extended'), /checked=""/u);
-  assert.doesNotMatch(contextRadio(html, 'maximum'), /checked=""/u);
+  assert.equal((html.match(/data-preset=/g) ?? []).length, 3);
+  assert.match(contextButton(html, 'default'), /aria-pressed="true"/u, 'an absent override is the default tier');
+  assert.doesNotMatch(contextButton(html, 'extended'), /aria-pressed="true"/u);
+  assert.doesNotMatch(contextButton(html, 'maximum'), /aria-pressed="true"/u);
   // The vendor reference stays the evidence value; the working window is the tier.
   assert.match(html, /参考容量 1,050,000/u);
   assert.match(html, /当前总窗口 256,000（含输出预留）/u);
-  assert.match(html, /当前总窗口 256,000 tokens（含输出预留）/u);
+  assert.match(html, /当前 256,000 tokens/u);
   assert.match(html, /输出能力参考 128,000/u);
   assert.match(html, /自动输出预留 64,000/u, 'the automatic reservation is a quarter of the working window');
   assert.match(html, /正整数；留空按模型与当前总窗口自动预留。/u);
   assert.doesNotMatch(html, /上下文预算（tokens）/u);
 
   const extended = render({ contextTier: 'extended' });
-  assert.match(contextRadio(extended, 'extended'), /checked=""/u);
-  assert.match(extended, /当前总窗口 512,000 tokens（含输出预留）/u);
+  assert.match(contextButton(extended, 'extended'), /aria-pressed="true"/u);
+  assert.match(extended, /当前 512,000 tokens/u);
 
   const maximum = render({ contextTier: 'maximum' });
-  assert.match(contextRadio(maximum, 'maximum'), /checked=""/u);
-  assert.match(maximum, /当前总窗口 1,050,000 tokens（含输出预留）/u);
+  assert.match(contextButton(maximum, 'maximum'), /aria-pressed="true"/u);
+  assert.match(maximum, /当前 1,050,000 tokens/u);
 
   const pendingHtml = render({ contextTier: 'extended' }, true);
-  assert.match(contextRadio(pendingHtml, 'extended'), /disabled=""/u, 'a pending save locks the tier control');
+  assert.match(contextButton(pendingHtml, 'extended'), /disabled=""/u, 'a pending save locks the tier control');
   // A disabled tier control explains why it is unavailable.
-  assert.match(pendingHtml, /正在保存模型设置，完成后可继续选择档位。/u);
-  assert.match(contextRadio(pendingHtml, 'extended'), /aria-describedby="[^"]+-reason"/u);
+  assert.match(pendingHtml, /正在保存模型设置…/u);
+  assert.match(contextButton(pendingHtml, 'extended'), /aria-describedby="[^"]+-reason"/u);
   const readOnly = renderToStaticMarkup(h(ModelRow, {
     model, settings: {}, authoritative: true, writable: false, pending: false, onCommit: async () => true,
   }));
   assert.match(readOnly, /配置不可写/u);
-  assert.match(contextRadio(readOnly, 'default'), /aria-describedby="[^"]+-reason"/u);
+  assert.match(contextButton(readOnly, 'default'), /aria-describedby="[^"]+-reason"/u);
 });
 
 test('a small reference offers all three fitting tiers instead of disabling the larger choices', () => {
@@ -630,13 +630,13 @@ test('a small reference offers all three fitting tiers instead of disabling the 
   const html = renderToStaticMarkup(h(ModelRow, {
     model, settings: {}, authoritative: true, writable: true, pending: false, onCommit: async () => true,
   }));
-  assert.match(contextRadio(html, 'default'), /checked=""/u, 'the default tier stays selectable');
-  assert.doesNotMatch(contextRadio(html, 'default'), /disabled=""/u);
-  assert.doesNotMatch(contextRadio(html, 'extended'), /disabled=""/u);
-  assert.doesNotMatch(contextRadio(html, 'maximum'), /disabled=""/u);
+  assert.match(contextButton(html, 'default'), /aria-pressed="true"/u, 'the default tier stays selectable');
+  assert.doesNotMatch(contextButton(html, 'default'), /disabled=""/u);
+  assert.doesNotMatch(contextButton(html, 'extended'), /disabled=""/u);
+  assert.doesNotMatch(contextButton(html, 'maximum'), /disabled=""/u);
   for (const tokens of ['65,536', '131,072', '262,144']) assert.ok(html.includes(`${tokens} tokens`));
   assert.match(html, /参考容量 262,144/u);
-  assert.match(html, /当前总窗口 65,536 tokens（含输出预留）/u);
+  assert.match(html, /当前 65,536 tokens/u);
   assert.doesNotMatch(html, /超过参考容量|所选档位已按参考容量限幅/u);
 });
 
@@ -646,12 +646,13 @@ test('a selected maximum reaches the exact reference while extended remains a lo
     model, settings, authoritative: true, writable: true, pending: false, onCommit: async () => true,
   }));
   const maximum = render({ contextTier: 'maximum' });
-  assert.match(maximum, /当前总窗口 500,000 tokens（含输出预留）/u);
+  assert.match(maximum, /当前 500,000 tokens/u);
   const extended = render({ contextTier: 'extended' });
-  assert.match(extended, /当前总窗口 256,000 tokens（含输出预留）/u);
+  assert.match(extended, /当前 256,000 tokens/u);
   // A legacy number keeps its own value and is never described as clamped.
   const legacy = render({ contextWindow: 500_000 });
-  assert.match(legacy, /当前总窗口 500,000 tokens（含输出预留）；旧自定义窗口按原值继续生效/u);
+  assert.match(legacy, /当前 500,000 tokens/u);
+  assert.match(legacy, /旧自定义值按原值保留/u);
   assert.doesNotMatch(legacy, /所选档位已按参考容量限幅/u);
 });
 
@@ -674,7 +675,7 @@ test('both settings helpers and rendering use the independently evidenced model-
       assert.equal(contextTierAvailable(id, reference), true);
       const html = renderToStaticMarkup(h(ModelRow, { model: { id: 'matrix', name: 'Matrix', group: 'paid', contextWindow: reference },
         settings: { contextTier: id }, authoritative: true, writable: true, pending: false, onCommit: async () => true }));
-      assert.match(contextRadio(html, id), /checked=""/u);
+      assert.match(contextButton(html, id), /aria-pressed="true"/u);
       for (const count of expected) assert.ok(html.includes(`${count.toLocaleString('en-US')} tokens`), `${reference}/${id}/${count}`);
       assert.doesNotMatch(html, /超过参考容量|所选档位已按参考容量限幅/u);
     }
@@ -691,13 +692,12 @@ test('unknown context never fabricates a window and default can clear stale sett
     const html = render(settings);
     assert.match(html, /容量.*未核实|未核实.*容量/u);
     assert.doesNotMatch(html, /272,000|872,000|256,000|512,000/u);
-    assert.doesNotMatch(contextRadio(html, 'default'), /disabled=""/u);
-    assert.match(contextRadio(html, 'extended'), /disabled=""/u);
-    assert.match(contextRadio(html, 'maximum'), /disabled=""/u);
+    assert.doesNotMatch(html, /data-preset=/u);
+    assert.equal(html.includes('>恢复默认</button>'), 'contextTier' in settings);
   }
   for (const tier of ['default', 'extended', 'maximum'] as const) assert.equal(effectiveContextWindow(undefined, undefined, tier), undefined);
   assert.equal(effectiveContextWindow(undefined, 872_000), 872_000, 'existing custom number is not erased just because reference is unknown');
-  assert.match(render({ contextWindow: 872_000 }), /旧自定义 872,000/u);
+  assert.match(render({ contextWindow: 872_000 }), /自定义 872K/u);
   assert.deepEqual(writeModelSettings({ x: { contextWindow: 872_000 } }, 'x', {}), {}, 'default clears legacy without inventing a tier value');
 });
 
@@ -707,18 +707,18 @@ test('a legacy custom window stays visible and is never read as a tier', () => {
     model, settings, authoritative: true, writable: true, pending: false, onCommit: async () => true,
   }));
   const legacy = render({ contextWindow: 200_000 });
-  assert.match(legacy, /旧自定义 200,000，选择档位替换/u);
-  assert.doesNotMatch(contextRadio(legacy, 'default'), /checked=""/u, 'a custom window selects no tier');
-  assert.match(legacy, /当前总窗口 200,000 tokens（含输出预留）/u);
+  assert.match(legacy, /自定义 200K/u);
+  assert.doesNotMatch(contextButton(legacy, 'default'), /aria-pressed="true"/u, 'a custom window selects no tier');
+  assert.match(legacy, /当前 200,000 tokens/u);
 
   // A legacy number that happens to equal a tier's token count stays a custom window.
   const equalToTier = render({ contextWindow: 500_000 });
-  assert.match(equalToTier, /旧自定义 500,000，选择档位替换/u);
-  assert.doesNotMatch(contextRadio(equalToTier, 'extended'), /checked=""/u);
-  assert.match(equalToTier, /当前总窗口 500,000 tokens（含输出预留）/u);
+  assert.match(equalToTier, /自定义 500K/u);
+  assert.doesNotMatch(contextButton(equalToTier, 'extended'), /aria-pressed="true"/u);
+  assert.match(equalToTier, /当前 500,000 tokens/u);
   const oldMaximum = render({ contextWindow: 872_000 });
-  assert.match(oldMaximum, /旧自定义 872,000，选择档位替换/u);
-  assert.doesNotMatch(contextRadio(oldMaximum, 'maximum'), /checked=""/u);
+  assert.match(oldMaximum, /自定义 872K/u);
+  assert.doesNotMatch(contextButton(oldMaximum, 'maximum'), /aria-pressed="true"/u);
 });
 
 test('an explicit output that no longer fits the window is reported before any save', () => {
@@ -771,11 +771,10 @@ test('the tier policy, the capacity conflicts and the writer agree', () => {
 
 test('invalid saved efforts remain clearable and are not presented as supported choices', () => {
   const html = renderModels(status, { ...snapshot, value: { ...snapshot.value, modelSettings: { 'gpt-6-astra': { reasoningEffort: 'ultra' } } } });
-  assert.match(html, /<p class="odc-effort-value">ultra（当前不可用）<\/p>/u);
-  const edit = html.match(/<button[^>]*aria-label="编辑默认思考深度"[^>]*>编辑<\/button>/u)?.[0] ?? '';
+  assert.match(html, /思考能力未核实 · 旧设置 ultra（可清除）/u);
+  const edit = html.match(/<button[^>]*aria-label="编辑默认思考深度"[^>]*>清除旧设置<\/button>/u)?.[0] ?? '';
   assert.doesNotMatch(edit, /disabled/u);
-  assert.match(html, /已保存的档位不适用于当前模型或协议/u);
-  assert.match(html, /改用模型默认/u);
+  assert.match(html, /可编辑并清除旧设置/u);
 });
 
 test('settings effort choices also respect the pending protocol selection', () => {
@@ -786,6 +785,33 @@ test('settings effort choices also respect the pending protocol selection', () =
   assert.match(html, /aria-label="编辑默认思考深度"/u);
 });
 
+test('common model controls precede advanced details and explain fixed, toggle and unknown thinking distinctly', () => {
+  for (const [model, label] of [
+    [{ id: 'kimi-k2.7-code', name: 'Kimi', group: 'plan', contextWindow: 262_144, reasoningMode: 'fixed', reasoningEfforts: [] }, '固定思考 · 始终开启'],
+    [{ id: 'mimo-v2.6-pro', name: 'MiMo', group: 'plan', contextWindow: 1_000_000, reasoningMode: 'toggle', reasoningEfforts: ['none', 'high'], defaultEffort: 'high' }, '模型默认（开启）'],
+    [{ id: 'deepseek-v4.1-flash-eco', name: 'Eco', group: 'plan' }, '思考能力未核实'],
+  ] as const) {
+    const html = renderToStaticMarkup(h(ModelRow, { model, settings: {}, authoritative: true, writable: true, pending: false, onCommit: async () => true }));
+    const advanced = html.indexOf('<details class="odc-model-details">');
+    assert.ok(advanced > html.indexOf('class="odc-model-controls"'));
+    assert.ok(html.indexOf('class="odc-effort-value"') < advanced, 'thinking is visible before expanding advanced details');
+    assert.ok(html.indexOf('-maxTokens"') < advanced, 'maximum output is a common control');
+    assert.ok(html.includes(label));
+  }
+});
+
+test('pending protocol changes rebuild Qwen thinking choices from raw catalog fields', () => {
+  const qwen: StatusModel = { id: 'qwen3.7-max', name: 'Qwen', group: 'paid', reasoningMode: 'toggle',
+    reasoningEfforts: [], catalogReasoningEfforts: ['none', 'high'], catalogDefaultEffort: 'high' };
+  const fixture = { ...status, models: [qwen] };
+  const responses = renderModels(fixture, { ...snapshot, value: { ...snapshot.value, apiProtocol: 'responses' } });
+  assert.doesNotMatch(responses, /模型默认（开启）/u);
+  const chat = renderModels(fixture, { ...snapshot, value: { ...snapshot.value, apiProtocol: 'chat-completions' } });
+  assert.match(chat, /模型默认（开启）/u);
+  assert.match(chat, /思考档位 none \/ high/u);
+  assert.match(chat, /aria-label="编辑思考模式"/u);
+});
+
 test('an overridden model keeps its reset enabled and its values rendered', () => {
   const html = renderModels(status, {
     ...snapshot,
@@ -793,7 +819,7 @@ test('an overridden model keeps its reset enabled and its values rendered', () =
   });
   assert.match(html, /value="0.7"/u);
   assert.match(html, /value="4096"/u);
-  assert.match(html, /<p class="odc-effort-value">high<\/p>/u);
+  assert.match(html, /<p class="odc-effort-value">高 · high<\/p>/u);
   assert.match(html, /aria-label="编辑默认思考深度"/u);
   assert.equal((html.match(/>重置<\/button>/g) ?? []).length, 3);
   assert.equal((html.match(/<button[^>]*disabled=""[^>]*>重置<\/button>/g) ?? []).length, 2);
@@ -834,7 +860,7 @@ test('effort editing explains read-only, unavailable and pending states', () => 
     onRefreshModels: () => {}, refreshingModels: false, notice: null,
   }));
   assert.match(pending, /正在保存模型设置，完成后可继续编辑。/u);
-  assert.equal((pending.match(/<button[^>]*disabled=""[^>]*aria-label="编辑默认思考深度"/g) ?? []).length, models.length);
+  assert.equal((pending.match(/<button[^>]*disabled=""[^>]*aria-label="编辑默认思考深度"/g) ?? []).length, 1);
 });
 
 test('advanced offers three protocols, a read-only gateway and real timeout fields', () => {

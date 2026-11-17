@@ -1,4 +1,4 @@
-# 推理档位取证
+# 推理控制取证
 
 本文记录 CoRouter 目录的推理控制证据。旧 39 个 ID 的矩阵采样日期 2026-10-27；新增型号在 2026-11-17 核对，缺失能力不从旧型号外推。
 
@@ -7,11 +7,36 @@
 | 精确 ID | 独立档位与默认 | 依据与限制 |
 | --- | --- | --- |
 | `claude-fable-5.2` | low / medium / high / xhigh / max，high | [厂商专页](https://platform.claude.com/docs/en/models/fable-5-2/overview.md)、[迁移](https://platform.claude.com/docs/en/models/fable-5-2/migration-guide.md)。adaptive 恒开，不能 none；签名绑定 system、tools 和此前历史前缀。 |
-| `hy4`、`hy4-flash` | 本插件暴露 high，默认 high | [腾讯深度推理](https://www.tencentcloud.com/document/product/1300/80637)逐 ID 支持 high / no_think，no_think 不在当前通用 wire effort 枚举中，未擅自映射成 none。 |
+| `hy4`、`hy4-flash` | 思考开关，默认开启；关闭仅 Chat 开放 | [腾讯深度推理](https://www.tencentcloud.com/document/product/1300/80637)逐 ID 支持 high / no_think。2026-11-18 补充精确投影：内部 none/high 表示关闭/开启，Chat 发送 no_think/high；其他协议保留既有 high、不开放关闭，详见下节。 |
 | `qwen4-max` | low / high / xhigh，high | [精确型号页](https://help.aliyun.com/zh/model-studio/qwen4-max)。medium→high、max→xhigh 等为别名，非独立档；Chat / Responses / Messages 各有明确字段。 |
 | `deepseek-v4.1-flash-eco`、`gemini-4-carbon`、`muse-ember-1.0` | 未知 | Link 只证明 ID；未取得精确型号能力正文，不复制邻近模型的档位或默认。 |
 
 默认协议与显式覆盖见[协议策略](protocols.md)。GitHub [#9232](https://github.com/nexu-io/open-design/issues/9232)报告 CoRouter Flash Chat 各档位疑似被网关归一；厂商矩阵不等于网关逐档实测。
+
+## 2026-11-18 开关、固定思考与协议审计
+
+无离散档位不等于没有思考：目录用 `reasoningMode: toggle` 表示开关、`fixed` 表示固定开启；其余已核档位为分级，四款未核型号保持缺省。toggle 的内部 `none/high` 只表示关闭/开启，界面与宿主名称为“关闭/开启”，不是“关闭/高强度”。六款 toggle 默认开启，以内部 `high` 显式编码；Qwen3.7 非 Chat 无可用设置，因此该协议下不继承此默认。
+
+| 精确型号 | 类型与默认 | Chat Completions | Responses | Messages |
+| --- | --- | --- | --- | --- |
+| `mimo-v2.6-pro`、`mimo-v2.6-flash` | toggle，开启 | `thinking.type: disabled/enabled` | `reasoning.effort: none/high`，不添加未核的 summary；所有合法非 none 值行为相同，并无不同强度；多轮工具思考回传限制见下文 | `thinking.type: disabled/enabled`，不是 adaptive，也不发 output_config；多轮工具思考回传限制见下文 |
+| `qwen3.7-max` | toggle，开启；源 API 还支持预算 | `enable_thinking: false/true`；本版本不新增 thinking_budget 配置 | 无精确型号投影证据，不提供控制，显式值拒绝 | 同左 |
+| `kimi-k2.7-code` | fixed，始终开启 | 不发 effort 或开关；厂商建议省略 thinking | 不补控制 | 不补控制 |
+| `hy4`、`hy4-flash` | toggle，开启 | 内部 none→`reasoning_effort: no_think`，high→`reasoning_effort: high` | 不开放关闭；保留既有 high 投影，不把它称作新增验收 | 同左 |
+| `hy4-preview` | toggle，开启 | 保留已有 `reasoning_effort: none/high` 两态，仅改为开启/关闭名称 | 保留既有投影 | 保留既有投影 |
+| `deepseek-v4.1-flash`、`deepseek-v4-pro`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` | graded，可关闭；默认 high | `reasoning_effort: none/low/high/max` | `reasoning.effort: none/low/high/max` | none→`thinking.type: disabled`；开启时 thinking 配置加 `output_config.effort` |
+| `deepseek-v4.1-flash-eco`、`gemini-4-carbon`、`muse-ember-1.0`、`muse-wonder` | unknown | 无推断值 | 无推断值 | 无推断值 |
+
+### 一手资料与边界
+
+- **MiMo**：[深度思考](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/text-generation/deep-thinking)、[Responses](https://mimo.mi.com/docs/zh-CN/api/chat/responses)、[Messages](https://mimo.mi.com/docs/zh-CN/api/chat/anthropic-api)，页面均标 2026-10-20 更新，逐 ID 明确默认 enabled。Responses 原文：“none 会关闭思考功能；其余所有级别均会开启思考，且行为完全一致”。Messages 的 type 为 enabled/disabled，不支持把 adaptive 当作已核开关。Chat 工具历史包含 assistant 工具调用时必须保留 reasoning_content，否则可能 400；请求投影和估算使用相同的精确 MiMo ID 回传策略。
+- **MiMo 多轮工具覆盖边界**：Messages 页 thinking/tools 段写：“若要继续对话，建议在后续每次请求的 messages 数组中保留所有历史 thinking 内容块，以获得最佳表现。”这是建议保留，不等于该页声明缺失一定 400。Responses 页亦建议在每次 input 中保留所有历史思考内容。本插件 Messages 原有机制只回传经对齐验证的 signed/redacted 私有块，不回放无签名 thinking；本次没有新增 MiMo 专用无签名块回传，Responses 也未新增普通 reasoning_text 续接契约。因此上表仅确认这两个协议的思考开关参数，不宣称完整 MiMo 多轮思考/工具续接已覆盖或在 CoRouter 上实测；默认仍按已核 Chat 路由，并完整回传 Chat reasoning_content，不自动切换协议规避该限制。
+- **Qwen3.7**：[百炼深度思考](https://help.aliyun.com/zh/model-studio/deep-thinking)更新 2026-11-16，精确列 qwen3.7-max 为混合思考、默认开启。[官方思考指南](https://platform.qianwenai.com/docs/developer-guides/text-generation/thinking)说明 thinking_budget 只适用于 Chat/DashScope，Responses 不支持。[官方客户端固定提交](https://github.com/QwenLM/qwen-code/blob/b695664b8df06d06c625db3e30b97045d82092c7/docs/design/model-reasoning-capabilities.md)将 qwen3.7-max 列为 Optional / None，说明使用整数预算而非离散 effort。工作台的 4000 是示例，不作为 API 默认写入目录。
+- **Kimi**：[思考模型](https://platform.kimi.com/docs/guide/use-thinking-models.md)逐 ID 写明 reasoning_effort 不支持，thinking.type 仅 enabled、disabled 报错，thinking.keep 恒 all，建议不传 thinking；固定开启不能显示成可关闭。
+- **Hy4**：[深度推理](https://www.tencentcloud.com/document/product/1300/80637)逐 ID 写 high/no_think、默认 high。[联网搜索](https://cloud.tencent.com/document/product/1823/132358)更新 2026-11-12，具名 hy4 的 Responses 搜索场景写 reasoning.effort=no_think，但未列 hy4-flash；本版本不将该场景外推为两款通用关闭契约。[Responses 通用字段](https://cloud.tencent.com/document/product/1823/135873)更新 2026-10-13，表列 none/low/medium/high；[兼容模式](https://cloud.tencent.com/document/product/1823/133813)更新 2026-10-15，none/no_think 属平台转换说明，不能替代原生路由逐型号证据。[Messages 字段](https://cloud.tencent.com/document/product/1823/135874)更新 2026-11-03，通用 enabled/disabled/adaptive 表同时警告模型差异；未取得两款 Hy4 精确关闭兼容行。
+- **DeepSeek**：[Chat schema](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion/)、[Responses schema](https://api-docs.deepseek.com/zh-cn/api/create-response/)、[Messages schema](https://api-docs.deepseek.com/zh-cn/api/create-message/)本轮复核；Chat 与 Responses 明确 none/low/high/max，none 关闭、默认开启/high；Chat 显式 thinking 优先。[价格与别名页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)确认旧 Flash 别名转当前 V4.1 Flash。它不证明 CoRouter 的映射，更不涵盖 Eco。
+- **四款 unknown**：Carbon 精确官方型号页本轮 404、Context7 无精确命中；Meta reasoning/models 页 404/504，Wonder 无版本 CoRouter ID 与官方带版本 ID 也未取得精确映射；Eco 公开资料未建立源型号映射。未知不是没有推理，不补默认 high。
+- **CoRouter**：以上是源 API 契约，新增开关未做真实推理验收。[#9368](https://github.com/nexu-io/open-design/issues/9368)的 Eco 工具参数缺失后来在 Responses 也出现，不能声称切换协议规避；2026-11-13 评论仅认可观察工作负载约 95 小时/268 session 的恢复信号。维护者说明托管 amr-link 翻译服务不在开源仓库，issue 不建立 Eco 身份或 effort 契约。
 
 ## 证据层级
 
@@ -25,7 +50,7 @@
 - 用户为某个模型保存的默认档位优先于厂商默认；该值必须仍在该型号与当前协议的交集内。
 - 厂商未公布档位时保持缺省，不构造能力列表。
 - 历史上保存的、已不在当前档位集合内的默认值可以清除，且请求在凭据与网络 I/O 之前失败。
-- 协议层可用值 = 该模型官方档位集合 ∩ 当前协议支持集合；交集为空即该协议下不可调。
+- 协议层可用值 = 该模型已核控制集合 ∩ 当前协议支持集合，并应用精确型号的 wire 投影与限制；toggle 的 high 只表示开启，交集为空即该协议下不可调。
 - 本记录不涉及媒体模型选择、上下文容量与计费归属。
 
 ## 路由默认补充（厂商未声明）
@@ -48,14 +73,16 @@
 | `EFFORTS_REASONING` | low / medium / high / xhigh / max | OpenAI 6.1-sol、6-astra；Claude 8 款；MiniMax M3.1 Flash |
 | `EFFORTS_OPENAI` | none + `EFFORTS_REASONING` | OpenAI 6.1-terra、6-sol、6-luna、5.6-sol、5.6-terra、5.6-luna |
 | `EFFORTS_GLM52` | none / minimal / low / medium / high / xhigh / max | GLM-5.2 |
-| `EFFORTS_LOW_HIGH` | low / high / max | DeepSeek 4 款；GLM-5.3-flash、5.3-flashx；Kimi K3、K3.1 Pro |
+| `EFFORTS_LOW_HIGH` | low / high / max | GLM-5.3-flash、5.3-flashx；Kimi K3、K3.1 Pro |
+| `EFFORTS_DEEPSEEK` | none / low / high / max | 普通 DeepSeek 4 款，不含 Eco |
+| `EFFORTS_TOGGLE` 及 Preview 两态 | 内部 none / high（关闭 / 开启） | MiMo 两款、Qwen3.7 Max、Hy4 三款；逐协议过滤见本轮审计 |
 | `EFFORTS_LEVELS` | low / medium / high | Gemini 4 Argon、3.8 Flash、3.7 Flash；Grok 4.5 |
 | `EFFORTS_GROK` | low / medium / high / xhigh | Grok 4.7、4.6 |
 | `EFFORTS_MUSE` | minimal / low / medium / high / xhigh / max | Muse Spark 1.3 |
-| 空数组 `[]` | 无离散档位 | MiMo V2.6 Pro、MiMo V2.6 Flash、Kimi K2.7 Code、Qwen3.7 Max |
-| 缺省 | 未知 | Muse Wonder |
+| 空数组 `[]` + fixed | 始终开启，无可调控制 | Kimi K2.7 Code |
+| 缺省 | 未知 | Eco、Carbon、Ember、Wonder |
 
-合计 34 款可调档位、4 款固定思考或仅开关/预算控制、1 款未知。34 款全部带目录 `defaultEffort`：32 款取厂商声明的默认，GPT-6 Astra 与 Muse Spark 1.3 取上一节的路由默认；Muse Wonder 的档位本身未知，保持缺省。
+当前 46 款合计 35 款分级控制、6 款显式 toggle、1 款 fixed、4 款 unknown。41 款非空控制集合均带目录 defaultEffort，协议交集可能将其移除；toggle 默认 high 是开启编码而非强度。GPT-6 Astra 与 Muse Spark 1.3 取上一节的路由默认，其余有厂商默认依据。
 
 ## 证据矩阵
 
@@ -95,12 +122,12 @@
 
 | 模型 ID | 官方档位 | 官方默认 | 原生控制与协议限制 | 官方来源 | 原文要点 |
 | --- | --- | --- | --- | --- | --- |
-| deepseek-v4.1-flash | low / high / max | high | OpenAI 用 `thinking.type` 开关与 `reasoning_effort`；Anthropic 用 `thinking.type` 与 `output_config.effort`；Responses 用 `reasoning.effort`（none 关闭、low/high/max 调节）；思考模式下 temperature 等采样参数被忽略 | [思考模式](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)、[模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) | “思考模式默认打开，且 effort 默认为high”；表格合并列中 `reasoning.effort` 属于 Responses 列 |
-| deepseek-v4-pro | low / high / max | high | 同上；思考模式下忽略传入的 top_p（携带 tools 固定 0.95，否则 1.0），非思考模式才生效 | [思考模式](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/) | “deepseek-v4-pro：思考模式下会忽略传入值（携带 tools 时固定为 0.95，否则为 1.0）；非思考模式下生效” |
-| deepseek-v4-flash | low / high / max | high | 同 V4.1 Flash | [模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)、[首页](https://api-docs.deepseek.com/zh-cn/) | “旧模型名 deepseek-v4-flash、deepseek-v4-flash-vision-exp 仍可调用，但对应模型已下线，请求由 DeepSeek-V4.1-Flash-1017 模型提供服务，并按 Flash 价格计费” |
-| deepseek-v4-flash-vision-exp | low / high / max | high | 同 V4.1 Flash | [模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) | 同上 |
+| deepseek-v4.1-flash | none / low / high / max | high | Chat 用 reasoning_effort（none 关闭），也可用 thinking.type 开关；Anthropic 用 thinking.type 与 output_config.effort；Responses 用 reasoning.effort；思考模式下 temperature 等采样参数被忽略 | [Chat schema](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion/)、[Responses schema](https://api-docs.deepseek.com/zh-cn/api/create-response/)、[模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) | “none 关闭思考模式；low / high / max 开启思考模式。默认强度为 high” |
+| deepseek-v4-pro | none / low / high / max | high | 同上；思考模式下忽略传入的 top_p（携带 tools 固定 0.95，否则 1.0），非思考模式才生效 | [思考模式](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/) | “deepseek-v4-pro：思考模式下会忽略传入值（携带 tools 时固定为 0.95，否则为 1.0）；非思考模式下生效” |
+| deepseek-v4-flash | none / low / high / max | high | 同 V4.1 Flash | [模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)、[首页](https://api-docs.deepseek.com/zh-cn/) | “旧模型名 deepseek-v4-flash、deepseek-v4-flash-vision-exp 仍可调用，但对应模型已下线，请求由 DeepSeek-V4.1-Flash-1017 模型提供服务，并按 Flash 价格计费” |
+| deepseek-v4-flash-vision-exp | none / low / high / max | high | 同 V4.1 Flash | [模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) | 同上 |
 
-厂商另给出别名映射：minimal → low，low → low，medium → high，high → high，xhigh → high，max → max，ultra → max。目录只暴露 low / high / max，别名不单列。
+厂商另给出别名映射：minimal → low，low → low，medium → high，high → high，xhigh → high，max → max，ultra → max。目录暴露 none / low / high / max，别名不单列。
 
 ### Z.ai（3）
 
@@ -173,7 +200,7 @@
 ## 冲突与第三方来源
 
 - **xAI**：官方正文将 grok-4.5 的 xhigh 按 high 处理；同页内嵌模型目录 JSON 仍将 xhigh 列在可用值中。目录只暴露正文定义的独立档位 low / medium / high。
-- **第三方网关（非厂商原文）**：Cloudflare 的 DeepSeek V4.1 Flash [更新说明](https://developers.cloudflare.com/changelog/post/2026-10-19-deepseek-v4.1-flash-workers-ai/index.md)允许用 none 关闭思考。DeepSeek 官方 OpenAI 格式使用 `thinking.type: disabled`，其 Responses 格式才使用 `reasoning.effort: none`；这类差异说明不同网关的映射需要分别核对。
+- **第三方网关（非厂商原文）**：Cloudflare 的 DeepSeek V4.1 Flash [更新说明](https://developers.cloudflare.com/changelog/post/2026-10-19-deepseek-v4.1-flash-workers-ai/index.md)允许用 none 关闭思考。2026-11-18 复核 DeepSeek 正式 Chat schema 也明确 reasoning_effort=none；Responses 使用 reasoning.effort=none。历史上只记录 thinking.type 的说明不能再据此排除 Chat 的 none；各网关实际生效仍需分别核验。
 - **托管平台文档（非模型厂商原文）**：腾讯云 TokenHub 的推理深度表同时列出 deepseek-v4-flash、deepseek-v4-pro、kimi-k3、glm-5.2 等档位（<https://www.tencentcloud.com/document/product/1300/80637>），与对应厂商原文一致，可作交叉参考，不单独作为结论来源。
 
 ## 相关文档

@@ -458,6 +458,80 @@ test('model protocol overrides outrank global selection, and prepared calls keep
   } finally { adapter.dispose(); }
 });
 
+test('toggle defaults have on/off Host labels and exact Chat wire fields instead of fake strength', async () => {
+  const matrix = [
+    [PLAN_PROVIDER, 'mimo-v2.6-pro', { thinking: { type: 'enabled' } }],
+    [PLAN_PROVIDER, 'mimo-v2.6-flash', { thinking: { type: 'enabled' } }],
+    [PAID_PROVIDER, 'qwen3.7-max', { enable_thinking: true }],
+    [PAID_PROVIDER, 'hy4', { reasoning_effort: 'high' }],
+    [PAID_PROVIDER, 'hy4-flash', { reasoning_effort: 'high' }],
+  ] as const;
+  for (const [provider, id, expected] of matrix) {
+    let sent = 0;
+    const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'offline-key', fetch: async (_url, init) => {
+      sent++;
+      const wire = JSON.parse(String(init?.body));
+      const control = Object.fromEntries(['thinking', 'reasoning_effort', 'reasoning', 'output_config', 'enable_thinking', 'thinking_budget']
+        .filter(key => key in wire).map(key => [key, wire[key]]));
+      assert.deepEqual(control, expected, id);
+      return sse('ok');
+    } });
+    try {
+      const model = await adapter.resolveModel(provider, id);
+      assert.deepEqual(model.reasoning, { efforts: [{ id: 'none', name: '关闭' }, { id: 'high', name: '开启' }], defaultEffort: 'high' });
+      assert.equal((await collect(adapter.stream(options(provider, id)))).at(-1)?.type, 'finish');
+      assert.equal(sent, 1);
+    } finally { adapter.dispose(); }
+  }
+});
+
+test('unsupported fixed/unknown/protocol toggle choices fail before credentials, replay binding or transport', async () => {
+  const matrix = [
+    [PLAN_PROVIDER, 'kimi-k2.7-code', 'chat-completions', 'none'],
+    [PLAN_PROVIDER, 'deepseek-v4.1-flash-eco', 'responses', 'high'],
+    [PAID_PROVIDER, 'gemini-4-carbon', 'responses', 'high'],
+    [PAID_PROVIDER, 'muse-ember-1.0', 'messages', 'high'],
+    [PAID_PROVIDER, 'muse-wonder', 'responses', 'high'],
+    [PAID_PROVIDER, 'qwen3.7-max', 'responses', 'none'],
+    [PAID_PROVIDER, 'qwen3.7-max', 'messages', 'high'],
+    [PAID_PROVIDER, 'hy4', 'responses', 'none'],
+    [PAID_PROVIDER, 'hy4-flash', 'messages', 'none'],
+    [PLAN_PROVIDER, 'mimo-v2.6-pro', 'chat-completions', 'medium'],
+  ] as const;
+  for (const [provider, id, apiProtocol, effort] of matrix) {
+    const called = { credentials: 0, binding: 0, network: 0 };
+    const adapter = new CoRouterAdapter({ config: () => ({ ...base, apiProtocol }),
+      apiKey: async () => { called.credentials++; return 'offline-key'; },
+      replayBindingSecret: async () => { called.binding++; return new Uint8Array(32); },
+      fetch: async () => { called.network++; return sse('must not happen'); },
+    });
+    try {
+      await assert.rejects(collect(adapter.stream({ ...options(provider, id), reasoningEffort: ReasoningEffortId(effort) })), { code: 'UNSUPPORTED_OPTION' }, `${id}/${apiProtocol}`);
+      assert.deepEqual(called, { credentials: 0, binding: 0, network: 0 });
+    } finally { adapter.dispose(); }
+  }
+});
+
+test('prepared toggle calls retain saved off/on semantics and protocol after newer settings', async () => {
+  let config: RuntimeConfig = { ...base, modelSettings: { 'mimo-v2.6-pro': { reasoningEffort: 'none' } } };
+  const seen: Array<{ path: string; control: unknown }> = [];
+  const adapter = new CoRouterAdapter({ config: () => config, apiKey: async () => 'offline-key', fetch: async (url, init) => {
+    const wire = JSON.parse(String(init?.body));
+    seen.push({ path: String(url), control: wire.thinking });
+    return new Response('{}', { status: 401 });
+  } });
+  try {
+    const prepared = await adapter.prepareCall(PLAN_PROVIDER, 'mimo-v2.6-pro');
+    config = { ...base, apiProtocol: 'messages', modelSettings: { 'mimo-v2.6-pro': { reasoningEffort: 'high' } } };
+    await assert.rejects(collect(prepared.stream(options(PLAN_PROVIDER, 'mimo-v2.6-pro'))), { code: 'AUTH' });
+    await assert.rejects(collect(adapter.stream(options(PLAN_PROVIDER, 'mimo-v2.6-pro'))), { code: 'AUTH' });
+    assert.deepEqual(seen, [
+      { path: `${base.baseURL}/chat/completions`, control: { type: 'disabled' } },
+      { path: `${base.baseURL}/messages`, control: { type: 'enabled' } },
+    ]);
+  } finally { adapter.dispose(); }
+});
+
 test('unreadable images become named placeholders without failing the request or retrying the read', async () => {
   const image: ImageAttachmentRef = { attachmentId: AttachmentId('a'.repeat(64)), mediaType: 'image/png', bytes: 10, width: 2, height: 2, name: 'missing-image.png' };
   let reads = 0, request = '';

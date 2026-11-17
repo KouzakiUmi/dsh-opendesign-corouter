@@ -21,7 +21,7 @@ import { record } from '../util.js';
 import { inBandError, PrematureEndError } from './errors.js';
 import { streamHeaders } from './headers.js';
 import { inferenceEndpoint } from '../protocol-options.js';
-import { protocolAcceptsEffort } from '../reasoning.js';
+import { protocolAcceptsEffort, reasoningParameters } from '../reasoning.js';
 import { projectContent, type ImageLookup } from './parts.js';
 import { sseFrames } from './sse.js';
 import { openAiUsage } from './usage.js';
@@ -103,8 +103,11 @@ export function buildResponsesRequest(ctx: ProtocolContext): WireRequest {
   if (options.reasoningEffort !== undefined) {
     const effort = String(options.reasoningEffort);
     if (!protocolAcceptsEffort('responses', effort)) throw new LlmError(`Responses 协议不接受思考深度「${effort}」`, 'UNSUPPORTED_OPTION');
-    // 同时请求摘要，才能把推理映射成 reasoning 块；否则推理不可见。
-    body.reasoning = { effort, summary: 'auto' };
+    const params = reasoningParameters(model.id, 'responses', effort);
+    if (params === null) throw new LlmError('该型号不支持当前协议的思考设置', 'UNSUPPORTED_OPTION');
+    if (params !== undefined) Object.assign(body, params);
+    // Generic providers request a summary; MiMo's documented toggle does not add that field.
+    else body.reasoning = { effort, summary: 'auto' };
   }
   if (options.stop?.length) throw new LlmError('Responses 协议不支持 stop 序列', 'UNSUPPORTED_OPTION');
   return { url: inferenceEndpoint(ctx.baseURL, 'responses'), headers: streamHeaders(ctx.apiKey), body };

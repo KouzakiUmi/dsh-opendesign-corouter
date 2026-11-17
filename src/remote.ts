@@ -62,6 +62,10 @@ export interface StatusModel {
   inputModalities?: readonly ('text' | 'image')[];
   contextWindow?: number;
   maxOutputTokens?: number;
+  reasoningMode?: 'toggle' | 'fixed';
+  /** Original catalog capabilities for recomputing a pending protocol selection. */
+  catalogReasoningEfforts?: readonly string[];
+  catalogDefaultEffort?: string;
   reasoningEfforts?: readonly string[];
   /** Vendor-declared default effort of the catalog entry, always one of `reasoningEfforts`; omission means the vendor declares none. */
   defaultEffort?: string;
@@ -313,6 +317,9 @@ function parseStatusModel(value: unknown): StatusModel {
     ...(value.inputModalities === undefined ? {} : { inputModalities: parseModalities(value.inputModalities) }),
     ...(value.contextWindow === undefined ? {} : { contextWindow: positiveInteger(value.contextWindow, '上下文预算', 100_000_000) }),
     ...(value.maxOutputTokens === undefined ? {} : { maxOutputTokens: positiveInteger(value.maxOutputTokens, '最大输出', 10_000_000) }),
+    ...(value.reasoningMode === undefined ? {} : { reasoningMode: member(value.reasoningMode, ['toggle', 'fixed'] as const, '思考控制模式') }),
+    ...(value.catalogReasoningEfforts === undefined ? {} : { catalogReasoningEfforts: parseEfforts(value.catalogReasoningEfforts) }),
+    ...(value.catalogDefaultEffort === undefined ? {} : { catalogDefaultEffort: parseEffort(value.catalogDefaultEffort) }),
     ...(value.reasoningEfforts === undefined ? {} : { reasoningEfforts: parseEfforts(value.reasoningEfforts) }),
     ...(value.defaultEffort === undefined ? {} : { defaultEffort: parseEffort(value.defaultEffort) }),
     ...(value.nativeProtocol === undefined ? {} : { nativeProtocol: member(value.nativeProtocol, API_PROTOCOL_IDS, '原生协议') }),

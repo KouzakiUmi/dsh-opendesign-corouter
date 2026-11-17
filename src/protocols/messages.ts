@@ -9,7 +9,7 @@
  * - 请求无 `max_tokens` 时用保守默认 4096（适配器元数据同步该默认值，用户可按模型覆盖）；
  * - `reasoningEffort` 按现代 Messages 标准投影为 `thinking: {type:'adaptive'}` +
  *   `output_config.effort`；`none` 投影为 `thinking: {type:'disabled'}`；`minimal`/`ultra`
- *   等没有对应 effort 的档位抛 UNSUPPORTED_OPTION；
+ *   等没有对应 effort 的档位抛 UNSUPPORTED_OPTION；精确型号开关另按已核契约投影；
  * - 已确认的九个 Claude 模型先校验 Messages 采样默认值与 128000 输出上限；
  *   其余模型的采样限制及 legacy thinking 兼容性由上游按实际模型判定；
  * - 签名与密态仅保存在 adapter-private replay metadata；历史无签名 reasoning 不回放。
@@ -24,7 +24,7 @@ import { record } from '../util.js';
 import { anthropicError, PrematureEndError } from './errors.js';
 import { streamHeaders } from './headers.js';
 import { inferenceEndpoint } from '../protocol-options.js';
-import { protocolAcceptsEffort } from '../reasoning.js';
+import { protocolAcceptsEffort, reasoningParameters } from '../reasoning.js';
 import { projectContent } from './parts.js';
 import { sseFrames } from './sse.js';
 import { anthropicUsage } from './usage.js';
@@ -238,14 +238,18 @@ export function buildMessagesRequest(ctx: ProtocolContext): WireRequest {
   if (ctx.topP !== undefined) body.top_p = ctx.topP;
   if (options.stop?.length) body.stop_sequences = options.stop;
   if (options.reasoningEffort !== undefined) {
-    // 思考控制按现代 Messages 标准投影：`thinking.type.adaptive` + `output_config.effort`。
+    // Exact-model toggles take precedence over generic adaptive + output_config.effort.
     const effort = String(options.reasoningEffort);
+    if (!protocolAcceptsEffort('messages', effort)) throw new LlmError(`Anthropic Messages 协议不接受思考深度「${effort}」`, 'UNSUPPORTED_OPTION');
+    const params = reasoningParameters(model.id, 'messages', effort);
+    if (params === null) throw new LlmError('该型号不支持当前协议的思考设置', 'UNSUPPORTED_OPTION');
     if (effort === 'none' && model.id === PREFIX_BOUND_MODEL) throw new LlmError('Claude Fable 5.2 不支持关闭思考', 'UNSUPPORTED_OPTION');
-    if (effort === 'none') body.thinking = { type: 'disabled' };
-    else if (protocolAcceptsEffort('messages', effort)) {
+    if (params !== undefined) Object.assign(body, params);
+    else if (effort === 'none') body.thinking = { type: 'disabled' };
+    else {
       body.thinking = { type: 'adaptive' };
       body.output_config = { effort };
-    } else throw new LlmError(`Anthropic Messages 协议不接受思考深度「${effort}」`, 'UNSUPPORTED_OPTION');
+    }
   }
   // 已确认 Claude 模型的采样与输出限制已在入口校验，通过后保留调用方参数；
   // 其他模型及 legacy thinking 的兼容性仍由上游判定，不发送 top_k。

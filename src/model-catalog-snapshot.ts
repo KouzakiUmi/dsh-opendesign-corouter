@@ -27,7 +27,7 @@ export interface ModelCatalogSnapshot {
 export function parseModelCatalogSnapshot(value: unknown): ModelCatalogSnapshot | undefined {
   const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/u;
   const GROUPS = ['plan', 'paid'];
-   const KEYS = ['id', 'name', 'group', 'contextWindow', 'maxOutputTokens', 'inputModalities', 'reasoningEfforts', 'defaultEffort', 'nativeProtocol', 'coverage'];
+   const KEYS = ['id', 'name', 'group', 'contextWindow', 'maxOutputTokens', 'inputModalities', 'reasoningMode', 'reasoningEfforts', 'defaultEffort', 'nativeProtocol', 'coverage'];
   /** Same reserved keys the per-model settings reject; they must not reach a plain copy. */
   const RESERVED = ['__proto__', 'constructor', 'prototype'];
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
@@ -80,6 +80,10 @@ export function parseModelCatalogSnapshot(value: unknown): ModelCatalogSnapshot 
       // The status transport requires `text` and rejects duplicates; a snapshot must not pass here and fail there.
       if (!modalities.includes('text') || new Set(modalities).size !== modalities.length) return undefined;
       model.inputModalities = modalities;
+    }
+    if (item.reasoningMode !== undefined) {
+      if (item.reasoningMode !== 'toggle' && item.reasoningMode !== 'fixed') return undefined;
+      model.reasoningMode = item.reasoningMode;
     }
     if (item.reasoningEfforts !== undefined) {
       if (!Array.isArray(item.reasoningEfforts) || item.reasoningEfforts.length > 16) return undefined;

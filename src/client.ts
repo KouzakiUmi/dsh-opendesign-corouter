@@ -15,7 +15,8 @@ import type { ModelSettings, ModelSettingsMap } from './model-settings.js';
 import { contextWindowPresets, contextWindowPreset, contextTierAvailable, effectiveContextWindow, type ContextWindowPresetId } from './context-budget.js';
 export { contextTierAvailable } from './context-budget.js';
 import { validateActivationUrl } from './device-auth.js';
-import { modelReasoningEfforts } from './reasoning.js';
+import { modelReasoningEfforts, vendorDefaultEffort } from './reasoning.js';
+import { ContextWindowControl as ContextWindowField, EffortField, MODEL_CONTROLS_CSS, formatContextShort } from './client-model-controls.js';
 import { CLAUDE_MESSAGES_MAX_OUTPUT, claudeOutputError, claudeSamplingError, hasRestrictedClaudeSampling } from './claude-capabilities.js';
 import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES } from './image-budget.js';
 import { configWritesFor } from './client-config-writes.js';
@@ -192,10 +193,10 @@ function installStyles(): () => void {
 .odc-notice{padding:9px 11px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);font-size:12px;line-height:1.6}.odc-notice[data-kind=error]{color:var(--dsw-alias-state-error-primary,inherit);color:color-mix(in srgb,var(--dsw-alias-state-error-primary,CanvasText) 85%,var(--dsw-alias-label-primary,CanvasText))}
 .odc-model-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}.odc-model-list{display:grid;gap:6px;margin:10px 0 0;padding:0;list-style:none}.odc-model-item{padding:9px 10px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);min-width:0}.odc-model-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap}.odc-model-switch{min-width:0;flex:1 1 190px}.odc-model-item strong,.odc-model-item code{display:block;overflow-wrap:anywhere}.odc-model-item strong{font-size:12px;font-weight:600}.odc-model-item code{margin-top:2px;color:var(--dsw-alias-label-secondary,inherit);font-size:11px}.odc-model-meta{margin-top:6px!important;color:var(--dsw-alias-label-secondary,inherit);font-size:11px;overflow-wrap:anywhere}.odc-model-count{color:var(--dsw-alias-label-secondary,inherit);font-size:11px;font-weight:400}.odc-chip{display:inline-flex;align-items:center;padding:1px 7px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:999px;color:var(--dsw-alias-label-secondary,inherit);font-size:10px;line-height:1.6}
 .odc-model-details{margin-top:8px}.odc-model-details>summary{cursor:pointer;color:var(--dsw-alias-label-secondary,inherit);font-size:11px;line-height:1.7}.odc-model-editor{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 10px;margin-top:8px}
-.odc-context{grid-column:1/-1;min-width:0;margin:0 0 4px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l4,transparent);border-radius:10px}.odc-context-legend{padding:0 6px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,inherit)}.odc-context-options{display:grid;gap:6px;margin-top:2px}.odc-context-option{display:flex;align-items:flex-start;gap:8px;min-width:0;min-height:32px;padding:6px 8px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:8px;cursor:pointer}.odc-context-option:hover:not(:has(input:disabled)){border-color:color-mix(in srgb,var(--odc-accent) 55%,transparent)}.odc-context-option:has(input:checked){border-color:color-mix(in srgb,var(--odc-accent) 65%,transparent);background:color-mix(in srgb,var(--odc-accent) 8%,transparent)}.odc-context-option:has(input:disabled){cursor:not-allowed;opacity:.6}.odc-context-option input{appearance:auto;width:16px;height:16px;flex:none;margin:2px 0 0;cursor:inherit;accent-color:var(--dsw-alias-brand-primary,Highlight)}.odc-context-copy{display:grid;gap:1px;min-width:0}.odc-context-copy strong{font-size:12px;font-weight:600}.odc-context-legacy{margin-top:6px!important;color:var(--dsw-alias-label-secondary,inherit);font-size:12px}
+.odc-model-controls{--odc-control-gap:8px;display:grid;gap:var(--odc-control-gap);margin-top:var(--odc-control-gap);padding-top:var(--odc-control-gap);border-top:1px solid var(--dsw-alias-border-l4,transparent)}
+.odc-model-controls>.odc-field{margin:0;min-width:0}.odc-model-controls>.odc-field:not(.odc-effort){display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:4px 8px}.odc-model-controls>.odc-field:not(.odc-effort)>.odc-hint{grid-column:1/-1}.odc-model-controls>.odc-field:not(.odc-effort)>label{margin:0}.odc-model-controls>.odc-field:not(.odc-effort)>.odc-input{max-width:180px;justify-self:end}
 .odc-model-image{display:flex;align-items:center;gap:2px 8px;flex-wrap:wrap;margin-top:3px;min-width:0}.odc-image-toggle{display:inline-flex;align-items:center;gap:6px;flex:none;min-height:28px;padding:2px 2px 2px 0;color:var(--dsw-alias-label-primary,inherit);font-size:12px;font-weight:550;cursor:pointer}.odc-image-toggle input{appearance:auto;width:16px;height:16px;flex:none;margin:0;cursor:inherit;accent-color:var(--dsw-alias-brand-primary,Highlight)}.odc-image-toggle:has(input:disabled){cursor:not-allowed;opacity:.6}.odc-image-state{min-width:0;color:var(--dsw-alias-label-secondary,inherit);font-size:12px;line-height:1.5;overflow-wrap:anywhere}.odc-image-reset{min-height:28px;padding:2px 7px;border:1px solid var(--dsw-alias-border-l3,CanvasText);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:12px;cursor:pointer}.odc-image-reset:hover:not(:disabled){border-color:var(--dsw-alias-brand-primary,Highlight);color:var(--dsw-alias-label-primary,inherit)}.odc-image-reset:disabled{opacity:.55;cursor:not-allowed}
 .odc-field{display:grid;gap:6px;margin-top:14px}.odc-field-compact{margin-top:8px}.odc-field label,.odc-switch-text{font-size:12px;font-weight:550}.odc-input{width:100%;min-width:0;min-height:34px;padding:7px 9px;border:1px solid var(--dsw-alias-border-l3,transparent);border-radius:8px;background:var(--dsw-alias-bg-layer-2,transparent);color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:12px}.odc-field-compact .odc-input{min-height:30px;padding:5px 8px;font-size:11px}.odc-input::placeholder{color:var(--dsw-alias-label-secondary,inherit);opacity:1}.odc-input:disabled{opacity:.55}
-.odc-effort{min-width:0}.odc-effort-head{display:flex;align-items:center;justify-content:space-between;gap:6px 10px;flex-wrap:wrap}.odc-effort-label{font-size:12px;font-weight:550}.odc-effort-value{min-width:0;margin:0;font-size:12px;overflow-wrap:anywhere}.odc-effort-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .odc-input option{background:var(--dsw-alias-bg-layer-2,Canvas);color:var(--dsw-alias-label-primary,CanvasText)}
 .odc-input,.odc-button:not(.odc-button-primary),.odc-tab[aria-selected=true]{border-color:var(--dsw-alias-border-l3,CanvasText);border-color:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 55%,var(--dsw-alias-bg-layer-2,Canvas))}
 .odc-switch{display:flex;align-items:center;gap:12px;min-height:44px;padding:6px 2px;cursor:pointer}.odc-switch input{appearance:auto;width:20px;height:20px;flex:none;margin:0;cursor:inherit;accent-color:var(--dsw-alias-brand-primary,Highlight)}.odc-switch>span{display:grid;gap:4px;min-width:0}.odc-switch:has(input:disabled){cursor:not-allowed;opacity:.6}.odc-divider{height:1px;border:0;background:var(--dsw-alias-border-l4,transparent);margin:2px 0}.odc-link{color:var(--dsw-alias-brand-primary,inherit);text-underline-offset:3px}
@@ -211,13 +212,14 @@ function installStyles(): () => void {
 .odc-quota-panel{display:grid;gap:8px;min-width:0}.odc-quota-panel>.odc-card-head{margin:0}.odc-quota-status{--odc-state:var(--odc-accent);display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--odc-state) 28%,transparent);border-radius:10px;background:color-mix(in srgb,var(--odc-state) 10%,transparent);font-size:13px;font-weight:600}.odc-quota-status[data-tone=good]{--odc-state:var(--dsw-alias-state-success-primary,Highlight)}.odc-quota-status[data-tone=warn]{--odc-state:var(--dsw-alias-state-warn-primary,Highlight)}.odc-quota-status[data-tone=critical]{--odc-state:var(--dsw-alias-state-error-primary,Highlight)}.odc-state-mark{display:grid;place-items:center;width:28px;height:28px;border:1px solid color-mix(in srgb,var(--odc-state) 65%,transparent);border-radius:8px;flex:none;font-size:15px;font-weight:700}.odc-state-copy{display:grid;gap:1px;min-width:0}.odc-state-copy .odc-hint{font-weight:400}
 .odc-window{--odc-window-color:var(--dsw-alias-label-secondary,CanvasText);gap:5px;margin:0;padding:10px 12px;border:0;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 5%,transparent)}.odc-window[data-tone=good]{--odc-window-color:color-mix(in srgb,var(--dsw-alias-state-success-primary,Highlight) 70%,var(--dsw-alias-label-primary,CanvasText))}.odc-window[data-tone=warn]{--odc-window-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary,Highlight) 70%,var(--dsw-alias-label-primary,CanvasText))}.odc-window[data-tone=critical]{--odc-window-color:var(--dsw-alias-state-error-primary,Highlight)}.odc-window-remaining strong{font-size:18px}.odc-window progress{appearance:none;height:7px;border:0;border-radius:999px;overflow:hidden;background:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 18%,transparent);accent-color:var(--odc-window-color)}.odc-window progress::-webkit-progress-bar{background:color-mix(in srgb,var(--dsw-alias-label-primary,CanvasText) 18%,transparent);border-radius:999px}.odc-window progress::-webkit-progress-value{background:var(--odc-window-color);border-radius:999px}
 .odc-window-usage{display:block;margin:0;color:var(--dsw-alias-label-secondary,inherit);font-size:12px;overflow-wrap:anywhere}.odc-window-bottom{display:flex;align-items:baseline;justify-content:space-between;gap:4px 12px;flex-wrap:wrap}.odc-window-reset{display:flex;align-items:baseline;justify-content:flex-start;flex-wrap:wrap;gap:4px 6px;padding:0;border:0}.odc-window-details>summary{min-height:28px;padding:4px 0}.odc-window-details[open]{flex-basis:100%}.odc-window-details dl>div{display:flex;justify-content:space-between;gap:12px}
-@media(forced-colors:active){.odc-window progress{appearance:auto;accent-color:Highlight;forced-color-adjust:auto}.odc-window progress::-webkit-progress-value{background:Highlight}.odc-image-toggle input{forced-color-adjust:auto}.odc-image-reset{border-color:ButtonText;background:ButtonFace;color:ButtonText}.odc-context-option input{forced-color-adjust:auto}.odc-context-option{border-color:ButtonText}.odc-context-option:has(input:checked){border-color:Highlight}}
+@media(forced-colors:active){.odc-window progress{appearance:auto;accent-color:Highlight;forced-color-adjust:auto}.odc-window progress::-webkit-progress-value{background:Highlight}.odc-image-toggle input{forced-color-adjust:auto}.odc-image-reset{border-color:ButtonText;background:ButtonFace;color:ButtonText}}
 .odc-balance-list,.odc-timing{display:grid;gap:0;margin:0}.odc-balance-row,.odc-timing-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;min-width:0;min-height:0;padding:6px 0;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-balance-row:first-child,.odc-timing-row:first-child{border-top:0}.odc-balance-row>div,.odc-timing-row>div{min-width:0}.odc-balance-row dt,.odc-timing-row dt{font-size:12px;font-weight:600}.odc-balance-row dd,.odc-timing-row dd{margin:0;min-width:0;text-align:right}.odc-balance-row .odc-metric-value{font-size:13px}.odc-timing-row .odc-metric-text{font-size:13px;white-space:nowrap}.odc-timing-row .odc-hint{display:block}.odc-timing{padding:4px 14px}
 .odc-model-item{background:transparent;border:1px solid var(--dsw-alias-border-l4,transparent)}.odc-model-item:has(details[open]){border-color:color-mix(in srgb,var(--odc-accent) 55%,transparent);background:color-mix(in srgb,var(--odc-accent) 5%,transparent)}
 .odc-price-summary{margin:5px 0 0!important;font-size:12px;color:var(--dsw-alias-label-secondary,inherit);overflow-wrap:anywhere}.odc-pricing-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.odc-price-tier{padding:8px 0;border-top:1px solid var(--dsw-alias-border-l4,transparent)}.odc-price-tier dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;margin:6px 0 0}.odc-price-tier dl>div{display:flex;justify-content:space-between;gap:8px}.odc-price-tier dt{color:var(--dsw-alias-label-secondary,inherit)}.odc-price-tier dd{margin:0;font-variant-numeric:tabular-nums}
 .odc-settings :focus-visible{outline:2px solid var(--dsw-alias-brand-primary,Highlight);outline-offset:3px}@media(max-width:680px){.odc-quota-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.odc-model-groups{grid-template-columns:1fr}.odc-model-editor{grid-template-columns:1fr}}@media(max-width:380px){.odc-quota-grid{grid-template-columns:1fr}.odc-card{padding:12px}}
 @container(max-width:680px){.odc-quota-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.odc-model-groups,.odc-model-editor{grid-template-columns:1fr}}@container(max-width:380px){.odc-quota-grid{grid-template-columns:1fr}.odc-card{padding:12px}}
 @container(max-width:480px){.odc-timing-row{align-items:flex-start}.odc-timing-row>div{flex:1 1 0}.odc-timing-row dd{flex:0 0 auto;max-width:50%;overflow-wrap:anywhere}.odc-timing-row .odc-metric-text{white-space:normal}}
+${MODEL_CONTROLS_CSS}
 ${QUICK_CONTEXT_CSS}`;
   document.head.append(style);
   return () => style.remove();
@@ -740,7 +742,7 @@ export function contextTierConflict(reference: number | undefined, tier: Context
   return `无法切换到「${preset?.label ?? tier}」档：最大输出 ${formatTokens(output)} 不小于该档位的总窗口 ${formatTokens(window)}（含输出预留）；请先清空或减小最大输出，当前档位保持不变。`;
 }
 
-function OptionalNumberField({ id, field, value, disabled, restricted = false, invalid = false, conflict, maxOutputLimit, resetToken, onSave }: {
+function OptionalNumberField({ id, field, value, disabled, restricted = false, invalid = false, conflict, maxOutputLimit, placeholder, resetToken, onSave }: {
   id: string;
   field: NumericKey;
   value: number | undefined;
@@ -749,6 +751,7 @@ function OptionalNumberField({ id, field, value, disabled, restricted = false, i
   invalid?: boolean;
   conflict?: string | undefined;
   maxOutputLimit?: number | undefined;
+  placeholder?: string | undefined;
   resetToken: number;
   onSave: (value: number | undefined) => Promise<boolean>;
 }) {
@@ -789,7 +792,7 @@ function OptionalNumberField({ id, field, value, disabled, restricted = false, i
     h('label', { htmlFor: id }, spec.label),
     h('input', {
       id, className: 'odc-input', type: 'number', inputMode: 'decimal', min: spec.min, max: maxOutputLimit ?? spec.max,
-      step: spec.integer === true ? 1 : field === 'topP' ? 0.01 : 0.1, value: draft ?? (value === undefined ? '' : String(value)), disabled,
+      step: spec.integer === true ? 1 : field === 'topP' ? 0.01 : 0.1, value: draft ?? (value === undefined ? '' : String(value)), disabled, placeholder,
       'aria-invalid': error !== undefined || invalid,
       'aria-describedby': `${id}-hint`,
       onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft(event.target.value),
@@ -800,157 +803,6 @@ function OptionalNumberField({ id, field, value, disabled, restricted = false, i
       id: `${id}-hint`,
       ...(error === undefined && conflict === undefined ? {} : { role: 'alert' as const }),
     }, error ?? conflict ?? (restricted ? field === 'temperature' ? 'Messages 仅接受 1；建议留空，且勿同时设置 Top P。' : 'Messages 仅接受 0.99；建议留空，且勿同时设置温度。' : maxOutputLimit !== undefined ? `Messages 最大输出 ${maxOutputLimit}；留空继承默认。` : spec.hint)));
-}
-
-/**
- * The mutually exclusive context-window tiers. Each tier is a combined input-plus-output
- * working window; each model's reference determines its three tier sizes.
- */
-function ContextWindowField({ id, reference, settings, disabled, reason, onSelect }: {
-  id: string;
-  reference: number | undefined;
-  settings: ModelSettings;
-  disabled: boolean;
-  reason?: string | undefined;
-  onSelect: (tier: ContextWindowPresetId) => void;
-}) {
-  const tier = selectedContextTier(settings);
-  const legacy = settings.contextTier === undefined && settings.contextWindow !== undefined;
-  const both = settings.contextTier !== undefined && settings.contextWindow !== undefined;
-  const current = effectiveContextWindow(reference, settings.contextWindow, settings.contextTier);
-  const presets = contextWindowPresets(reference);
-  const note = legacy
-    ? '；旧自定义窗口按原值继续生效'
-    : current === undefined ? '；模型参考容量未核实，暂不设置本地窗口上限' : '';
-  const reasonId = `${id}-reason`;
-  return h('fieldset', { className: 'odc-context', 'aria-describedby': reason === undefined ? undefined : reasonId },
-    h('legend', { className: 'odc-context-legend' }, '上下文窗口（输入 + 输出合计）'),
-    h('div', { className: 'odc-context-options' },
-      presets.map(preset => {
-        const available = contextTierAvailable(preset.id, reference);
-        const inputId = `${id}-${preset.id}`;
-        const hintId = `${inputId}-hint`;
-        return h('label', {
-          className: 'odc-context-option', key: preset.id, htmlFor: inputId,
-          'data-preset': preset.id, 'data-available': available ? 'true' : 'false',
-        },
-          h('input', {
-            id: inputId, type: 'radio', name: id, value: preset.id,
-            checked: preset.id === tier,
-            disabled: disabled || !available,
-            'aria-describedby': reason === undefined ? hintId : `${hintId} ${reasonId}`,
-            onChange: () => { onSelect(preset.id); },
-          }),
-          h('span', { className: 'odc-context-copy' },
-            h('strong', null, preset.label),
-            h('small', { className: 'odc-hint', id: hintId }, preset.tokens === undefined
-              ? '模型参考容量未核实'
-              : `${formatTokens(preset.tokens)} tokens${available ? '' : ' · 与较低档位相同'}`)));
-      })),
-    reason === undefined ? null : h('small', { className: 'odc-hint', id: reasonId }, reason),
-    legacy ? h('p', { className: 'odc-context-legacy', role: 'status' }, `旧自定义 ${formatTokens(settings.contextWindow ?? 0)}，选择档位替换`) : null,
-    both ? h('p', { className: 'odc-context-legacy', role: 'status' }, `旧自定义 ${formatTokens(settings.contextWindow ?? 0)} 与所选档位同时存在，请重新选择档位以只保留其一。`) : null,
-    h('small', { className: 'odc-hint' },
-      `当前总窗口 ${formatTokens(current)} tokens（含输出预留）${note}。`));
-}
-
-function EffortField({ id, model, value, disabled, pending, disabledReason, onSave }: {
-  id: string;
-  model: StatusModel;
-  value: string | undefined;
-  disabled: boolean;
-  pending: boolean;
-  disabledReason?: string | undefined;
-  onSave: (value: string) => Promise<boolean>;
-}) {
-  const mounted = useMounted();
-  const [editing, setEditing] = React.useState(false);
-  const [draft, setDraft] = React.useState(value ?? '');
-  const [baseValue, setBaseValue] = React.useState(value);
-  const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState<string | undefined>(undefined);
-  const listed = model.reasoningEfforts ?? [];
-  const modelDefault = model.defaultEffort;
-  const defaultLabel = modelDefault === undefined ? '不指定档位' : `模型默认（${modelDefault}）`;
-  const invalidDefault = value !== undefined && !listed.includes(value);
-  const invalidDraft = editing && draft !== '' && !listed.includes(draft);
-  const options = [...listed];
-  for (const effort of [value, draft]) {
-    if (effort !== undefined && effort !== '' && !options.includes(effort)) options.push(effort);
-  }
-  const unavailable = listed.length === 0;
-  const busy = saving || pending;
-  const reason = busy ? '正在保存模型设置，完成后可继续编辑。' : disabled ? `${disabledReason ?? '配置不可写'}，无法编辑。` : undefined;
-  const externallyChanged = editing && value !== baseValue && !(saving && value === draft);
-  const hint = reason ?? (editing
-    ? externallyChanged ? '配置已从其他位置更新；取消可查看最新值，保存将使用当前草稿。'
-      : invalidDraft ? '当前草稿不适用于此模型或协议，请选择其他档位或改用模型默认。'
-        : `选择“${defaultLabel}”会删除已保存档位；保存前仅修改本地草稿。`
-    : invalidDefault ? '已保存的档位不适用于当前模型或协议，可编辑后选择其他档位或改用模型默认。'
-      : unavailable ? '当前模型或协议未提供可调整的思考档位。'
-        : modelDefault === undefined ? '该模型未声明默认档位，未设置时不发送档位设置。'
-          : `未设置时按模型默认档位「${modelDefault}」发送，不留给上游决定。`);
-  const cancel = () => {
-    if (saving) return;
-    setEditing(false);
-    setError(undefined);
-  };
-  const save = async (): Promise<void> => {
-    if (disabled || pending || saving || invalidDraft) return;
-    if (draft === (value ?? '')) {
-      setEditing(false);
-      setError(undefined);
-      return;
-    }
-    setSaving(true);
-    setError(undefined);
-    try {
-      const saved = await onSave(draft);
-      if (!mounted.current) return;
-      if (saved) {
-        setEditing(false);
-        setError(undefined);
-      } else setError('设置未保存，已保留当前草稿，请重试。');
-    } catch {
-      if (mounted.current) setError('设置未保存，已保留当前草稿，请重试。');
-    } finally {
-      if (mounted.current) setSaving(false);
-    }
-  };
-  return h('div', {
-    className: 'odc-field odc-field-compact odc-effort', 'data-mode': editing ? 'editing' : 'summary',
-    onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (event.key !== 'Escape' || !editing || saving) return;
-      event.preventDefault();
-      cancel();
-    },
-  },
-    editing ? h(React.Fragment, null,
-      h('label', { htmlFor: id }, '默认思考深度'),
-      h('select', {
-        id, className: 'odc-input', value: draft, disabled: busy || disabled,
-        'aria-describedby': `${id}-hint${error === undefined ? '' : ` ${id}-error`}`, 'aria-invalid': invalidDraft || error !== undefined,
-        onChange: (event: React.ChangeEvent<HTMLSelectElement>) => { setDraft(event.target.value); setError(undefined); },
-      }, [
-        h('option', { key: '', value: '' }, defaultLabel),
-        ...options.map(effort => h('option', { key: effort, value: effort, disabled: !listed.includes(effort) }, listed.includes(effort) ? effort : `${effort}（当前不可用）`)),
-      ]),
-      h('div', { className: 'odc-effort-actions' },
-        h('button', { className: 'odc-button odc-button-small odc-button-primary', type: 'button', disabled: busy || disabled || invalidDraft, 'aria-label': '保存默认思考深度', onClick: () => { void save(); } }, saving ? '保存中…' : '保存'),
-        h('button', { className: 'odc-button odc-button-small', type: 'button', disabled: saving, 'aria-label': '取消编辑默认思考深度', onClick: cancel }, '取消')))
-      : h(React.Fragment, null,
-        h('div', { className: 'odc-effort-head' },
-          h('span', { className: 'odc-effort-label' }, '默认思考深度'),
-          h('button', {
-            className: 'odc-button odc-button-small', type: 'button', disabled: busy || disabled || (unavailable && value === undefined),
-            'aria-label': '编辑默认思考深度', 'aria-describedby': `${id}-hint`,
-            onClick: () => { setDraft(value ?? ''); setBaseValue(value); setError(undefined); setEditing(true); },
-          }, '编辑')),
-        h('p', { className: 'odc-effort-value' }, invalidDefault ? `${value}（当前不可用）` : value ?? defaultLabel)),
-    h('small', {
-      className: 'odc-hint', id: `${id}-hint`,
-    }, hint),
-    error === undefined ? null : h('small', { className: 'odc-hint odc-field-error', id: `${id}-error`, role: 'alert' }, error));
 }
 
 const PRICE_SITE = 'https://corouter.open-design.ai/zh/models/';
@@ -1078,6 +930,29 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
         h('button', { className: 'odc-button odc-button-small', type: 'button', disabled: !writable || pending || !hasOverrides, onClick: () => { void reset(); } }, '重置'))),
     price !== undefined ? h('p', { className: 'odc-price-summary' }, `官网参考 · ${price.tiers[0]!.label} · 输入 ${priceAmount(price.tiers[0]!.input, price.tiers[0]!.currency)} / 输出 ${priceAmount(price.tiers[0]!.output, price.tiers[0]!.currency)} · ${priceUnit(price.tiers[0]!)}${price.tiers.length > 1 ? ` · 共 ${price.tiers.length} 档` : ''}`)
       : priceKnown ? h('p', { className: 'odc-price-summary' }, '官网暂未列出此模型价格') : null,
+    h('div', { className: 'odc-model-controls' },
+      h(ContextWindowField, {
+        id: `${id}-context`, reference: model.contextWindow, settings, disabled: !writable, pending,
+        reason: pending ? '正在保存模型设置…' : !writable ? (disabledReason ?? '配置不可写') : undefined,
+        onSelect: tier => { void selectContextTier(tier); },
+      }),
+      h(EffortField, {
+        id: `${id}-effort`, model, value: settings.reasoningEffort, disabled: !writable, pending, disabledReason,
+        onSave: async value => {
+          const next: ModelSettings = { ...settings };
+          if (value === '') delete next.reasoningEffort;
+          else next.reasoningEffort = value;
+          setError(undefined);
+          return onCommit(next);
+        },
+      }),
+      h(OptionalNumberField, {
+        id: `${id}-maxTokens`, field: 'maxTokens', value: settings.maxTokens, disabled: !writable || pending,
+        invalid: outputError !== undefined || outputConflict !== undefined, conflict: outputConflict,
+        maxOutputLimit: samplingRestricted ? CLAUDE_MESSAGES_MAX_OUTPUT : undefined,
+        placeholder: autoReserve === undefined ? '自动' : `自动 · ${formatContextShort(autoReserve)}`, resetToken,
+        onSave: value => saveField('maxTokens', value),
+      })),
     h('div', { className: 'odc-model-image' },
       h('label', { className: 'odc-image-toggle' },
         h('input', {
@@ -1095,7 +970,7 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
         onClick: () => { void restoreImageInput(); },
       }, '恢复自动') : null),
     h('details', { className: 'odc-model-details' },
-      h('summary', { 'aria-label': `${model.name} 参数设置${price === undefined ? '' : '与价格'}` }, `${price === undefined ? '参数设置' : '参数与价格'} · ${hasOverrides ? '已自定义' : '使用默认值'}`),
+      h('summary', { 'aria-label': `${model.name} 高级参数${price === undefined ? '' : '与价格'}` }, `高级参数${price === undefined ? '' : '与价格'} · ${hasOverrides ? '已自定义' : '使用默认值'}`),
       h('p', { className: 'odc-model-meta' }, facts),
       h('div', { className: 'odc-field' },
         h('label', { htmlFor: `${id}-protocol` }, '此模型 API 协议'),
@@ -1112,33 +987,15 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
       samplingRestricted && model.id === 'claude-opus-4.8' ? h('p', { className: 'odc-hint' }, '未选择档位时按厂商默认档位 high 发送自适应思考；厂商在完全省略思考配置时不启用。') : null,
       samplingRestricted && model.maxOutputTokens === undefined && settings.maxTokens === undefined ? h('p', { className: 'odc-hint' }, 'Messages 默认最大输出 4096；较高思考深度可能需要增大。') : null,
       price === undefined ? null : h(PriceDetails, { tiers: price.tiers }),
-      h('p', { className: 'odc-hint' }, '数值离开输入框后保存，留空继承默认；上下文窗口为三档互斥选择。'),
+      h('p', { className: 'odc-hint' }, '协议选择立即保存；数值离开输入框后保存，留空继承默认。'),
       h('div', { className: 'odc-model-editor' },
-        h(ContextWindowField, {
-          id: `${id}-context`, reference: model.contextWindow, settings,
-          disabled: !writable || pending,
-          reason: pending ? '正在保存模型设置，完成后可继续选择档位。' : !writable ? (disabledReason ?? '配置不可写') : undefined,
-          onSelect: tier => { void selectContextTier(tier); },
-        }),
-        NUMERIC_ORDER.map(key => h(OptionalNumberField, {
+        NUMERIC_ORDER.filter(key => key !== 'maxTokens').map(key => h(OptionalNumberField, {
           key, id: `${id}-${key}`, field: key, value: settings[key],
           disabled: !writable || pending,
-          restricted: samplingRestricted && (key === 'temperature' || key === 'topP'),
-          invalid: (samplingError !== undefined && settings[key] !== undefined && (key === 'temperature' || key === 'topP')) || (key === 'maxTokens' && (outputError !== undefined || outputConflict !== undefined)),
-          conflict: key === 'maxTokens' ? outputConflict : undefined,
-          maxOutputLimit: samplingRestricted && key === 'maxTokens' ? CLAUDE_MESSAGES_MAX_OUTPUT : undefined, resetToken,
+          restricted: samplingRestricted,
+          invalid: samplingError !== undefined && settings[key] !== undefined, resetToken,
           onSave: value => saveField(key, value),
-        })),
-        h(EffortField, {
-          id: `${id}-effort`, model, value: settings.reasoningEffort, disabled: !writable, pending, disabledReason,
-          onSave: async value => {
-            const next: ModelSettings = { ...settings };
-            if (value === '') delete next.reasoningEffort;
-            else next.reasoningEffort = value;
-            setError(undefined);
-            return onCommit(next);
-          },
-        }))),
+        })))),
     error !== undefined ? h('p', { className: 'odc-hint odc-field-error', role: 'alert' }, error) : null);
 }
 
@@ -1225,8 +1082,18 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
   const updated = status?.modelsUpdatedAt === undefined ? '' : ` · 更新于 ${formatTime(status.modelsUpdatedAt)}`;
   const protocol = formSnapshot.value?.apiProtocol ?? status?.config.apiProtocol ?? 'auto';
   const models = (status?.models ?? []).map(model => {
-    const reasoningEfforts = modelReasoningEfforts(model, effectiveProtocol(model, protocol, settingsMap[model.id]?.apiProtocol));
-    return { ...model, ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }) };
+    const declared = { ...model,
+      ...(model.catalogReasoningEfforts === undefined ? {} : { reasoningEfforts: model.catalogReasoningEfforts }),
+      ...(model.catalogDefaultEffort === undefined ? {} : { defaultEffort: model.catalogDefaultEffort }),
+    };
+    const selectedProtocol = effectiveProtocol(model, protocol, settingsMap[model.id]?.apiProtocol);
+    const reasoningEfforts = modelReasoningEfforts(declared, selectedProtocol);
+    const defaultEffort = vendorDefaultEffort(declared, selectedProtocol);
+    const result = { ...model };
+    delete result.reasoningEfforts; delete result.defaultEffort;
+    if (reasoningEfforts !== undefined) result.reasoningEfforts = reasoningEfforts;
+    if (defaultEffort !== undefined) result.defaultEffort = defaultEffort;
+    return result;
   });
   return h(React.Fragment, null,
     h('div', { className: 'odc-card-head' },

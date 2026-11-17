@@ -63,6 +63,46 @@ test('status preserves catalog modality evidence separately from the saved overr
   } finally { await fiber.dispose(); await credentials.dispose(); }
 });
 
+test('Host status and transport preserve toggle/fixed evidence without claiming unverified account coverage', async () => {
+  const ctx = new Context();
+  const credentials = await ctx.plugin(MemoryCredentials);
+  const current: RuntimeConfig = { ...config, useDesktopCredential: false, apiProtocol: 'auto' };
+  const fiber = await ctx.plugin(scope => { new OpenDesignCoRouterService(scope, () => current, dependencies([])); });
+  try {
+    const status = await ctx.openDesignCoRouter.status();
+    const parsed = parseStatus(JSON.parse(JSON.stringify(status)));
+    assert.equal(parsed.models.length, 46);
+    for (const snapshot of [status, parsed]) {
+      for (const id of ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'qwen3.7-max', 'hy4', 'hy4-flash']) {
+        const row = snapshot.models.find(model => model.id === id)!;
+        assert.equal(row.reasoningMode, 'toggle', id);
+        assert.deepEqual(row.catalogReasoningEfforts, ['none', 'high'], 'raw catalog evidence remains available for protocol changes');
+        assert.equal(row.catalogDefaultEffort, 'high');
+        assert.deepEqual(row.reasoningEfforts, id === 'hy4' || id === 'hy4-flash' ? ['high'] : ['none', 'high'], 'active controls obey the exact-model auto route');
+        assert.equal(row.defaultEffort, 'high');
+        assert.equal(row.coverage, 'unknown');
+        assert.equal(row.group, 'paid');
+      }
+      const fixed = snapshot.models.find(model => model.id === 'kimi-k2.7-code')!;
+      assert.equal(fixed.reasoningMode, 'fixed');
+      assert.deepEqual(fixed.reasoningEfforts, []);
+      for (const id of ['deepseek-v4.1-flash-eco', 'gemini-4-carbon', 'muse-ember-1.0', 'muse-wonder']) {
+        const row = snapshot.models.find(model => model.id === id)!;
+        assert.equal(row.reasoningMode, undefined);
+        assert.equal(row.reasoningEfforts, undefined);
+        assert.equal(row.defaultEffort, undefined);
+      }
+    }
+    current.modelSettings = { 'qwen3.7-max': { apiProtocol: 'responses' } };
+    const changed = parseStatus(JSON.parse(JSON.stringify(await ctx.openDesignCoRouter.status())));
+    const qwen = changed.models.find(model => model.id === 'qwen3.7-max')!;
+    assert.deepEqual(qwen.catalogReasoningEfforts, ['none', 'high']);
+    assert.equal(qwen.catalogDefaultEffort, 'high');
+    assert.deepEqual(qwen.reasoningEfforts, [], 'unverified Qwen Responses control is not advertised');
+    assert.equal(qwen.defaultEffort, undefined, 'no inherited Chat default on an unsupported wire');
+  } finally { await fiber.dispose(); await credentials.dispose(); }
+});
+
 test('an unnamed reference reaches the client as an empty field while requests keep the default one', async () => {
   const ctx = new Context();
   const credentials = await ctx.plugin(MemoryCredentials);

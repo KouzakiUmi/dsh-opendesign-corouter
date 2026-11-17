@@ -45,8 +45,11 @@ export interface CatalogModel {
   inputModalities?: readonly ('text' | 'image')[];
   /** Undefined means unconfirmed; an empty array means no discrete effort selector. */
   reasoningEfforts?: readonly string[];
+  /** Toggle efforts encode off/on, not depth; fixed models do not accept a control. */
+  reasoningMode?: 'toggle' | 'fixed';
   /**
    * Vendor-documented default effort, always a member of `reasoningEfforts`.
+   * For a toggle, `high` encodes documented enabled behavior, not a depth tier.
    * The adapter reports it as the route default, so a request that names no
    * effort sends this documented value instead of leaving the choice to an
    * untrusted relay. Omission means the vendor documents no default: nothing
@@ -63,6 +66,8 @@ const EFFORTS_REASONING = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const EFFORTS_OPENAI = ['none', ...EFFORTS_REASONING] as const;
 const EFFORTS_GLM52 = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 const EFFORTS_LOW_HIGH = ['low', 'high', 'max'] as const;
+const EFFORTS_DEEPSEEK = ['none', ...EFFORTS_LOW_HIGH] as const;
+const EFFORTS_TOGGLE = ['none', 'high'] as const;
 const EFFORTS_LEVELS = ['low', 'medium', 'high'] as const;
 const EFFORTS_GROK = [...EFFORTS_LEVELS, 'xhigh'] as const;
 const EFFORTS_MUSE = ['minimal', ...EFFORTS_REASONING] as const;
@@ -134,7 +139,7 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
     contextWindow: 1_000_000,
     maxOutputTokens: 384_000,
     inputModalities: TEXT_AND_IMAGE,
-    reasoningEfforts: EFFORTS_LOW_HIGH,
+    reasoningEfforts: EFFORTS_DEEPSEEK,
     defaultEffort: 'high',
   },
   {
@@ -143,7 +148,7 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
     group: 'plan',
     contextWindow: 1_000_000,
     maxOutputTokens: 384_000,
-    reasoningEfforts: EFFORTS_LOW_HIGH,
+    reasoningEfforts: EFFORTS_DEEPSEEK,
     defaultEffort: 'high',
   },
   {
@@ -153,7 +158,7 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
     contextWindow: 1_000_000,
     maxOutputTokens: 384_000,
     inputModalities: TEXT_AND_IMAGE,
-    reasoningEfforts: EFFORTS_LOW_HIGH,
+    reasoningEfforts: EFFORTS_DEEPSEEK,
     defaultEffort: 'high',
   },
   {
@@ -163,7 +168,7 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
     contextWindow: 1_000_000,
     maxOutputTokens: 384_000,
     inputModalities: TEXT_AND_IMAGE,
-    reasoningEfforts: EFFORTS_LOW_HIGH,
+    reasoningEfforts: EFFORTS_DEEPSEEK,
     defaultEffort: 'high',
   },
 
@@ -199,6 +204,7 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
     maxOutputTokens: 262_144,
     inputModalities: TEXT_AND_IMAGE,
     reasoningEfforts: [],
+    reasoningMode: 'fixed',
   },
   { id: 'kimi-k3', name: 'Kimi K3', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LOW_HIGH, defaultEffort: 'max' },
   { id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro', group: 'paid', contextWindow: 1_048_576, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: EFFORTS_LOW_HIGH, defaultEffort: 'max' },
@@ -222,7 +228,9 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
     contextWindow: 1_000_000,
     maxOutputTokens: 128_000,
     inputModalities: TEXT_AND_IMAGE,
-    reasoningEfforts: [],
+    reasoningMode: 'toggle',
+    reasoningEfforts: EFFORTS_TOGGLE,
+    defaultEffort: 'high',
   },
   {
     id: 'mimo-v2.6-flash',
@@ -231,12 +239,14 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
     contextWindow: 1_000_000,
     maxOutputTokens: 128_000,
     inputModalities: TEXT_AND_IMAGE,
-    reasoningEfforts: [],
+    reasoningMode: 'toggle',
+    reasoningEfforts: EFFORTS_TOGGLE,
+    defaultEffort: 'high',
   },
 
   // ── Tencent（1） ────────────────────────────────────────────
-  { id: 'hy4', name: 'Hy4', group: 'paid', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: ['high'], defaultEffort: 'high' },
-  { id: 'hy4-flash', name: 'Hy4 Flash', group: 'paid', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: ['high'], defaultEffort: 'high' },
+  { id: 'hy4', name: 'Hy4', group: 'paid', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: TEXT_AND_IMAGE, reasoningMode: 'toggle', reasoningEfforts: EFFORTS_TOGGLE, defaultEffort: 'high' },
+  { id: 'hy4-flash', name: 'Hy4 Flash', group: 'paid', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: TEXT_AND_IMAGE, reasoningMode: 'toggle', reasoningEfforts: EFFORTS_TOGGLE, defaultEffort: 'high' },
   {
     id: 'hy4-preview',
     name: 'Hunyuan H4 Preview',
@@ -244,6 +254,7 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
     contextWindow: 1_000_000,
     maxOutputTokens: 64_000,
     inputModalities: TEXT_ONLY,
+    reasoningMode: 'toggle',
     reasoningEfforts: ['none', 'high'],
     defaultEffort: 'high',
   },
@@ -251,7 +262,7 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
   // ── Alibaba（1） ────────────────────────────────────────────
   // 131072 is the conservative output cap across both thinking modes, not their combined budget.
   { id: 'qwen4-max', name: 'Qwen4 Max', group: 'paid', contextWindow: 1_000_000, maxOutputTokens: 131_072, inputModalities: TEXT_AND_IMAGE, reasoningEfforts: ['low', 'high', 'xhigh'], defaultEffort: 'high' },
-  { id: 'qwen3.7-max', name: 'Qwen3.7 Max', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_ONLY, reasoningEfforts: [] },
+  { id: 'qwen3.7-max', name: 'Qwen3.7 Max', group: 'paid', contextWindow: 1_000_000, inputModalities: TEXT_ONLY, reasoningMode: 'toggle', reasoningEfforts: EFFORTS_TOGGLE, defaultEffort: 'high' },
 
   // Official API additions; display labels for undocumented entries are local formatting.
   { id: 'muse-ember-1.0', name: 'Muse Ember 1.0', group: 'paid' },
@@ -262,7 +273,8 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
 ];
 
 // Exact-ID API evidence, not vendor-prefix inference. DeepSeek's own Responses API is
-// preferred over the gateway Chat path with outstanding effort/tool reports (#9232/#9368).
+// preferred over the gateway Chat path with an outstanding effort report (#9232).
+// Eco tool corruption in #9368 occurred on both wires and reportedly recovered in its observed workload.
 const NATIVE_PROTOCOLS: Readonly<Record<string, NonNullable<CatalogModel['nativeProtocol']>>> = {
   'gpt-6.1-sol': 'responses', 'gpt-6.1-terra': 'responses', 'gpt-6-astra': 'responses',
   'gpt-6-luna': 'responses', 'gpt-6-sol': 'responses', 'gpt-5.6-luna': 'responses', 'gpt-5.6-sol': 'responses', 'gpt-5.6-terra': 'responses',

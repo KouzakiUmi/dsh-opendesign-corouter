@@ -207,3 +207,23 @@ test('the persisted gateway catalog snapshot is validated and survives rehydrati
     assert.equal(validate({ modelCatalog: { models: 'nope' } }).modelCatalog, undefined);
   }
 });
+
+test('snapshot reasoning modes survive fresh-VM rehydration and reject invalid modes without coercion', () => {
+  const snapshot = {
+    baseURL: 'https://gateway.invalid/v1', updatedAt: '2030-01-01T00:00:00.000Z',
+    models: [
+      { id: 'fixture-toggle', name: 'Toggle', group: 'paid', reasoningMode: 'toggle', reasoningEfforts: ['none', 'high'], defaultEffort: 'high' },
+      { id: 'fixture-fixed', name: 'Fixed', group: 'plan', reasoningMode: 'fixed', reasoningEfforts: [] },
+      { id: 'fixture-unknown', name: 'Unknown', group: 'paid' },
+    ],
+  };
+  for (const validate of [(value: Parameters<typeof Config>[0]) => readConfig(Config(value)), rehydrateInFreshVM()]) {
+    const first = validate({ modelCatalog: snapshot }).modelCatalog;
+    assert.deepEqual(JSON.parse(JSON.stringify(first)), snapshot);
+    assert.deepEqual(JSON.parse(JSON.stringify(validate({ modelCatalog: JSON.parse(JSON.stringify(first)) }).modelCatalog)), snapshot);
+    for (const reasoningMode of ['', 'graded', 'unknown', 'TOGGLE', null, true, 1, [], {}, { toString: () => 'toggle' }]) {
+      assert.equal(validate({ modelCatalog: { ...snapshot, models: [{ ...snapshot.models[0], reasoningMode }] } }).modelCatalog, undefined);
+    }
+    assert.equal(validate({ modelCatalog: { ...snapshot, models: [{ ...snapshot.models[0], catalogReasoningEfforts: ['none', 'high'] }] } }).modelCatalog, undefined, 'transport-only fields do not enter catalog snapshots');
+  }
+});

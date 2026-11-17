@@ -265,6 +265,9 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
           ...(inputModalities === undefined ? {} : { inputModalities }),
           ...(contextWindow === undefined ? {} : { contextWindow }),
           ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+          ...(row.reasoningMode === undefined ? {} : { reasoningMode: row.reasoningMode }),
+          ...(row.reasoningEfforts === undefined ? {} : { catalogReasoningEfforts: row.reasoningEfforts }),
+          ...(row.defaultEffort === undefined ? {} : { catalogDefaultEffort: row.defaultEffort }),
           ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
           ...(defaultEffort === undefined ? {} : { defaultEffort }),
         };
