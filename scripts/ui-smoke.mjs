@@ -13,6 +13,7 @@ assert.ok(formSchema);
 const react = await build({ stdin: { contents: `import * as React from 'react'; import {createRoot} from 'react-dom/client'; import Schema from '@deepseek-ai/schemastery'; window.__Schema=Schema; window.__React=React; window.__mount=(component,props)=>{window.__root=createRoot(document.getElementById('root'));window.__root.render(React.createElement(component,props));}; window.__mountInto=(container,component,props)=>{const root=createRoot(container);root.render(React.createElement(component,props));return root;};`, resolveDir: process.cwd(), loader: 'js' }, bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"development"' } });
 const client = await readFile('lib/client.js', 'utf8');
 const theme = await readFile('test/fixtures/dsh-theme.css', 'utf8');
+const kxyContextReference = await readFile('test/fixtures/kxy-context-reference.html', 'utf8');
 assert.ok(!client.includes('node:'));
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {
@@ -981,6 +982,50 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await waitQuickReady();
   await quickChoice('默认').click();
   await page.waitForFunction(() => window.__config.modelSettings?.['kimi-k2.7-code']?.contextTier === undefined);
+  // Compare the live chat control with the installed kxy 0.6.3 reference, not settings styles.
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'deepseek-v4.1-flash' } }));
+  await waitQuickReady();
+  assert.equal(await quickChoice('最大').innerText(), '1M');
+  await page.evaluate(reference => {
+    const comparison = document.createElement('section');
+    comparison.id = 'context-design-comparison';
+    comparison.style.cssText = 'width:440px;max-width:100%;box-sizing:border-box;padding:20px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit';
+    comparison.innerHTML = '<p style="margin:0 0 16px">离线控件对比 · 相同字体与主题</p>';
+    const product = document.querySelector('#conversation-input .odc-quick');
+    for (const [label, html] of [['kxy 0.6.3', reference], ['CoRouter', product.outerHTML]]) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:12px;margin:12px 0;white-space:nowrap';
+      const name = document.createElement('span'); name.textContent = label; name.style.width = '76px';
+      const controls = document.createElement('span'); controls.style.cssText = 'display:inline-flex;align-items:center;gap:8px'; controls.innerHTML = html;
+      const model = document.createElement('span'); model.textContent = 'DeepSeek ▾'; model.style.cssText = 'font:inherit';
+      controls.append(model); row.append(name, controls); comparison.append(row);
+    }
+    document.body.append(comparison);
+  }, kxyContextReference);
+  const referenceDimensions = await page.locator('#context-design-comparison [data-kxy-context-reference]').evaluate(element => {
+    const style = getComputedStyle(element), button = getComputedStyle(element.querySelector('button'));
+    return { width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, radius: style.borderRadius, padding: style.padding, gap: style.gap, font: button.fontSize, buttonPadding: button.padding, buttonBorder: button.borderWidth };
+  });
+  const liveDimensions = await quickA.locator('.odc-context-options').evaluate(element => {
+    const style = getComputedStyle(element), button = getComputedStyle(element.querySelector('button'));
+    return { width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, radius: style.borderRadius, padding: style.padding, gap: style.gap, font: button.fontSize, buttonPadding: button.padding, buttonBorder: button.borderWidth };
+  });
+  assert.ok(Math.abs(liveDimensions.width - referenceDimensions.width) <= 1, JSON.stringify({ liveDimensions, referenceDimensions }));
+  assert.ok(Math.abs(liveDimensions.height - referenceDimensions.height) <= 1, JSON.stringify({ liveDimensions, referenceDimensions }));
+  for (const key of ['radius', 'padding', 'gap', 'font', 'buttonPadding', 'buttonBorder']) assert.equal(liveDimensions[key], referenceDimensions[key], `chat picker matches kxy ${key}`);
+  const referenceStates = await page.locator('#context-design-comparison [data-kxy-context-reference] button').evaluateAll(buttons => buttons.map(button => {
+    const style = getComputedStyle(button); return [style.fontWeight, style.opacity, style.borderRadius, style.backgroundColor];
+  }));
+  const liveStates = await quickA.locator('.odc-context-option').evaluateAll(buttons => buttons.map(button => {
+    const style = getComputedStyle(button); return [style.fontWeight, style.opacity, style.borderRadius, style.backgroundColor];
+  }));
+  assert.deepEqual(liveStates, referenceStates, 'selected and idle chat segments match kxy weight, opacity, radius and fill');
+  assert.ok(liveDimensions.height <= 26, 'chat controls do not inherit the 32px settings target height');
+  assert.equal(await quickA.locator('.odc-context-caption').isVisible(), false, 'chat shows capacity only, without a leading label');
+  await page.locator('#context-design-comparison').screenshot({ path: join(previewDir, 'context-kxy-comparison.png') });
+  await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
+  await page.locator('#context-design-comparison').screenshot({ path: join(previewDir, 'context-kxy-comparison-dark.png') });
+  await page.evaluate(() => { document.body.removeAttribute('data-ds-dark-theme'); document.getElementById('context-design-comparison').remove(); });
   await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'deepseek-v4.1-flash-eco' } }));
   await quickA.getByText('容量未知', { exact: true }).waitFor();
   assert.equal(await quickA.locator('[data-preset]').count(), 0);
@@ -996,6 +1041,15 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await quickChoice('默认').click();
   await quickA.getByRole('alert').waitFor();
   assert.match(await quickA.getByRole('alert').innerText(), /最大输出 384,000 不小于所选总窗口 256,000/u);
+  await quickChoice('默认').focus();
+  const failureHint = await quickA.evaluate(element => {
+    const tooltip = getComputedStyle(element, '::after');
+    return { content: tooltip.content, position: tooltip.position, display: tooltip.display, focused: element.matches(':focus-within') };
+  });
+  assert.equal(failureHint.focused, true);
+  assert.equal(failureHint.position, 'absolute', 'failure hints do not change toolbar geometry');
+  assert.notEqual(failureHint.display, 'none');
+  assert.match(failureHint.content, /最大输出 384,000/u, 'keyboard focus exposes the actual failure above the capsule');
   assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier), 'maximum');
   await page.evaluate(() => window.__setFormState('ready', false));
   await quickA.getByText('当前设置为只读。', { exact: true }).waitFor();

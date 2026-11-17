@@ -30,9 +30,18 @@ export function isCoRouterProvider(provider: string): boolean {
 }
 export const quickWindowLabel = formatContextShort;
 export const QUICK_CONTEXT_CSS = `
-.odc-quick{display:inline-flex;align-items:center;gap:var(--odc-control-gap,4px);flex-wrap:wrap;max-inline-size:100%;color:var(--dsw-alias-label-primary,CanvasText);font:12px/1.5 system-ui,sans-serif}
-.odc-quick .odc-context-control{margin:0;flex:none;max-inline-size:100%}.odc-quick .odc-context-caption{font-size:inherit}.odc-quick .odc-context-info{display:none}
-.odc-quick-feedback{font-size:inherit;color:var(--dsw-alias-label-secondary,CanvasText);max-inline-size:100%;overflow-wrap:anywhere}.odc-quick-error{color:var(--dsw-alias-state-error-primary,CanvasText)}
+.odc-quick{--odc-quick-space:2px;--odc-quick-gap:1px;--odc-quick-inset:7px;--odc-quick-radius:999px;--odc-quick-font:10.5px;--odc-quick-border:rgba(128,128,128,.3);position:relative;display:inline-flex;align-items:center;flex:none;max-inline-size:100%;color:inherit;font:inherit}
+.odc-quick .odc-context-control{--odc-control-font:var(--odc-quick-font);display:inline-flex;align-items:center;flex-wrap:nowrap;gap:var(--odc-quick-space);margin:0;flex:none;max-inline-size:100%;color:inherit}
+.odc-quick .odc-context-options{display:inline-flex;align-items:center;gap:var(--odc-quick-gap);padding:var(--odc-quick-space);border:1px solid var(--odc-quick-border);border-radius:var(--odc-quick-radius);background:transparent}
+.odc-quick .odc-context-option{min-height:0;padding:var(--odc-quick-space) var(--odc-quick-inset);border:0;border-radius:var(--odc-quick-radius);font:inherit;font-size:var(--odc-quick-font);font-weight:500;color:inherit;opacity:.68;background:transparent;cursor:pointer}
+.odc-quick .odc-context-option[aria-pressed=true]{border:0;background:color-mix(in srgb,currentColor 14%,transparent);color:inherit;font-weight:700;opacity:1;cursor:default}
+.odc-quick .odc-context-option:hover:not(:disabled){background:transparent;color:inherit}.odc-quick .odc-context-option[aria-pressed=true]:hover:not(:disabled){background:color-mix(in srgb,currentColor 14%,transparent)}
+.odc-quick[data-disabled=true] .odc-context-control{opacity:.55}.odc-quick .odc-context-option:disabled{cursor:default;opacity:.68}.odc-quick .odc-context-option[aria-pressed=true]:disabled{opacity:1}.odc-quick .odc-context-option:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,Highlight);outline-offset:var(--odc-quick-space)}
+.odc-quick .odc-context-caption,.odc-quick .odc-context-info{display:none}
+.odc-quick .odc-context-note,.odc-quick-feedback{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;pointer-events:none}
+.odc-quick[data-error=true] .odc-context-options{border-color:var(--dsw-alias-state-error-primary,CanvasText)}
+.odc-quick[data-error=true]:is(:hover,:focus-within)::after{content:attr(data-error-message);position:absolute;inset-inline-start:0;bottom:calc(100% + 6px);z-index:var(--odc-quick-tooltip-layer,50);width:max-content;max-width:min(260px,calc(100vw - 24px));box-sizing:border-box;padding:8px;border:1px solid var(--dsw-alias-state-error-primary,CanvasText);border-radius:6px;background:var(--dsw-alias-bg-layer-1,Canvas);color:var(--dsw-alias-label-primary,CanvasText);font:11px/1.5 system-ui,sans-serif;white-space:normal;overflow-wrap:anywhere;pointer-events:none}
+@media(forced-colors:active){.odc-quick .odc-context-options{border-color:ButtonText}.odc-quick .odc-context-option[aria-pressed=true]{background:Highlight;color:HighlightText;forced-color-adjust:none}.odc-quick .odc-context-option:disabled{color:GrayText;opacity:1}}
 `;
 
 /** Each slot follows its Session; the shared writer changes only that model's defaults. */
@@ -122,7 +131,8 @@ function ContextQuickControl({ provider, modelId, selecting, directoryUnavailabl
     if (saved) setNotice('已保存');
     else setError('设置未保存，已恢复原值，请重试。');
   };
-  return h('div', { className: 'odc-quick', 'aria-label': `CoRouter 上下文 · ${modelId}`, title: `修改 ${modelId} 的默认窗口，使用此模型的其他会话同步。` },
+  return h('div', { className: 'odc-quick', 'data-error': error !== undefined, 'data-error-message': error, 'data-disabled': reason !== undefined,
+    'aria-label': `CoRouter 上下文 · ${modelId}`, title: `${error ?? reason ?? ''} 修改 ${modelId} 的默认窗口，使用此模型的其他会话同步。`.trim() },
     h(ContextWindowControl, { id, reference: row?.contextWindow, settings, disabled: reason !== undefined && !pending, pending,
       ...(reason === undefined ? {} : { reason }), onSelect: tier => { void choose(tier); } }),
     loadError ? h('button', { type: 'button', className: 'odc-button odc-button-small', onClick: () => { void loadStatus(); } }, '重试读取模型信息') : null,
