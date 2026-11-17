@@ -14,7 +14,7 @@ import { OPENDESIGN_EOT } from './eot-code.js';
 import { applyModelSettings, isModelEnabled, type ModelSettings } from './model-settings.js';
 import { protocolFor } from './protocols/index.js';
 import { PrematureEndError } from './protocols/errors.js';
-import type { ApiProtocol } from './protocol-options.js';
+import { effectiveProtocol, type ApiProtocol } from './protocol-options.js';
 import { defaultReasoningEffort, modelReasoningEfforts, vendorDefaultEffort } from './reasoning.js';
 import { validateClaudeOutput, validateClaudeSampling } from './claude-parameters.js';
 import { claudeOutputError, hasRestrictedClaudeSampling } from './claude-capabilities.js';
@@ -22,6 +22,8 @@ import { claudeOutputError, hasRestrictedClaudeSampling } from './claude-capabil
 export interface AdapterOptions {
   config(): RuntimeConfig;
   models?(): readonly CatalogModel[];
+  readyModels?(): Promise<readonly CatalogModel[]>;
+  callIdentity?(): { key: string; workspace?: string } | undefined;
   apiKey(ref: string, baseURL?: string): Promise<string | undefined>;
   imageDataUrl?(image: ImageAttachmentRef, signal: AbortSignal): Promise<string | undefined>;
   onEmptyTurn?(): void;
@@ -40,7 +42,7 @@ function outputReserve(model: CatalogModel, protocol: ApiProtocol): number | und
 }
 function metadata(provider: string, row: CatalogModel, config: RuntimeConfig): LlmResolvedModelInfo {
   const setting = config.modelSettings?.[row.id];
-  const protocol = config.apiProtocol ?? 'chat-completions';
+  const protocol = effectiveProtocol(row, config.apiProtocol, setting?.apiProtocol);
   const proposedReserve = setting?.maxTokens ?? outputReserve(row, protocol);
   const reserve = claudeOutputError(row.id, protocol, proposedReserve) === undefined ? proposedReserve : undefined;
   const efforts = modelReasoningEfforts(row, protocol);
@@ -66,11 +68,11 @@ export class CoRouterAdapter extends LlmAdapter {
     this.#lifetime.abort(new LlmError('CoRouter 插件已卸载', 'ABORTED'));
     this.#credentialSecret.fill(0);
   }
-  async #credentialIdentity(baseURL: string, key: string, model: string, signal: AbortSignal): Promise<string> {
+  async #credentialIdentity(baseURL: string, key: string, model: string, signal: AbortSignal, workspace?: string): Promise<string> {
     let secret: Uint8Array | undefined;
     let abort: () => void = () => {};
     try {
-      if (this.options.replayBindingSecret && hasRestrictedClaudeSampling(model, 'messages')) {
+      if (this.options.replayBindingSecret) {
         const operation = this.options.replayBindingSecret(signal).then(bytes => {
           if (signal.aborted) { bytes.fill(0); throw new LlmError('Claude 回放绑定已取消', 'ABORTED'); }
           return bytes;
@@ -84,7 +86,9 @@ export class CoRouterAdapter extends LlmAdapter {
       } else secret = Buffer.from(this.#credentialSecret);
       signal.throwIfAborted();
       if (secret.length !== 32) throw new Error('invalid binding');
-      return createHmac('sha256', secret).update('opendesign-claude-replay-v1\0').update(new URL(baseURL).origin).update('\0').update(key).digest('hex');
+      const identity = createHmac('sha256', secret).update('opendesign-claude-replay-v1\0').update(new URL(baseURL).origin).update('\0').update(key);
+      if (workspace !== undefined) identity.update('\0workspace\0').update(workspace);
+      return identity.digest('hex');
     } catch {
       if (signal.aborted) throw new LlmError('Claude 回放绑定已取消', 'ABORTED');
       throw new LlmError('无法读取或安全保存 Claude 回放绑定密钥，请检查 DSH 凭据服务后重试。', 'INVALID_REQUEST');
@@ -103,6 +107,7 @@ export class CoRouterAdapter extends LlmAdapter {
     return configured;
   }
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+    await this.#ready();
     const config = this.options.config(), selectedGroup = group(provider);
     return (this.options.models?.() ?? MODELS).filter(row => row.group === selectedGroup && isModelEnabled(row.id, config.modelSettings))
       .map(row => {
@@ -112,23 +117,53 @@ export class CoRouterAdapter extends LlmAdapter {
   }
   override async resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     signal?.throwIfAborted();
+    await this.#ready(signal);
     const config = this.options.config();
     return metadata(provider, this.modelOf(provider, model, config), config);
   }
   override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
     signal?.throwIfAborted();
+    await this.#ready(signal);
     const config = this.options.config(), row = this.modelOf(provider, model, config);
-    return { model: metadata(provider, row, config), stream: options => this.#stream(options, config, row) };
+    const settings = config.modelSettings?.[row.id];
+    const protocol = effectiveProtocol(row, config.apiProtocol, settings?.apiProtocol);
+    if (settings?.reasoningEffort !== undefined && !modelReasoningEfforts(row, protocol)?.includes(settings.reasoningEffort)) throw new LlmError('所选思考深度不适用于当前模型或协议；请修改默认值或选择其他档位', 'UNSUPPORTED_OPTION');
+    if (protocol === 'messages') {
+      validateClaudeSampling(row.id, settings?.temperature, settings?.topP);
+      validateClaudeOutput(row.id, settings?.maxTokens);
+    }
+    const identity = this.options.callIdentity?.();
+    if (this.options.callIdentity && !identity) throw new LlmError('当前账号模型目录尚未核实，请登录或刷新模型目录后重试', 'INVALID_REQUEST');
+    const raw = identity?.key ?? await this.options.apiKey(apiKeyRef(config), config.baseURL);
+    signal?.throwIfAborted();
+    return { model: metadata(provider, row, config), stream: options => this.#stream(options, config, row, identity?.workspace, raw, true) };
   }
   override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     const config = this.options.config();
-    return this.#stream(options, config, this.modelOf(options.provider, options.model, config));
+    const identity = this.options.callIdentity?.();
+    if (this.options.callIdentity && !identity) throw new LlmError('当前账号模型目录尚未核实，请登录或刷新模型目录后重试', 'INVALID_REQUEST');
+    return this.#stream(options, config, this.modelOf(options.provider, options.model, config), identity?.workspace, identity?.key, identity !== undefined);
   }
-  async *#stream(options: GenerateOptions, config: RuntimeConfig, row: CatalogModel): AsyncGenerator<StreamChunk> {
+  async #ready(signal?: AbortSignal): Promise<void> {
+    const operation = this.options.readyModels?.();
+    if (!operation) return;
+    if (!signal) { await operation; return; }
+    let cancelled: () => void = () => {};
+    try {
+      const aborted = new Promise<never>((_resolve, reject) => {
+        cancelled = () => reject(new LlmError('模型目录等待已取消', 'ABORTED'));
+        signal.addEventListener('abort', cancelled, { once: true });
+        if (signal.aborted) cancelled();
+      });
+      await Promise.race([operation, aborted]);
+      signal.throwIfAborted();
+    } finally { signal.removeEventListener('abort', cancelled); }
+  }
+  async *#stream(options: GenerateOptions, config: RuntimeConfig, row: CatalogModel, workspace?: string, capturedKey?: string, captured = false): AsyncGenerator<StreamChunk> {
     const signal = AbortSignal.any([combinedSignal(options.signal, config.requestTimeoutMs), this.#lifetime.signal]);
     signal.throwIfAborted();
     const setting: ModelSettings = config.modelSettings?.[row.id] ?? {};
-    const protocolId = config.apiProtocol ?? 'chat-completions';
+    const protocolId = effectiveProtocol(row, config.apiProtocol, setting.apiProtocol);
     const configured = setting.reasoningEffort;
     const explicit = options.reasoningEffort ?? (configured === undefined ? undefined : ReasoningEffortId(configured));
     if (explicit !== undefined && !modelReasoningEfforts(row, protocolId)?.includes(explicit)) throw new LlmError('所选思考深度不适用于当前模型或协议；请修改默认值或选择其他档位', 'UNSUPPORTED_OPTION');
@@ -141,13 +176,13 @@ export class CoRouterAdapter extends LlmAdapter {
       validateClaudeOutput(row.id, options.maxTokens ?? setting.maxTokens);
     }
     const keyRef = apiKeyRef(config);
-    const raw = await this.options.apiKey(keyRef, config.baseURL);
+    const raw = captured ? capturedKey : await this.options.apiKey(keyRef, config.baseURL);
     if (!raw) throw new LlmError('未配置当前网关的推理凭据；请完成设备授权或配置对应 API Key', 'MISSING_CREDENTIAL');
     const key = assertUsableApiKey(raw, 'dsh-opendesign-corouter', keyRef);
     signal.throwIfAborted();
     let credentialIdentity: string | undefined;
-    if (protocolId === 'messages') {
-      try { credentialIdentity = await this.#credentialIdentity(config.baseURL, key, row.id, signal); }
+    if (protocolId === 'messages' || protocolId === 'responses') {
+      try { credentialIdentity = await this.#credentialIdentity(config.baseURL, key, row.id, signal, workspace); }
       catch (error) {
         if (signal.aborted && !options.signal?.aborted && !this.#lifetime.signal.aborted) throw new LlmError('CoRouter 请求超过总超时', 'TIMEOUT');
         throw error;
@@ -211,7 +246,7 @@ export class CoRouterAdapter extends LlmAdapter {
     let response: Response;
     try {
       response = await (this.options.fetch ?? fetch)(request.url, {
-        method: 'POST', headers: request.headers, body: JSON.stringify(request.body), signal, redirect: 'error',
+        method: 'POST', headers: { ...request.headers, ...(workspace ? { 'x-vela-workspace-id': workspace } : {}) }, body: JSON.stringify(request.body), signal, redirect: 'error',
       });
     } catch {
       if (options.signal?.aborted || this.#lifetime.signal.aborted) signal.throwIfAborted();
@@ -260,6 +295,7 @@ export class CoRouterAdapter extends LlmAdapter {
       for await (const chunk of protocol.stream(response.body, signal, config.streamIdleTimeoutMs, {
         provider: options.provider, model: options.model, baseURL: config.baseURL,
         ...(credentialIdentity === undefined ? {} : { credentialIdentity }),
+        ...(request.replayPrefix === undefined ? {} : { replayPrefix: request.replayPrefix }),
       })) {
         signal.throwIfAborted();
         tracker.observe(chunk);

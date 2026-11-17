@@ -114,6 +114,7 @@ function modelDiscovery(calls: Wire[], respond: Responder): ModelFetch {
 
 function hostDependencies(calls: Wire[], respond: Responder, changed?: () => void): HostDependencies {
   return {
+    modelAutoRefresh: false, readDesktopCredential: async () => ({ state: 'missing' }), modelAccount: async () => undefined,
     resolveSession: async () => ({ state: 'ready', warnings: [], session: { source: 'login', via: 'login', apiUrl: 'https://amr-api.open-design.ai', headers: { cookie: 'fixture=session' } } }),
     readQuota: async () => structuredClone(quota),
     readDesktopQuota: async () => { throw new ConsoleError('auth', 401); },
@@ -122,14 +123,17 @@ function hostDependencies(calls: Wire[], respond: Responder, changed?: () => voi
   };
 }
 
-async function host(current: RuntimeConfig, deps: HostDependencies, withSettings = false) {
+async function host(current: RuntimeConfig, deps: HostDependencies, withSettings = false, records?: ReadonlyMap<CredentialKey, CredentialRecord>) {
   const ctx = new Context();
   const credentials = await ctx.plugin(MemoryCredentials);
+  const store = ctx.credentials as MemoryCredentials;
+  for (const [key, value] of records ?? []) store.data.set(key, structuredClone(value));
   const settingsFiber = withSettings ? await ctx.plugin(MemorySettings) : undefined;
   const settings = settingsFiber ? ctx.get('settings') as unknown as MemorySettings : undefined;
   const fiber = await ctx.plugin(scope => { new OpenDesignCoRouterService(scope, () => current, deps); });
   return {
     service: ctx.openDesignCoRouter,
+    store,
     settings,
     dispose: async () => { await fiber.dispose(); await settingsFiber?.dispose(); await credentials.dispose(); },
   };
@@ -273,7 +277,8 @@ test('inference protocol and per-model settings never invalidate the discovered 
     const row = discovered.models[0];
     assert.ok(row);
     assert.equal(row.id, 'deepseek-v4.1-flash');
-    assert.equal(row.group, 'plan');
+    assert.equal(row.group, 'paid', 'unpaired fixture key cannot claim seed inclusion');
+    assert.equal(row.coverage, 'unknown');
     assert.equal(row.name, 'DeepSeek V4.1 Flash');
     assert.equal(row.contextWindow, 1_000_000);
     assert.equal(row.maxOutputTokens, 384_000);
@@ -456,7 +461,7 @@ test('a failed refresh keeps the last good catalog and never surfaces upstream t
     const failedCrash = await service.refreshModels();
     assert.deepEqual(failedCrash.models.map(model => model.id), ['glm-5.2']);
     assert.equal(failedCrash.modelsUpdatedAt, good.modelsUpdatedAt);
-    assert.equal(failedCrash.modelsError, '模型列表更新失败，请稍后重试。');
+    assert.equal(failedCrash.modelsError, '模型目录或账号权益暂时无法读取，请稍后刷新。');
     assert.equal(JSON.stringify(failedCrash).includes(SECRET), false);
     assert.equal(notifications, 1);
 
@@ -511,9 +516,9 @@ test('dispose cancels the in-flight request without an unhandled rejection', asy
   }
 });
 
-test('a successful discovery persists its catalog and the next Host start restores it', async () => {
+test('a successful discovery persists and the next Host validates the credential binding before restoring it', async () => {
   const current = runtimeConfig(), calls: Wire[] = [];
-  const { service, settings, dispose } = await host(current, hostDependencies(calls, () => list('deepseek-v4.1-flash')), true);
+  const { service, settings, store, dispose } = await host(current, hostDependencies(calls, () => list('deepseek-v4.1-flash')), true);
   try {
     await saveFixtureKey(service);
     const refreshed = await service.refreshModels();
@@ -525,19 +530,21 @@ test('a successful discovery persists its catalog and the next Host start restor
     assert.deepEqual(snapshot.models.map(model => model.id), ['deepseek-v4.1-flash']);
     // A fresh Host with the saved configuration restores the gateway catalog on its first status.
     current.modelCatalog = snapshot;
-    const restarted = await host(current, hostDependencies([], () => list()));
+    const restarted = await host(current, hostDependencies([], () => { throw new TypeError('offline'); }), false, store.data);
     try {
-      const status = await restarted.service.status();
+      assert.equal((await restarted.service.status()).modelsSource, 'builtin');
+      const status = await restarted.service.refreshModels();
       assert.equal(status.modelsSource, 'openai');
       assert.equal(status.modelsUpdatedAt, snapshot.updatedAt);
       assert.deepEqual(status.models.map(model => model.id), ['deepseek-v4.1-flash']);
-      assert.equal(status.modelsError, undefined);
+      assert.equal(status.modelsError, '无法连接模型发现服务');
+      assert.equal(status.models[0]?.coverage, 'unknown', 'old coverage is rechecked, never restored as entitlement');
       assert.deepEqual(restarted.service.modelCatalog().map(model => model.id), ['deepseek-v4.1-flash']);
     } finally { await restarted.dispose(); }
   } finally { await dispose(); }
 });
 
-test('an older snapshot without a documented default is completed from the built-in catalog', async () => {
+test('an unbound legacy snapshot cannot replace the current identity catalog', async () => {
   const current = runtimeConfig();
   // Snapshots written before the catalog carried `defaultEffort` still restore, and the
   // built-in entry supplies the documented default the effort selector needs.
@@ -548,11 +555,11 @@ test('an older snapshot without a documented default is completed from the built
   };
   const { service, dispose } = await host(current, hostDependencies([], () => list()));
   try {
-    assert.deepEqual(service.modelCatalog().map(model => model.id), ['gpt-6-luna']);
-    assert.equal(service.modelCatalog()[0]?.defaultEffort, 'medium');
+    assert.deepEqual(service.modelCatalog().map(model => model.id), MODELS.map(model => model.id));
     const status = await service.status();
-    assert.equal(status.modelsSource, 'openai');
-    assert.equal(status.models[0]?.defaultEffort, 'medium');
+    assert.equal(status.modelsSource, 'builtin');
+    assert.equal(status.models.find(row => row.id === 'gpt-6-luna')?.defaultEffort, 'medium');
+    assert.ok(status.models.every(row => row.coverage === 'unknown'));
   } finally { await dispose(); }
 });
 
@@ -658,7 +665,7 @@ test('overlapping refreshes persist in order and only the newest catalog survive
   let release = () => {};
   const gate = new Promise<void>(resolve => { release = resolve; });
   let responses = 0;
-  const { service, settings, dispose } = await host(current, hostDependencies(calls, () => {
+  const { service, settings, store, dispose } = await host(current, hostDependencies(calls, () => {
     responses++;
     return list(responses === 1 ? 'first-model' : 'second-model');
   }), true);
@@ -676,9 +683,9 @@ test('overlapping refreshes persist in order and only the newest catalog survive
     const snapshot = settings?.patch.modelCatalog as ModelCatalogSnapshot;
     assert.deepEqual(snapshot.models.map(model => model.id), ['second-model']);
     current.modelCatalog = snapshot;
-    const restarted = await host(current, hostDependencies([], () => list()));
+    const restarted = await host(current, hostDependencies([], () => { throw new TypeError('offline'); }), false, store.data);
     try {
-      assert.deepEqual((await restarted.service.status()).models.map(model => model.id), ['second-model']);
+      assert.deepEqual((await restarted.service.refreshModels()).models.map(model => model.id), ['second-model']);
     } finally { await restarted.dispose(); }
   } finally { await dispose(); }
 });

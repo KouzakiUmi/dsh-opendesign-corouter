@@ -10,11 +10,12 @@
  * - `reasoningEffort` 按现代 Messages 标准投影为 `thinking: {type:'adaptive'}` +
  *   `output_config.effort`；`none` 投影为 `thinking: {type:'disabled'}`；`minimal`/`ultra`
  *   等没有对应 effort 的档位抛 UNSUPPORTED_OPTION；
- * - 已确认的八个 Claude 模型先校验 Messages 采样默认值与 128000 输出上限；
+ * - 已确认的九个 Claude 模型先校验 Messages 采样默认值与 128000 输出上限；
  *   其余模型的采样限制及 legacy thinking 兼容性由上游按实际模型判定；
  * - 签名与密态仅保存在 adapter-private replay metadata；历史无签名 reasoning 不回放。
  */
 
+import { createHash } from 'node:crypto';
 import {
   LlmError, ToolCallId,
   type FinishReason, type ReplayEnvelope, type RequestMessage, type StreamChunk, type TokenUsage,
@@ -41,14 +42,37 @@ type ContentPart = Record<string, unknown>;
 const REPLAY_FORMAT = 'opendesign.anthropic-messages';
 const MAX_REPLAY_CHARS = 8 * 1024 * 1024;
 const MAX_BLOCKS = 4096;
+const PREFIX_BOUND_MODEL = 'claude-fable-5.2';
+const PREFIX_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+const MAX_PREFIX_CHARS = 32 * 1024 * 1024;
+
+/** Hash only the actual projected prefix; keep metadata fixed-size and work bounded. */
+function prefixBinding(system: string | undefined, tools: unknown) {
+  const hash = createHash('sha256');
+  let size = 0;
+  let bounded = true;
+  const append = (value: unknown): void => {
+    if (!bounded) return;
+    const text = JSON.stringify(value);
+    size += text.length;
+    if (size > MAX_PREFIX_CHARS) { bounded = false; return; }
+    hash.update(`${text.length}:`).update(text);
+  };
+  append({ system, tools });
+  return { append, snapshot: (): string | undefined => bounded ? `sha256:${hash.copy().digest('hex')}` : undefined };
+}
 type ReplayBlock =
   | { type: 'text' | 'reasoning'; text: string }
   | { type: 'tool-call'; id: string; name: string; arguments: string }
   | { type: 'thinking'; thinking: string; signature: string }
   | { type: 'redacted_thinking'; data: string };
 
+function replayDigest(blocks: readonly ReplayBlock[]): string {
+  return `sha256:${createHash('sha256').update(JSON.stringify(blocks)).digest('hex')}`;
+}
+
 /** The whole alignment is checked before any private block is sent. */
-function replayBlocks(message: RequestMessage, ctx: ProtocolContext): readonly ReplayBlock[] | undefined {
+function replayBlocks(message: RequestMessage, ctx: ProtocolContext, prefix?: string): readonly ReplayBlock[] | undefined {
   if (message.role !== 'assistant' || message.source.provider !== ctx.options.provider || message.source.model !== ctx.options.model) return;
   const envelope = message.source.replayState;
   if (!record(envelope) || !record(envelope.response) || !Array.isArray(envelope.blocks)) return;
@@ -85,6 +109,9 @@ function replayBlocks(message: RequestMessage, ctx: ProtocolContext): readonly R
       || response.credentialIdentity !== ctx.credentialIdentity)) {
     throw new LlmError('无法验证历史 Claude 思考数据属于当前凭据。请恢复原凭据及回放绑定记录后重试；若仅使用内存绑定且已重启，请新建会话，或先压缩移除旧思考及其工具续接历史。', 'INVALID_REQUEST');
   }
+  // Legacy envelopes have no prefix binding. Never widen them into Fable 5.2 replay.
+  if (ctx.model.id === PREFIX_BOUND_MODEL && (prefix === undefined || response.requestPrefix !== prefix
+    || response.blocksDigest !== replayDigest(entries))) return;
   return entries;
 }
 
@@ -127,20 +154,29 @@ export function buildMessagesRequest(ctx: ProtocolContext): WireRequest {
   if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0) throw new LlmError('maxTokens 必须是正整数', 'INVALID_REQUEST');
 
   const system: string[] = [];
+  for (const message of options.messages) if (message.role === 'system' || message.role === 'developer') {
+    const text = projectContent(message.content).text;
+    if (text) system.push(text);
+  }
+  if (options.system?.trim()) system.unshift(options.system);
+  const systemText = system.length ? system.join('\n\n') : undefined;
+  const tools = options.tools?.length ? options.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) : undefined;
+  const binding = model.id === PREFIX_BOUND_MODEL ? prefixBinding(systemText, tools) : undefined;
   const messages: { role: 'user' | 'assistant'; content: ContentPart[] }[] = [];
+  const pushMessage = (message: typeof messages[number]): void => { messages.push(message); binding?.append(message); };
   const lookup = ctx.images.size ? (ref: { attachmentId: string }) => ctx.images.get(ref.attachmentId) : undefined;
   let results: ContentPart[] = [];
   let lifted: string[] = [];
   const flushResults = (): void => {
     if (results.length) {
-      messages.push({ role: 'user', content: results });
+      pushMessage({ role: 'user', content: results });
       results = [];
     }
   };
   const flushLifted = (): void => {
     flushResults();
     if (lifted.length) {
-      messages.push({
+      pushMessage({
         role: 'user',
         content: [{ type: 'text', text: '(Image content from the preceding tool result.)' }, ...lifted.map(imagePart)],
       });
@@ -156,19 +192,18 @@ export function buildMessagesRequest(ctx: ProtocolContext): WireRequest {
     switch (message.role) {
       case 'system':
       case 'developer':
-        if (projected.text) system.push(projected.text);
         break;
       case 'user': {
         const content: ContentPart[] = [
           ...(projected.text ? [{ type: 'text', text: projected.text }] : []),
           ...projected.images.map(imagePart),
         ];
-        if (content.length) messages.push({ role: 'user', content });
+        if (content.length) pushMessage({ role: 'user', content });
         break;
       }
       case 'assistant': {
         const content: ContentPart[] = [];
-        const replay = replayBlocks(message, ctx);
+        const replay = replayBlocks(message, ctx, binding?.snapshot());
         for (const [index, block] of message.content.entries()) {
           const entry = replay?.[index];
           if (entry?.type === 'thinking') content.push({ type: 'thinking', thinking: entry.thinking, signature: entry.signature });
@@ -180,7 +215,7 @@ export function buildMessagesRequest(ctx: ProtocolContext): WireRequest {
             if (placeholder) content.push({ type: 'text', text: placeholder });
           }
         }
-        if (content.length) messages.push({ role: 'assistant', content });
+        if (content.length) pushMessage({ role: 'assistant', content });
         break;
       }
       case 'tool': {
@@ -195,17 +230,17 @@ export function buildMessagesRequest(ctx: ProtocolContext): WireRequest {
     }
   }
   flushLifted();
-  if (options.system?.trim()) system.unshift(options.system);
 
   const body: Record<string, unknown> = { model: model.id, max_tokens: maxTokens, messages, stream: true };
-  if (system.length) body.system = system.join('\n\n');
-  if (options.tools?.length) body.tools = options.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters }));
+  if (systemText !== undefined) body.system = systemText;
+  if (tools !== undefined) body.tools = tools;
   if (options.temperature !== undefined) body.temperature = options.temperature;
   if (ctx.topP !== undefined) body.top_p = ctx.topP;
   if (options.stop?.length) body.stop_sequences = options.stop;
   if (options.reasoningEffort !== undefined) {
     // 思考控制按现代 Messages 标准投影：`thinking.type.adaptive` + `output_config.effort`。
     const effort = String(options.reasoningEffort);
+    if (effort === 'none' && model.id === PREFIX_BOUND_MODEL) throw new LlmError('Claude Fable 5.2 不支持关闭思考', 'UNSUPPORTED_OPTION');
     if (effort === 'none') body.thinking = { type: 'disabled' };
     else if (protocolAcceptsEffort('messages', effort)) {
       body.thinking = { type: 'adaptive' };
@@ -214,7 +249,9 @@ export function buildMessagesRequest(ctx: ProtocolContext): WireRequest {
   }
   // 已确认 Claude 模型的采样与输出限制已在入口校验，通过后保留调用方参数；
   // 其他模型及 legacy thinking 的兼容性仍由上游判定，不发送 top_k。
-  return { url: messagesURL(ctx.baseURL), headers: streamHeaders(ctx.apiKey, { 'anthropic-version': ANTHROPIC_VERSION }), body };
+  const replayPrefix = binding?.snapshot();
+  return { url: messagesURL(ctx.baseURL), headers: streamHeaders(ctx.apiKey, { 'anthropic-version': ANTHROPIC_VERSION }), body,
+    ...(replayPrefix === undefined ? {} : { replayPrefix }) };
 }
 
 interface BlockState {
@@ -290,6 +327,7 @@ export async function* streamMessages(
 
   function replay(): ReplayEnvelope | undefined {
     if (!context?.credentialIdentity || ![...blocks.values()].some(state => state.signature !== '' || state.kind === 'redacted')) return;
+    if (context.model === PREFIX_BOUND_MODEL && (context.replayPrefix === undefined || !PREFIX_PATTERN.test(context.replayPrefix))) return;
     const entries: ReplayBlock[] = [];
     for (const state of blocks.values()) {
       if (!state.started) continue;
@@ -301,7 +339,8 @@ export async function* streamMessages(
       else if (state.kind === 'tool') entries.push({ type: 'tool-call', id: state.id, name: state.name, arguments: state.hasArgsDelta ? state.args : state.initialInput });
     }
     return { response: { format: REPLAY_FORMAT, version: 1, protocol: 'messages', provider: context.provider,
-      model: context.model, origin: new URL(context.baseURL).origin, credentialIdentity: context.credentialIdentity }, blocks: entries };
+      model: context.model, origin: new URL(context.baseURL).origin, credentialIdentity: context.credentialIdentity,
+      ...(context.model === PREFIX_BOUND_MODEL ? { requestPrefix: context.replayPrefix, blocksDigest: replayDigest(entries) } : {}) }, blocks: entries };
   }
 
   function reasonFromStop(stop: string | undefined): FinishReason {

@@ -9,7 +9,8 @@ import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, PAID_PROVIDER, type RuntimeConfig } fr
 import type { CatalogModel } from '../src/catalog.js';
 
 const row: CatalogModel = { id: 'fixture-model', name: 'Fixture', group: 'paid' };
-const base: RuntimeConfig = { apiKeyEnv: 'FIXTURE_KEY', baseURL: 'https://gateway.invalid/v1', useDesktopCredential: false, emptyTurnGuard: false, requestTimeoutMs: 10000, streamIdleTimeoutMs: 1000 };
+// The generic fixture below emits Chat SSE; default/auto routing has separate adapter tests.
+const base: RuntimeConfig = { apiProtocol: 'chat-completions', apiKeyEnv: 'FIXTURE_KEY', baseURL: 'https://gateway.invalid/v1', useDesktopCredential: false, emptyTurnGuard: false, requestTimeoutMs: 10000, streamIdleTimeoutMs: 1000 };
 const image = (digit: string, bytes = 1): ImageAttachmentRef => ({ attachmentId: AttachmentId(digit.repeat(64)), mediaType: 'image/png', bytes, width: 1, height: 1 });
 const first = image('a'), second = image('b'), missing = image('c');
 const dataUrl = 'data:image/png;base64,aGVsbG8=';

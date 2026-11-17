@@ -31,14 +31,19 @@ try {
     window.__ModuleLoader__ = { load(bundle) { window.__plugin = bundle.factory(name => { if (name === 'react') return window.__React; throw new Error('Unexpected external: ' + name); }); } };
   });
   await page.addScriptTag({ content: client });
-const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWindow, maxOutputTokens, reasoningEfforts, defaultEffort }) => ({
+const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWindow, maxOutputTokens, reasoningEfforts, defaultEffort, nativeProtocol }) => ({
   id, name, group,
   ...(inputModalities === undefined ? {} : { inputModalities }),
   ...(contextWindow === undefined ? {} : { contextWindow }),
   ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
   ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
   ...(defaultEffort === undefined ? {} : { defaultEffort }),
+  ...(nativeProtocol === undefined ? {} : { nativeProtocol }),
+  coverage: group === 'plan' ? 'included' : 'not-included',
 }));
+assert.equal(fixtureModels.length, 46);
+assert.equal(fixtureModels.filter(model => model.group === 'plan').length, 11);
+assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await page.evaluate(({ rawModels, wireSchema }) => {
     // Decode the real Host-projected form, including its extra JSON serialization hop.
     const schema = new window.__Schema(wireSchema);
@@ -62,7 +67,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
     window.__failStatusReads = false;
     let config = {
       emptyTurnGuard: true, turnCompletionReview: false, useDesktopCredential: true, baseURL: 'https://amr-link.open-design.ai/v1', apiKeyEnv: 'COROUTER_API_KEY',
-      apiProtocol: 'chat-completions', modelSettings: {}, quotaRefreshSeconds: 60, requestTimeoutMs: 1800000, streamIdleTimeoutMs: 300000,
+      apiProtocol: 'auto', modelSettings: {}, quotaRefreshSeconds: 60, requestTimeoutMs: 1800000, streamIdleTimeoutMs: 300000,
       turnReviewMaxContinuations: 3, turnReviewNoProgressLimit: 2,
     };
     validateConfig(config);
@@ -72,6 +77,8 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
     let modelsSource = 'builtin';
     let modelsUpdatedAt;
     let modelsError;
+    let entitlementsUnknown = false;
+    window.__setEntitlementsUnknown = value => { entitlementsUnknown = value; };
     let snapshot = { status: 'ready', writable: true, value: config };
     // A frozen status view lets a test hold the last read while the form moves on.
     let frozenStatusConfig;
@@ -97,8 +104,9 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
         // The Host sends an empty string when the profile names no reference.
         config: frozenStatusConfig ?? { ...config, apiKeyEnv: config.apiKeyEnv ?? '' },
         ...(turnMonitor === undefined ? {} : { turnMonitor }),
-        models: models.map(model => ({ ...model, enabled: config.modelSettings?.[model.id]?.enabled ?? model.enabled ?? true })),
+        models: models.map(model => ({ ...model, ...(entitlementsUnknown ? { group: 'paid', coverage: 'unknown' } : {}), enabled: config.modelSettings?.[model.id]?.enabled ?? model.enabled ?? true })),
         modelsSource,
+        modelEntitlements: entitlementsUnknown ? { state: 'unavailable' } : { state: 'verified', source: 'device', tier: 'pro', updatedAt: new Date().toISOString() },
         ...(modelsUpdatedAt === undefined ? {} : { modelsUpdatedAt }),
         ...(modelsError === undefined ? {} : { modelsError }),
       };
@@ -322,6 +330,8 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   }, { rawModels: fixtureModels, wireSchema: JSON.parse(JSON.stringify(formSchema.toJSON())) });
   const config = () => page.evaluate(() => window.__config);
   const modelSettings = () => page.evaluate(() => window.__config.modelSettings ?? {});
+  // Exact IDs avoid ambiguous matches against Eco and gateway-discovered suffixes.
+  const modelRow = id => page.locator('.odc-model-item').filter({ has: page.locator('code').filter({ hasText: new RegExp(`^${id.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`, 'u') }) });
   await page.getByRole('heading', { name: '额度概览', exact: true }).waitFor();
   // A blocked quota reader must not prevent the configuration page from becoming usable.
   await page.getByRole('tab', { name: '连接与登录', exact: true }).click();
@@ -356,6 +366,8 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.evaluate(() => { window.__setFormState('ready', true); window.__holdSaves = true; window.__saveCalls = []; });
   await pendingGuard.uncheck();
   const queuedProtocol = page.getByLabel('API 协议', { exact: true });
+  assert.equal(await queuedProtocol.inputValue(), 'auto', 'a new installation starts in model-aware auto mode');
+  assert.deepEqual(await queuedProtocol.locator('option').evaluateAll(options => options.map(option => option.value)), ['auto', 'chat-completions', 'responses', 'messages']);
   await queuedProtocol.selectOption('responses');
   assert.equal(await pendingGuard.isDisabled(), true, 'the first pending field remains locked');
   assert.equal(await queuedProtocol.isDisabled(), true, 'the queued field is also locked');
@@ -375,6 +387,16 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.waitForFunction(() => window.__config.apiProtocol === 'responses');
   await page.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
   assert.equal(await pendingGuard.isChecked(), true, 'a later successful write must not conceal an earlier rejection');
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await queuedProtocol.selectOption('auto');
+  assert.equal(await queuedProtocol.inputValue(), 'auto');
+  assert.equal(await queuedProtocol.isDisabled(), true);
+  assert.equal(await page.evaluate(() => window.__config.apiProtocol), 'responses', 'pending auto does not change accepted config');
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.waitForFunction(() => document.querySelector('#odc-api-protocol')?.value === 'responses' && !document.querySelector('#odc-api-protocol')?.disabled);
+  await queuedProtocol.selectOption('auto');
+  await page.waitForFunction(() => window.__config.apiProtocol === 'auto');
+  await page.getByText('按模型选择；未确认原生时使用 /responses', { exact: true }).waitFor();
   await queuedProtocol.selectOption('chat-completions');
   await page.evaluate(() => { window.__holdQuota = false; window.__releaseQuota(); });
   await page.getByRole('tab', { name: '概览', exact: true }).click();
@@ -449,6 +471,21 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   // Models: switches, whole-map persistence, parameters, reset, stale-status ordering and discovery.
   await page.getByRole('tab', { name: '模型', exact: true }).click();
   assert.equal(await page.locator('.odc-model-item').count(), 12, 'each group starts with six models');
+  await page.getByText(/已按当前账号 pro订阅逐模型核实分组/u).waitFor();
+  await page.evaluate(() => window.__setEntitlementsUnknown(true));
+  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await page.getByRole('tab', { name: '模型', exact: true }).click();
+  await page.getByText(/尚未取得与当前推理身份匹配的订阅权益/u).waitFor();
+  const unknownGroups = page.locator('.odc-model-groups > section');
+  assert.equal(await unknownGroups.first().locator('.odc-model-item').count(), 0, 'unknown account coverage never advertises gift rows');
+  await unknownGroups.nth(1).getByRole('button', { name: '显示全部 46 个模型', exact: true }).click();
+  assert.equal(await page.locator('.odc-model-item').count(), 46);
+  assert.equal(await page.locator('.odc-model-item').getByText('权益未核实', { exact: true }).count(), 46);
+  assert.equal(await page.getByText('订阅已覆盖', { exact: true }).count(), 0);
+  await page.evaluate(() => window.__setEntitlementsUnknown(false));
+  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await page.getByRole('tab', { name: '模型', exact: true }).click();
+  assert.equal(await page.locator('.odc-model-groups > section').first().locator('.odc-model-item').count(), 6);
   // The settings pane may be narrow even in a wide browser window.
   await page.locator('#root').evaluate(root => { root.style.width = '600px'; });
   assert.equal(await page.locator('.odc-model-groups').evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length), 1, 'model groups follow the actual pane width');
@@ -466,24 +503,25 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.locator('#root').evaluate(root => { root.style.width = ''; });
   const groupCards = page.locator('.odc-model-groups > section');
   const planGroup = groupCards.first();
+  const paidGroup = groupCards.nth(1);
   const planIds = () => planGroup.locator('.odc-model-item code').allTextContents();
   const catalogOrder = await page.evaluate(() => window.__lastStatus.models.map(model => model.id));
 
   // Pending enablement changes reorder every view immediately; rejection restores the accepted order.
-  const flashRow = planGroup.locator('.odc-model-item', { hasText: 'deepseek-v4.1-flash' });
+  const flashRow = planGroup.locator('.odc-model-item').filter({ has: page.locator('code', { hasText: /^deepseek-v4\.1-flash$/u }) });
   const flashSwitch = flashRow.locator('.odc-model-switch input[type=checkbox]');
   await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
   await flashSwitch.click();
   assert.equal(await flashRow.count(), 0, 'a pending disabled model leaves the collapsed enabled first-six view');
-  assert.deepEqual(await planIds(), ['gpt-6-luna', 'claude-haiku-5.5', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flashx']);
-  await planGroup.getByRole('button', { name: '显示全部 13 个模型', exact: true }).click();
+  assert.deepEqual(await planIds(), ['deepseek-v4.1-flash-eco', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flash', 'kimi-k2.7-code']);
+  await planGroup.getByRole('button', { name: '显示全部 11 个模型', exact: true }).click();
   assert.equal((await planIds()).at(-1), 'deepseek-v4.1-flash', 'expanded results place the pending disabled row after every enabled row');
   await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('flash');
-  assert.deepEqual(await planIds(), ['deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flashx', 'glm-5.3-flash', 'mimo-v2.6-flash', 'minimax-m3.1-flash', 'deepseek-v4.1-flash'], 'search follows the same enabled-first stable ordering');
+  assert.deepEqual(await planIds(), ['deepseek-v4.1-flash-eco', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flash', 'mimo-v2.6-flash', 'minimax-m3.1-flash', 'deepseek-v4.1-flash'], 'search follows the same enabled-first stable ordering');
   assert.equal(await page.evaluate(() => window.__config.modelSettings?.['deepseek-v4.1-flash']), undefined, 'a held save has not changed the accepted configuration');
   await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
   await page.getByText('设置未保存，已恢复原值，请重试。', { exact: true }).waitFor();
-  assert.deepEqual(await planIds(), ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flashx', 'glm-5.3-flash', 'mimo-v2.6-flash', 'minimax-m3.1-flash'], 'rollback restores catalog order in search results');
+  assert.deepEqual(await planIds(), ['deepseek-v4.1-flash-eco', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flash', 'mimo-v2.6-flash', 'minimax-m3.1-flash'], 'rollback restores catalog order in search results');
   assert.equal(await flashSwitch.isChecked(), true);
   assert.deepEqual(await page.evaluate(() => window.__lastStatus.models.map(model => model.id)), catalogOrder, 'display sorting never mutates the Host catalog');
   await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('');
@@ -493,18 +531,18 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('no-such-model');
   assert.equal(await groupCards.evaluateAll(cards => cards[0].getBoundingClientRect().height < cards[1].getBoundingClientRect().height), true, 'shorter group does not stretch to its neighbour');
   await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('');
-  await page.getByLabel('搜索付费模型', { exact: true }).fill('qwen');
+  await page.getByLabel('搜索非附赠 / 权益未核实', { exact: true }).fill('qwen');
   await page.locator('.odc-model-item', { hasText: 'qwen3.7-max' }).waitFor();
-  await page.getByLabel('搜索付费模型', { exact: true }).fill('');
+  await page.getByLabel('搜索非附赠 / 权益未核实', { exact: true }).fill('');
   for (const group of await page.locator('.odc-model-groups > section').all()) {
     const expand = group.getByRole('button', { name: /^显示全部/u });
     if (await expand.count()) await expand.click();
   }
   assert.equal(await page.locator('.odc-model-item').count(), fixtureModels.length);
-  const luna = page.locator('.odc-model-item', { hasText: 'gpt-6-luna' });
+  const luna = modelRow('gpt-6-luna');
   await luna.getByText(/官网参考.*输入 \$0\.25/u).waitFor();
   assert.equal(await page.evaluate(() => window.__refreshPricesCalls), 1, 'model tab loads prices once');
-  const solPrice = page.locator('.odc-model-item', { hasText: 'gpt-6.1-sol' }).first();
+  const solPrice = modelRow('gpt-6.1-sol');
   await solPrice.getByText(/共 2 档/u).waitFor();
   await solPrice.locator('summary').click();
   await solPrice.getByText('超过 27.2 万 Token · 每百万 Token', { exact: true }).waitFor();
@@ -521,13 +559,15 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await lunaSwitch.uncheck();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.enabled === false);
   await luna.getByText('已禁用', { exact: true }).waitFor();
-  assert.equal((await planIds()).at(-1), 'gpt-6-luna', 'a saved disabled model moves after enabled models immediately');
+  assert.equal((await paidGroup.locator('.odc-model-item code').allTextContents()).at(-1), 'gpt-6-luna', 'a saved disabled model moves after enabled models immediately');
   // Force a Host status refresh while disabled, so Status.models still claims `enabled: false`.
   await page.getByRole('tab', { name: '概览', exact: true }).click();
   await page.getByRole('tab', { name: '模型', exact: true }).click();
   assert.equal(await page.evaluate(() => window.__lastStatus.models.find(model => model.id === 'gpt-6-luna').enabled), false);
-  await planGroup.getByRole('button', { name: '显示全部 13 个模型', exact: true }).click();
+  await planGroup.getByRole('button', { name: '显示全部 11 个模型', exact: true }).click();
   // The catalog's maximum output is not the adapter's smaller automatic reserve.
+  const paidExpand = paidGroup.getByRole('button', { name: /^显示全部/u });
+  if (await paidExpand.count()) await paidExpand.click();
   const kimi = planGroup.locator('.odc-model-item').filter({ hasText: 'kimi-k2.7-code' });
   await kimi.locator('summary').click();
   const kimiTemperature = kimi.getByLabel('温度', { exact: true });
@@ -550,7 +590,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.waitForFunction(() => !('gpt-6-luna' in (window.__config.modelSettings ?? {})));
   assert.equal(await lunaSwitch.isChecked(), true);
   assert.equal(await luna.getByText('已禁用', { exact: true }).count(), 0);
-  assert.equal((await planIds())[0], 'gpt-6-luna', 'reset restores the model to its original enabled position');
+  assert.equal((await paidGroup.locator('.odc-model-item code').allTextContents()).indexOf('gpt-6-luna'), fixtureModels.filter(model => model.group === 'paid').findIndex(model => model.id === 'gpt-6-luna'), 'reset restores the model to its original enabled position in the current entitlement group');
   // Image input stays outside the collapsed parameter editor and saves as a whole-map override.
   const imageInput = luna.getByRole('checkbox', { name: 'GPT-6 Luna 图片输入', exact: true });
   const restoreImage = luna.getByRole('button', { name: 'GPT-6 Luna 恢复图片输入自动', exact: true });
@@ -581,6 +621,25 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await luna.locator('details').evaluate(element => element.open), true);
   const temperature = luna.getByLabel('温度', { exact: true });
   const topP = luna.getByLabel('Top P', { exact: true });
+  const modelProtocol = luna.getByLabel('此模型 API 协议', { exact: true });
+  assert.equal(await modelProtocol.inputValue(), 'auto', 'an absent override follows global protocol selection');
+  await luna.getByText(/当前 chat-completions · 型号首选 responses/u).waitFor();
+  await page.evaluate(() => { window.__holdSaves = true; window.__rejectSave = true; });
+  await modelProtocol.selectOption('responses');
+  assert.equal(await modelProtocol.inputValue(), 'responses', 'pending protocol override renders immediately');
+  assert.equal(await modelProtocol.isDisabled(), true);
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.apiProtocol), undefined);
+  await page.evaluate(() => { window.__holdSaves = false; window.__releaseSave(); });
+  await page.waitForFunction(() => ![...document.querySelectorAll('.odc-model-item')].find(row => row.querySelector('code')?.textContent === 'gpt-6-luna')?.querySelector('select[id$="-protocol"]')?.disabled);
+  assert.equal(await modelProtocol.inputValue(), 'auto', 'rejection restores inherited global protocol');
+  await modelProtocol.selectOption('responses');
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.apiProtocol === 'responses');
+  await luna.getByText(/当前 responses · 型号首选 responses/u).waitFor();
+  assert.equal(await page.evaluate(() => window.__config.apiProtocol), 'chat-completions', 'model override never changes the global setting');
+  assert.equal(await page.evaluate(() => window.__config.modelSettings?.['gpt-6-luna']?.imageInput), true, 'protocol save preserves sibling model fields');
+  await modelProtocol.selectOption('auto');
+  await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.apiProtocol === undefined);
+  await luna.getByText(/当前 chat-completions · 型号首选 responses/u).waitFor();
   const maxTokens = luna.getByLabel('最大输出（tokens）', { exact: true });
   const effortEditor = luna.locator('.odc-effort');
   const editEffort = luna.getByRole('button', { name: '编辑默认思考深度', exact: true });
@@ -758,7 +817,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   }
   // A legacy default on an unknown model can be cleared without inventing support.
   await page.evaluate(() => window.__setModelEffort('muse-wonder', 'high'));
-  const unknownModel = page.locator('.odc-model-item', { hasText: 'muse-wonder' });
+  const unknownModel = modelRow('muse-wonder');
   await unknownModel.locator('summary').click();
   const unknownEffortEditor = unknownModel.locator('.odc-effort');
   assert.equal(await unknownEffortEditor.locator('.odc-effort-value').innerText(), 'high（当前不可用）');
@@ -818,7 +877,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   const statusBefore = await page.evaluate(() => window.__statusCalls);
   await page.evaluate(() => {
     window.__setDirectory('session-a', {
-      current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' },
+      current: { provider: 'opendesign-corouter-paid', model: 'gpt-6-luna' },
       pending: null, status: 'ready', groups: [{ id: 'co', models: [] }], routable: true,
     });
     const second = document.createElement('div');
@@ -839,7 +898,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'openai', model: 'gpt-4o' } }));
   await page.waitForFunction(() => !document.querySelector('#conversation-input .odc-quick'));
   assert.equal(await quickA.count(), 0, 'a foreign provider renders no CoRouter quick switch');
-  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' } }));
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'gpt-6-luna' } }));
   await quickButton.waitFor();
   // The popover is a dialog with the three tiers and states that the change is global.
   await quickButton.click();
@@ -860,7 +919,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'extended');
   await quickPanel.getByText('上下文档位已保存。', { exact: true }).waitFor();
   assert.match(await quickButton.innerText(), /500K/u, 'the button shows the selected tier');
-  const lunaRow = page.locator('.odc-model-item').filter({ hasText: 'gpt-6-luna' });
+  const lunaRow = modelRow('gpt-6-luna');
   if (await lunaRow.locator('details').evaluate(element => !element.open)) await lunaRow.locator('summary').click();
   assert.equal(await lunaRow.locator('.odc-context-option[data-preset=extended] input').isChecked(), true, 'the settings page shows the same tier');
   // A pending tier is visible immediately and locks the quick switch until the Host answers.
@@ -890,7 +949,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   assert.equal(await quickPanel.getByRole('radio', { name: '默认' }).isEnabled(), true, 'the default tier stays selectable');
   // An explicit output that does not fit keeps the saved tier and asks for the settings page.
   await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { maxTokens: 384000 }));
-  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' } }));
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'gpt-6-luna' } }));
   await quickButton.click();
   await quickPanel.waitFor();
   await waitQuickReady();
@@ -926,13 +985,13 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.waitForFunction(() => document.querySelector('#conversation-input-b .odc-quick button')?.textContent?.includes('872K'));
   assert.match(await quickButtonB.innerText(), /872K/u, 'the second session shows its own window');
   const labelB = await quickButtonB.innerText();
-  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'claude-haiku-5.5' } }));
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'claude-haiku-5.5' } }));
   await page.waitForFunction(() => document.querySelector('#conversation-input .odc-quick button')?.textContent?.includes('272K'));
   assert.equal(await quickButtonB.innerText(), labelB, 'the other session is unaffected by the first one');
   // Switching the model closes the popover and never writes a late result to the new model.
   await quickButton.click();
   await quickPanel.waitFor();
-  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' } }));
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'gpt-6-luna' } }));
   await quickPanel.waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => window.__config.modelSettings?.['claude-haiku-5.5']?.contextTier), undefined, 'a late result never reaches the new model');
   // A write that is in flight when the model changes lands on the model it started for.
@@ -943,7 +1002,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.evaluate(() => { window.__holdSaves = true; });
   await quickPanel.getByRole('radio', { name: '最大' }).check();
   await page.waitForFunction(() => window.__heldSaves > 0);
-  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'claude-haiku-5.5' } }));
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'claude-haiku-5.5' } }));
   await page.evaluate(() => { window.__holdSaves = false; window.__releaseHeldSave(); });
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.contextTier === 'maximum');
   assert.equal(await page.evaluate(() => window.__config.modelSettings?.['claude-haiku-5.5']?.contextTier), undefined, 'the in-flight write stays with the model it started for');
@@ -988,7 +1047,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.evaluate(() => window.__clearModelSettings('claude-haiku-5.5'));
   await page.evaluate(() => window.__clearModelSettings('claude-opus-5.5'));
   await page.evaluate(() => window.__setModelSettings('gpt-6-luna', { maxTokens: 4096 }));
-  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' } }));
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'gpt-6-luna' } }));
   await quickButton.click();
   await quickPanel.waitFor();
   await waitQuickPositioned();
@@ -1143,13 +1202,14 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.waitForFunction(() => window.__config.emptyTurnGuard === true);
   const protocol = page.getByLabel('API 协议', { exact: true });
   assert.equal(await protocol.inputValue(), 'chat-completions');
-  assert.equal(await page.getByRole('option').count(), 3);
+  assert.equal(await protocol.locator('option').count(), 4);
   assert.equal(await page.locator('input[type=url]').count(), 0);
   assert.equal(await page.getByRole('button', { name: '保存 Base URL', exact: true }).count(), 0);
   await page.getByText('https://amr-link.open-design.ai/v1/chat/completions', { exact: true }).waitFor();
   // An old sampling override is valid in the existing gateway mode and must remain clearable after switching protocols.
   await page.getByRole('tab', { name: '模型', exact: true }).click();
-  const haiku = page.locator('.odc-model-item').filter({ hasText: 'claude-haiku-5.5' });
+  const haiku = modelRow('claude-haiku-5.5');
+  await page.getByLabel('搜索非附赠 / 权益未核实', { exact: true }).fill('claude-haiku-5.5');
   await haiku.locator('summary').click();
   await haiku.getByLabel('温度', { exact: true }).fill('0.4');
   await haiku.getByLabel('温度', { exact: true }).blur();
@@ -1162,6 +1222,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.waitForFunction(() => window.__config.apiProtocol === 'messages');
   await page.getByText('https://amr-link.open-design.ai/v1/messages', { exact: true }).waitFor();
   await page.getByRole('tab', { name: '模型', exact: true }).click();
+  await page.getByLabel('搜索非附赠 / 权益未核实', { exact: true }).fill('claude-haiku-5.5');
   await haiku.locator('summary').click();
   const claudeTemperature = haiku.getByLabel('温度', { exact: true });
   assert.equal(await claudeTemperature.getAttribute('aria-invalid'), 'true');
@@ -1260,7 +1321,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     }
     await page.getByRole('tab', { name: '模型', exact: true }).click();
-    const modelDetails = page.locator('.odc-model-details').first();
+    const modelDetails = modelRow('deepseek-v4.1-flash').locator('.odc-model-details');
     await modelDetails.locator('summary').click();
     await modelDetails.getByRole('button', { name: '编辑默认思考深度', exact: true }).click();
     assert.equal(await modelDetails.getByRole('combobox', { name: '默认思考深度' }).isEnabled(), true);
@@ -1319,7 +1380,7 @@ const fixtureModels = MODELS.map(({ id, name, group, inputModalities, contextWin
   await page.keyboard.press('Tab');
   await forcedImageInput.focus();
   assert.equal(await forcedImageInput.evaluate(element => element.matches(':focus-visible') && getComputedStyle(element).outlineStyle === 'solid' && parseFloat(getComputedStyle(element).outlineWidth) >= 2), true, 'forced colors retain a visible keyboard focus indicator');
-  const forcedEffortDetails = page.locator('.odc-model-details').first();
+  const forcedEffortDetails = modelRow('deepseek-v4.1-flash').locator('.odc-model-details');
   await forcedEffortDetails.locator('summary').click();
   await forcedEffortDetails.getByRole('button', { name: '编辑默认思考深度', exact: true }).click();
   reports.push(await auditTheme(page, 'forced-colors-effort-editor'));

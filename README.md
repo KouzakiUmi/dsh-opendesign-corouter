@@ -52,18 +52,18 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.15.tg
 
 | Provider | 模型数 | 用途 |
 | --- | ---: | --- |
-| `opendesign-corouter-plan` | 13 | Core / Design Plan 附赠通道，含预检确认覆盖的 MiniMax M3.1 Flash |
-| `opendesign-corouter-paid` | 26 | Plan 套餐模型及其他钱包付费模型 |
+| `opendesign-corouter-plan` | 按账号核实 | 当前工作区订阅确实覆盖的模型 |
+| `opendesign-corouter-paid` | 按账号核实 | 不含 Coding Plan 或权益尚未核实的模型；每行明确标注 |
 
-上表为内置目录。模型页可通过当前配置网关的 OpenAI 兼容 `/models` 接口刷新目录，逐个启用或停用模型、控制图片输入，并配置温度、top-p、默认输出上限、上下文窗口档位及思考深度。高级参数默认折叠，图片输入可手动覆盖或恢复自动。未知模态保持未知并尝试发送图片；实际支持情况由网关决定。[图片能力证据](docs/model-capabilities.md)。
+内置参考更新为 46 个对话 ID；运行时从当前网关读取目录，并用同一授权身份的控制令牌逐模型查询工作区预检。首次使用及十分钟后按需刷新，也可手动刷新。普通 API Key 无法与账号令牌对匹配时，不借用桌面账号权益、不假定附赠。逐个启用或停用模型、控制图片输入，并配置温度、top-p、输出、上下文、思考及协议；未知能力保留未知。[模型来源与权益](docs/client-evidence.md) · [图片能力](docs/model-capabilities.md)。
 
 上下文窗口按 **默认 272K / 扩展 500K / 最大 872K** 三个互斥档位选择，均为输入与输出合计的工作总窗口；有效窗口取档位与该模型已知参考中的较小值，超过参考的档位不可选。输出仍在这段窗口内预留，自动预留最多为总窗口的 1/4 且不超过模型输出上限。[窗口与档位口径](docs/model-context.md)
 
 聊天窗口的模型选择框旁有上下文快捷按钮，当前会话使用本插件模型时出现，显示该模型生效的总窗口，点开可直接切三档。它与设置页写的是同一份全局模型默认，同一模型的其他会话会同步生效。
 
-推理协议可选 **OpenAI Chat Completions、OpenAI Responses、Anthropic Messages**。模型发现始终使用当前网关的 OpenAI 兼容 `/models` 接口，不随推理协议切换。
+推理协议默认 **自动按模型**：GPT / DeepSeek 选 Responses，Claude 选 Messages，其余按精确型号证据选择，原生路由未确认时采用 Responses。全局及逐模型都可显式覆盖，已保存的旧协议继续生效。网关内部透传尚未验证，不能把本地协议选择当作无转译保证。模型发现始终读取 OpenAI 兼容 `/models`。
 
-思考档位按精确型号的厂商文档维护，并按当前协议筛选。34 款提供离散档位，4 款为固定思考或开关/预算控制，Muse Wonder 的精确别名尚待确认。34 款都带目录默认档位：未选择档位时插件按该值显式发送，模型选择器因此不提供“Default”项。默认取厂商声明；GPT-6 Astra（low）与 Muse Spark 1.3（high）的厂商未声明默认，取已发布实现记录的路由默认。旧配置中的无效默认档位可在参数设置中改为模型默认。[逐模型来源与网关验证状态](docs/reasoning-evidence.md)
+思考档位按精确型号的厂商文档维护，并按实际协议筛选。所有已核实的可调型号均带有出处的默认值，未选择时显式发送；未知型号不继承邻近型号能力。旧配置中的无效默认值保持可见、可清除。[逐模型来源与网关验证状态](docs/reasoning-evidence.md)
 
 > **分组不等于计费隔离。** 赠送额度耗尽后是否转扣套餐余额或钱包，由服务端和账号权益决定。选择“套餐赠送”不能保证绝不消耗钱包余额。
 
@@ -105,7 +105,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.15.tg
 | Core 声明范围 | `>=0.2.1-rc.3 <0.3.0-0`，范围内其他版本不代表已实测 |
 | Node.js | `>=24.9.0` |
 | 独立登录 | 自动打开需本机 Chrome；也可复制链接到常用浏览器确认 |
-| 默认推理接口 | `https://amr-link.open-design.ai/v1/chat/completions` |
+| 默认推理接口 | 自动按模型选择 `/v1/responses`、`/v1/messages` 或 `/v1/chat/completions` |
 
 CI 在 Windows 与 Ubuntu 执行构建、类型检查及隔离测试；Ubuntu 另执行四页签浏览器和亮暗主题检查。[开发与验证范围](docs/development.md)
 

@@ -75,6 +75,8 @@ export function desktopConfigPath(env: NodeJS.ProcessEnv = process.env, home = o
 export interface DesktopCredential {
   profile: DesktopProfile;
   controlKey: string;
+  /** Used only for exact runtime/control identity matching; never sent to the Client. */
+  runtimeKey?: string;
   /** Present only when the profile carries an official origin. */
   apiUrl?: string;
   plan?: string;
@@ -123,16 +125,16 @@ export function parseDesktopConfigText(text: string, profile: DesktopProfile = D
   // Only `prod` is supported. Sending another profile's token to the prod endpoint (or the
   // reverse) would mix accounts, so the mismatch stops here.
   if (profile !== DEFAULT_PROFILE) return { state: 'unsupported-profile', profile };
-  return {
-    state: 'credential',
-    credential: {
+  const credential: DesktopCredential = {
       profile,
       controlKey,
       ...(apiUrl === undefined ? {} : { apiUrl }),
       ...(plan ? { plan } : {}),
       signedIn: runtimeKey.length > 0,
-    },
   };
+  // The paired runtime key is Host-private even when callers serialize diagnostics.
+  if (runtimeKey) Object.defineProperty(credential, 'runtimeKey', { value: runtimeKey, enumerable: false });
+  return { state: 'credential', credential };
 }
 
 export interface DesktopDeps {

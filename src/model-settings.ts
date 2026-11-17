@@ -14,6 +14,7 @@
 
 import type { CatalogModel } from './catalog.js';
 import { effectiveContextWindow, type ContextWindowPresetId } from './context-budget.js';
+import type { ProtocolSelection } from './protocol-options.js';
 
 /** One model's overrides; absent context uses the default working-window preset. */
 export interface ModelSettings {
@@ -33,6 +34,8 @@ export interface ModelSettings {
   contextTier?: ContextWindowPresetId;
   /** 思考深度；只允许目录同一套档位。 */
   reasoningEffort?: string;
+  /** Absent/auto follows the global selection and exact model's preferred native format. */
+  apiProtocol?: ProtocolSelection;
 }
 
 /** Model id → settings. Keys are model ids, never provider-scoped. */
@@ -51,7 +54,7 @@ export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('模型设置必须是对象');
   const keys = Object.keys(value);
   if (keys.length > 512) throw new Error('模型设置最多允许 512 个模型');
-  const fields = new Set(['enabled', 'imageInput', 'temperature', 'topP', 'maxTokens', 'contextWindow', 'contextTier', 'reasoningEffort']);
+  const fields = new Set(['enabled', 'imageInput', 'temperature', 'topP', 'maxTokens', 'contextWindow', 'contextTier', 'reasoningEffort', 'apiProtocol']);
   const efforts: readonly unknown[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
   const out: ModelSettingsMap = {};
   for (const id of keys) {
@@ -64,6 +67,10 @@ export function parseModelSettingsMap(value: unknown): ModelSettingsMap {
       if (!fields.has(field)) throw new Error('模型设置含有不支持的字段');
     }
     const parsed: ModelSettings = {};
+    if (settings.apiProtocol !== undefined) {
+      if (!['auto', 'chat-completions', 'responses', 'messages'].includes(String(settings.apiProtocol))) throw new Error('模型设置的 apiProtocol 不在允许的取值内');
+      parsed.apiProtocol = settings.apiProtocol as ProtocolSelection;
+    }
     if (settings.enabled !== undefined) {
       if (typeof settings.enabled !== 'boolean') throw new Error('模型设置的 enabled 必须是布尔值');
       parsed.enabled = settings.enabled;

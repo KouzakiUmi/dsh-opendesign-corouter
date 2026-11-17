@@ -48,8 +48,8 @@ test('real Cordis scope loads both Providers and Host RPC, then fully withdraws 
   try {
     const fiber = await ctx.plugin(isolatedPlugin, { useDesktopCredential: false });
     assert.deepEqual(ctx.llm.listProviders().map(row => row.id), [PLAN_PROVIDER, PAID_PROVIDER]);
-    assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 13);
-    assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 26);
+    assert.equal((await ctx.llm.listModels(PLAN_PROVIDER)).length, 0, 'no scoped entitlement evidence means no claimed included models');
+    assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 46, 'Host unverified rows do not inherit public seed grouping');
     // Both routes authenticate themselves, so the directory must describe that path rather than
     // a per-route environment field, and must address its settings through this namespace alone.
     for (const entry of ctx.llm.listConfigurableProviders()) {

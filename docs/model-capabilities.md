@@ -4,6 +4,8 @@
 
 ## 厂商文档
 
+2026-11-17 补充：Claude Fable 5.2 的[厂商专页](https://platform.claude.com/docs/en/models/fable-5-2/overview.md)、Hy4 / Hy4 Flash 的[腾讯逐型号表](https://www.tencentcloud.com/document/product/1300/78934)及 [Qwen4 Max](https://help.aliyun.com/zh/model-studio/qwen4-max)均明确支持图片输入。DeepSeek V4.1 Flash Eco、Gemini 4 Carbon、Muse Ember 1.0 的精确资料未取得，保持未知；不能从同家族推断。
+
 | CoRouter 模型 ID | 图片输入依据 |
 | --- | --- |
 | `gpt-6.1-sol`、`gpt-6.1-terra`、`gpt-6-astra`、`gpt-6-luna`、`gpt-6-sol`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra` | OpenAI 型号页逐项列出 “Input modalities: text, image”： [6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol.md)、[6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra.md)、[6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra.md)、[6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna.md)、[6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol.md)、[5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna.md)、[5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol.md)、[5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra.md)。 |

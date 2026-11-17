@@ -1,5 +1,6 @@
 // Tests for src/catalog.ts.
-// 目录事实来自公开页面（https://corouter.open-design.ai/zh/ 套餐卡 + /zh/models/<slug>/ data-model JSON，2026-10-26）。
+// 目录事实：2026-11-17 scoped service catalog；公开套餐卡仅作 seed，不当账号权益。
+// 新容量证据：Claude Fable 5.2 型号页、腾讯 TokenHub 78934/80637、百炼 qwen4-max。
 //
 // 两类能力来源分开断言：
 // - 容量/输出：plan 12 款沿用 Go dsh-opendesign-go 0.1.9 的部署参考；
@@ -12,13 +13,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MODELS, findModel, modelsFor } from '../src/catalog.js';
+import { effectiveProtocol, type ApiProtocol } from '../src/protocol-options.js';
 
-// 官网 Core 12 款，加当前工作区 billing preflight 确认覆盖的 MiniMax。
+// Public seed only: actual Host grouping requires fresh scoped entitlement evidence.
 const PLAN_IDS = [
-  'claude-haiku-5.5',
-  'gpt-6-luna',
   'deepseek-v4.1-flash',
-  'glm-5.3-flashx',
+  'deepseek-v4.1-flash-eco',
   'mimo-v2.6-flash',
   'mimo-v2.6-pro',
   'hy4-preview',
@@ -30,8 +30,10 @@ const PLAN_IDS = [
   'minimax-m3.1-flash',
 ] as const;
 
-// 26 项归付费通道；不承诺每个账号的具体套餐权限。
+// Seed paid/other rows; this list is not an account entitlement assertion.
 const PAID_IDS = [
+  'claude-haiku-5.5', 'gpt-6-luna', 'glm-5.3-flashx',
+  'claude-fable-5.2', 'gemini-4-carbon', 'hy4', 'hy4-flash', 'muse-ember-1.0', 'qwen4-max',
   'qwen3.7-max',
   'claude-fable-5',
   'claude-fable-5.1',
@@ -84,10 +86,14 @@ const GO_CAPACITY = new Map<string, {
 ]);
 
 /**
- * 全 39 型号的思考档位矩阵（厂商官方文档逐型号取值）。
+ * 全 46 型号的思考档位矩阵（厂商官方文档逐型号取值）。
  * `[]` = 该型号没有可调的思考档位；`null` = 厂商档位未确认（目录中保持缺省）。
  */
 const EFFORT_MATRIX = new Map<string, readonly string[] | null>([
+  ['claude-fable-5.2', ['low', 'medium', 'high', 'xhigh', 'max']],
+  ['deepseek-v4.1-flash-eco', null], ['gemini-4-carbon', null], ['muse-ember-1.0', null],
+  // Hy4 no_think is not an established mapping to the plugin's effort enum.
+  ['hy4', ['high']], ['hy4-flash', ['high']], ['qwen4-max', ['low', 'high', 'xhigh']],
   // OpenAI：`reasoning.effort` 支持集合；GPT-6.1 Sol 与 GPT-6 Astra 官方明文不支持 `none`。
   ['gpt-6.1-sol', ['low', 'medium', 'high', 'xhigh', 'max']],
   ['gpt-6.1-terra', ['none', 'low', 'medium', 'high', 'xhigh', 'max']],
@@ -140,6 +146,7 @@ const KNOWN_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhig
 const OPENAI_NONE_MODELS = new Set(['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-terra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 /** Anthropic 型号：effort 只有 low/medium/high/xhigh/max。 */
 const ANTHROPIC_MODELS = [
+  'claude-fable-5.2',
   'claude-fable-5.1',
   'claude-fable-5',
   'claude-opus-5.5',
@@ -150,10 +157,10 @@ const ANTHROPIC_MODELS = [
   'claude-haiku-5.5',
 ] as const;
 
-test('catalog 收录 39 个目录项：Core 附赠通道 13 + 付费通道 26', () => {
-  assert.equal(MODELS.length, 39);
-  assert.equal(modelsFor('plan').length, 13);
-  assert.equal(modelsFor('paid').length, 26);
+test('catalog seed 收录 46 个目录项：公开分组 11 + 35，不等于账号权益', () => {
+  assert.equal(MODELS.length, 46);
+  assert.equal(modelsFor('plan').length, 11);
+  assert.equal(modelsFor('paid').length, 35);
   assert.deepEqual([...modelsFor('plan').map(model => model.id)].sort(), [...PLAN_IDS].sort());
   assert.deepEqual([...modelsFor('paid').map(model => model.id)].sort(), [...PAID_IDS].sort());
 });
@@ -175,24 +182,27 @@ test('媒体专用模型不进对话目录', () => {
   for (const model of MODELS) {
     assert.doesNotMatch(model.id, /^(gpt-image-|nano-banana-|seedream-|imagen-|veo-|doubao-seedance-|sora-)/u);
   }
-  for (const id of ['gpt-image-2', 'nano-banana-2', 'seedream-5.0']) {
+  for (const id of ['gpt-image-2', 'gpt-image-2.6-flare', 'gpt-image-2.6-sunburst', 'wan-2.7', 'nano-banana-2', 'seedream-5.0']) {
     assert.equal(findModel(id), undefined, `${id} 不应出现在目录中`);
   }
 });
 
-test('plan 12 款的容量/输出保留 Go 参考，模态采用当前证据', () => {
-  assert.equal(GO_CAPACITY.size, PLAN_IDS.length - 1);
-  for (const model of modelsFor('plan').filter(model => model.id !== 'minimax-m3.1-flash')) {
-    const expected = GO_CAPACITY.get(model.id);
-    assert.ok(expected, `${model.id} 缺少 Go capacity 期望值`);
+test('原 12 款容量/输出参考不因套餐分组变化而丢失', () => {
+  assert.equal(GO_CAPACITY.size, 12);
+  for (const [id, expected] of GO_CAPACITY) {
+    const model = findModel(id)!;
+    assert.ok(model, `${id} must remain in catalog`);
     assert.equal(model.contextWindow, expected.contextWindow, `${model.id} contextWindow`);
     assert.equal(model.maxOutputTokens, expected.maxOutputTokens, `${model.id} maxOutputTokens`);
     assert.deepEqual(model.inputModalities, expected.inputModalities, `${model.id} inputModalities`);
   }
 });
 
-test('39 个模型的上下文参考值按来源逐项记录，不改变既有输出默认值', () => {
-  const windows = new Map<string, number>([
+test('46 个模型容量按完整证据矩阵固定，未知不借用相邻型号', () => {
+  const windows = new Map<string, number | undefined>([
+    ['claude-fable-5.2', 1_000_000], ['deepseek-v4.1-flash-eco', undefined],
+    ['gemini-4-carbon', undefined], ['muse-ember-1.0', undefined],
+    ['hy4', 1_000_000], ['hy4-flash', 1_000_000], ['qwen4-max', 1_000_000],
     ['gpt-6.1-sol', 1_050_000], ['gpt-6.1-terra', 1_050_000], ['gpt-6-astra', 1_050_000],
     ['gpt-6-luna', 1_050_000], ['gpt-6-sol', 1_050_000], ['gpt-5.6-luna', 1_050_000],
     ['gpt-5.6-sol', 1_050_000], ['gpt-5.6-terra', 1_050_000],
@@ -208,16 +218,20 @@ test('39 个模型的上下文参考值按来源逐项记录，不改变既有�
     ['qwen3.7-max', 1_000_000], ['minimax-m3.1-flash', 1_000_000],
     ['muse-spark-1.3', 1_048_576], ['muse-wonder', 1_048_576],
   ]);
-  assert.equal(windows.size, 39);
+  assert.equal(windows.size, 46);
   assert.deepEqual([...windows.keys()].sort(), MODELS.map(row => row.id).sort());
   for (const row of MODELS) assert.equal(row.contextWindow, windows.get(row.id), row.id);
-  for (const row of modelsFor('paid').filter(model => model.id !== 'gpt-6.1-terra')) assert.equal(row.maxOutputTokens, undefined, row.id);
-  assert.equal(findModel('gpt-6.1-terra')?.maxOutputTokens, 128_000);
-  assert.equal(findModel('minimax-m3.1-flash')?.maxOutputTokens, undefined);
+  const outputCaps = new Map([...GO_CAPACITY].map(([id, value]) => [id, value.maxOutputTokens] as const));
+  outputCaps.set('gpt-6.1-terra', 128_000);
+  outputCaps.set('claude-fable-5.2', 128_000);
+  outputCaps.set('hy4', 64_000); outputCaps.set('hy4-flash', 64_000);
+  outputCaps.set('qwen4-max', 131_072); // Conservative cap shared by both documented modes.
+  for (const row of MODELS) assert.equal(row.maxOutputTokens, outputCaps.get(row.id), `${row.id} output cap`);
 });
 
 test('图片输入能力采用逐型号证据，未确认模型保持未知', () => {
   const image = [
+    'claude-fable-5.2', 'hy4', 'hy4-flash', 'qwen4-max',
     'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra',
     'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-opus-4.8', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-haiku-5.5',
     'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flashx', 'glm-5.3-flash',
@@ -225,15 +239,15 @@ test('图片输入能力采用逐型号证据，未确认模型保持未知', ()
     'grok-4.7', 'grok-4.6', 'grok-4.5', 'mimo-v2.6-pro', 'mimo-v2.6-flash', 'minimax-m3.1-flash', 'muse-spark-1.3',
   ];
   const text = ['glm-5.2', 'qwen3.7-max', 'hy4-preview'];
-  const unknown = ['deepseek-v4-pro', 'muse-wonder'];
+  const unknown = ['deepseek-v4-pro', 'muse-wonder', 'deepseek-v4.1-flash-eco', 'gemini-4-carbon', 'muse-ember-1.0'];
   assert.deepEqual([...image, ...text, ...unknown].sort(), MODELS.map(model => model.id).sort());
   for (const id of image) assert.deepEqual(findModel(id)?.inputModalities, ['text', 'image'], id);
   for (const id of text) assert.deepEqual(findModel(id)?.inputModalities, ['text'], id);
   for (const id of unknown) assert.equal(findModel(id)?.inputModalities, undefined, id);
 });
 
-test('全 39 型号的思考档位矩阵按厂商官方文档逐型号固定', () => {
-  assert.equal(EFFORT_MATRIX.size, 39);
+test('全 46 型号的思考档位矩阵按厂商官方文档逐型号固定', () => {
+  assert.equal(EFFORT_MATRIX.size, 46);
   assert.deepEqual([...EFFORT_MATRIX.keys()].sort(), MODELS.map(model => model.id).sort());
   for (const model of MODELS) {
     const expected = EFFORT_MATRIX.get(model.id);
@@ -254,6 +268,7 @@ test('全 39 型号的思考档位矩阵按厂商官方文档逐型号固定', (
  * 未列出的型号表示没有任何有出处的默认：目录必须保持缺省，不猜一个档位。
  */
 const DEFAULT_EFFORT_MATRIX = new Map<string, string>([
+  ['claude-fable-5.2', 'high'], ['hy4', 'high'], ['hy4-flash', 'high'], ['qwen4-max', 'high'],
   ['gpt-6.1-sol', 'medium'], ['gpt-6.1-terra', 'medium'], ['gpt-6-luna', 'medium'],
   ['gpt-6-sol', 'medium'], ['gpt-5.6-luna', 'medium'], ['gpt-5.6-sol', 'medium'], ['gpt-5.6-terra', 'medium'],
   ['gpt-6-astra', 'low'],
@@ -331,6 +346,30 @@ test('findModel 精确匹配，已收录 ID 命中对应分组', () => {
   assert.equal(findModel('hy4-preview')?.group, 'plan');
   assert.equal(findModel('DeepSeek-V4.1-Flash'), undefined);
   assert.equal(findModel(''), undefined);
+});
+
+test('首选协议采用精确 ID 证据，未确认路由只按产品策略默认 Responses', () => {
+  const preferred = new Map<string, ApiProtocol>([
+    ...['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra',
+      'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'].map(id => [id, 'responses'] as const),
+    ...['claude-fable-5.2', 'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-opus-4.8',
+      'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-haiku-5.5'].map(id => [id, 'messages'] as const),
+    ...['kimi-k3.1-pro', 'kimi-k3', 'kimi-k2.7-code', 'glm-5.3-flash', 'glm-5.3-flashx', 'glm-5.2',
+      'mimo-v2.6-pro', 'mimo-v2.6-flash', 'qwen3.7-max', 'hy4-preview'].map(id => [id, 'chat-completions'] as const),
+  ]);
+  for (const model of MODELS) {
+    assert.equal(model.nativeProtocol, preferred.get(model.id), `${model.id} native evidence`);
+    assert.equal(effectiveProtocol(model), preferred.get(model.id) ?? 'responses', `${model.id} auto selection`);
+  }
+  for (const id of ['deepseek-v4.1-flash-eco', 'gemini-4-carbon', 'muse-ember-1.0']) {
+    const row = findModel(id)!;
+    assert.equal(row.contextWindow, undefined, `${id} context unknown`);
+    assert.equal(row.maxOutputTokens, undefined, `${id} output unknown`);
+    assert.equal(row.inputModalities, undefined, `${id} input unknown`);
+    assert.equal(row.reasoningEfforts, undefined, `${id} effort unknown`);
+    assert.equal(row.defaultEffort, undefined, `${id} default unknown`);
+    assert.equal(row.nativeProtocol, undefined, `${id} native route unknown`);
+  }
 });
 
 test('modelsFor 返回顺序与 MODELS 中的相对顺序一致，且覆盖全部模型', () => {

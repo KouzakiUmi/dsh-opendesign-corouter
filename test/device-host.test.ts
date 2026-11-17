@@ -61,6 +61,7 @@ async function fixture(options: { fetcher?: typeof fetch; setup?: (store: Store)
   const current = config(); options.configure?.(current);
   let desktopReads = 0, quotaReads = 0, modelChanges = 0;
   const deps: HostDependencies = {
+    modelAutoRefresh: false, modelAccount: async () => undefined,
     resolveSession,
     readQuota: async (session, signal) => {
       quotaReads++;

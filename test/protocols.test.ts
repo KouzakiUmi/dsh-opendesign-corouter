@@ -16,7 +16,7 @@ import { AttachmentId, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachme
 import { MESSAGES_DEFAULT_MAX_TOKENS, messagesURL, protocolFor } from '../src/protocols/index.js';
 import type { ProtocolContext } from '../src/protocols/types.js';
 import type { CatalogModel } from '../src/catalog.js';
-import type { ApiProtocol } from '../src/protocol-options.js';
+import { API_PROTOCOL_IDS, API_PROTOCOL_OPTIONS, API_PROTOCOL_SELECTION_IDS, effectiveProtocol, type ApiProtocol } from '../src/protocol-options.js';
 
 const model: CatalogModel = { id: 'fixture-model', name: 'Fixture', group: 'paid' };
 const image: ImageAttachmentRef = { attachmentId: AttachmentId('a'.repeat(64)), mediaType: 'image/png', bytes: 10, width: 4, height: 4, name: 'fixture.png' };
@@ -85,6 +85,35 @@ test('protocolFor 分派三种协议并拒绝未知 id', () => {
     assert.equal(protocolFor(id).build(context({}, { baseURL: 'https://amr-link.open-design.ai' })).url, `https://amr-link.open-design.ai/v1${suffix}`);
     assert.equal(protocolFor(id).build(context({}, { baseURL: 'https://example.invalid/proxy/v2' })).url, `https://example.invalid/proxy/v2${suffix}`);
   }
+});
+
+test('auto resolves model preferences without adding a fourth wire protocol', () => {
+  assert.deepEqual(API_PROTOCOL_SELECTION_IDS, ['auto', ...API_PROTOCOL_IDS]);
+  assert.deepEqual(API_PROTOCOL_OPTIONS.map(option => option.id), [...API_PROTOCOL_SELECTION_IDS]);
+  assert.equal(effectiveProtocol({}), 'responses');
+  assert.equal(effectiveProtocol({ nativeProtocol: 'messages' }), 'messages');
+  assert.equal(effectiveProtocol({ nativeProtocol: 'responses' }, 'auto', 'auto'), 'responses');
+  assert.equal(effectiveProtocol({ nativeProtocol: 'messages' }, 'responses', 'auto'), 'responses');
+  assert.equal(effectiveProtocol({ nativeProtocol: 'messages' }, 'responses', 'chat-completions'), 'chat-completions');
+  assert.throws(() => protocolFor('auto' as ApiProtocol), { code: 'INVALID_REQUEST' });
+});
+
+test('Fable 5.2 uses 2023-06-01 sampling/output limits and cannot disable thinking', () => {
+  const fable = { ...model, id: 'claude-fable-5.2' };
+  const build = (options: Partial<GenerateOptions> = {}, topP?: number) => protocolFor('messages').build(context(options, { model: fable, ...(topP === undefined ? {} : { topP }) }));
+  assert.equal(build().headers['anthropic-version'], '2023-06-01');
+  assert.equal((build({ maxTokens: 128000 }).body as Record<string, unknown>).max_tokens, 128000);
+  assert.throws(() => build({ maxTokens: 128001 }), { code: 'UNSUPPORTED_OPTION' });
+  assert.throws(() => build({ temperature: 0.5 }), { code: 'UNSUPPORTED_OPTION' });
+  assert.throws(() => build({}, 0.9), { code: 'UNSUPPORTED_OPTION' });
+  assert.throws(() => build({ temperature: 1 }, 0.99), { code: 'UNSUPPORTED_OPTION' });
+  assert.equal((build({ temperature: 1 }).body as Record<string, unknown>).temperature, 1);
+  assert.equal((build({}, 0.99).body as Record<string, unknown>).top_p, 0.99);
+  assert.throws(() => build({ reasoningEffort: ReasoningEffortId('none') }), { code: 'UNSUPPORTED_OPTION' });
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    assert.deepEqual((build({ reasoningEffort: ReasoningEffortId(effort) }).body as Record<string, unknown>).output_config, { effort });
+  }
+  assert.doesNotThrow(() => protocolFor('messages').build(context({ temperature: 0.5, maxTokens: 128001 }, { model: { ...model, id: 'claude-fable-5.3' } })));
 });
 
 test('Chat Completions 请求保持既有投影与头', () => {

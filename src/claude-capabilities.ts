@@ -2,7 +2,7 @@ import type { ApiProtocol } from './protocol-options.js';
 
 /** Models with restricted sampling under the 2023-06-01 Messages API. */
 const RESTRICTED_MESSAGES_SAMPLING = new Set([
-  'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5',
+  'claude-fable-5.2', 'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5',
   'claude-opus-4.8', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-haiku-5.5',
 ]);
 

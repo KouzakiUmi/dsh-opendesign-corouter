@@ -47,8 +47,8 @@ test('new context references survive Host preparation without adding an output c
   let config = base;
   const adapter = new CoRouterAdapter({ config: () => config, apiKey: async () => 'fixture' });
   const dispose = ctx.llm.registerAdapter([PAID_PROVIDER, PLAN_PROVIDER], adapter);
-  const added = MODELS.filter(row => (row.group === 'paid' && !['gpt-6.1-terra', 'claude-opus-5.5'].includes(row.id)) || row.id === 'minimax-m3.1-flash');
-  assert.equal(added.length, 25);
+  const added = MODELS.filter(row => row.maxOutputTokens === undefined);
+  assert.equal(added.length, 29, '17 exact model rows have evidenced output caps; the other 29 do not');
   try {
     for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
       config = { ...base, apiProtocol: protocol };

@@ -1,64 +1,51 @@
 # CoRouter 接入与模型来源
 
-观察日期：2026-10-26 至 2026-10-27。来源为 Open Design 0.26.1 客户端代码契约、桌面 CLI 只读模型/计费预检及 [CoRouter 官方首页](https://corouter.open-design.ai/zh/) / [模型目录](https://corouter.open-design.ai/zh/models/)。
+观察日期：2026-11-17。来源为 Open Design 0.26.1 随附 Vela 的只读命令、同一令牌对的官方 HTTP 查询、[官网套餐页](https://corouter.open-design.ai/zh/)及厂商资料。账号、成员、工作区标识和凭据不记录在本文。
 
-## 接入
+## 当前模型目录
 
-官网首页内联 `data-corouter-settings.copy` 的 OpenCode / Hermes 模板给出 OpenAI 兼容基址，首页示例使用 `chat.completions.create`：
+使用结构化 `team-projects list` 核实本机工作区，再执行 `vela model list --all --format json --workspace-id <本地已核工作区>`，source 为 remote，返回 57 个唯一 ID。排除 11 个媒体型号后，46 个对话 ID 与[模型参考表](../src/catalog.ts)一致。比旧版本新增：
 
-```text
-POST https://amr-link.open-design.ai/v1/chat/completions
-Authorization: Bearer <工作空间 API Key>
-```
-
-推理使用 API Key，不把桌面 `controlKey` 或浏览器 Cookie 混入该通道。客户端内部控制面仍是 `https://amr-api.open-design.ai`；品牌名称不同不意味着这两个鉴权通道可以互换。
-
-## 模型目录
-
-[模型表](../src/catalog.ts) 收录 39 个目录项：官网详情页已公开的 33 个模型，2026-10-27 官方 `GET https://amr-link.open-design.ai/v1/models` 实测补齐的 5 个 ID，以及同日由厂商型号文档与服务目录补齐的 GPT-6.1 Terra。
-
-- 附赠通道 `opendesign-corouter-plan` 共 13 项：官网 Design Plan / Core 的 12 项，加逐模型预检确认覆盖的 MiniMax M3.1 Flash。保留历史 Provider ID，不把内部 `plan` 字段误解为官网 Plan 付费分类。
-- 其余 26 项归入 `opendesign-corouter-paid`，包含官网 Plan 套餐模型及钱包模型，不等于全部可用套餐付费额度抵扣。
-
-### 官方 API 补齐的五项
-
-| 精确 ID | 显示名 | 官方页面与权益依据 |
+| 精确 ID | 显示名 | 本次工作区 Coding Plan 覆盖 |
 | --- | --- | --- |
-| `gemini-4-argon` | Gemini 4 Argon | [官网套餐卡](https://corouter.open-design.ai/zh/)列于套餐模型，不是 Core 附赠。 |
-| `muse-spark-1.3` | Muse Spark 1.3 | [官方详情页](https://corouter.open-design.ai/zh/models/muse-spark-1-3/)及官网套餐卡确认名称；ID 由官方 API 确认。 |
-| `kimi-k3.1-pro` | Kimi K3.1 Pro | 官方 API 确认 ID；桌面预检 `modelCovered: false` / `funding: wallet`，归付费通道。显示名为 ID 的本地可读格式。 |
-| `minimax-m3.1-flash` | MiniMax M3.1 Flash | 官方 API 确认 ID；桌面预检 `modelCovered: true` / `funding: coding_plan`，归附赠通道。显示名为本地格式。 |
-| `muse-wonder` | Muse Wonder | 官方 API 确认 ID；桌面预检 `modelCovered: false` / `funding: wallet`，归付费通道。显示名为本地格式。 |
+| `claude-fable-5.2` | Claude Fable 5.2 | false |
+| `deepseek-v4.1-flash-eco` | DeepSeek V4.1 Flash Eco | true |
+| `gemini-4-carbon` | Gemini 4 Carbon | false |
+| `hy4` | Hy4 | false |
+| `hy4-flash` | Hy4 Flash | false |
+| `muse-ember-1.0` | Muse Ember 1.0 | false |
+| `qwen4-max` | Qwen4 Max | false |
 
-[官网公开目录](https://corouter.open-design.ai/models/)目前仍展示 33 个模型。部分未存在的详情路径会返回 HTTP 200 的首页，不能把这种响应当作模型文档。上述五项的上下文使用[型号窗口参考](model-context.md)，并非网关实测；输出上限仍保持未知。图片输入能力按[独立的厂商证据](model-capabilities.md)填写；Muse Wonder 的精确别名未确认，其窗口仅作暂定参考，图片模态与思考档位保持未知。2026-10-27 当日首次实测的官方 `/models` 原始 43 项、无重复 ID，按既有过滤规则保留 38 项；全部原有 33 项均在响应中。同日稍后的复核多出 1 项，见下节。
+官网套餐页已出现部分新增型号，但[公开价格目录](https://corouter.open-design.ai/models/)仍只列 33 款；缺失的详情路径可返回 HTTP 200 首页，不能作为型号能力证据。Link 行目前只有 id/object/owned_by 与 metadata.cost/capability，没有容量、原生协议或明确权益。cost/capability 不用于分组。
 
-### GPT-6.1 Terra
+## 按账号和工作区核实分组
 
-| 依据 | 结果 |
-| --- | --- |
-| 厂商型号文档 | [模型页](https://developers.openai.com/api/docs/models/gpt-6.1-terra.md)（HTTP 200，2026-10-27）：标题 “GPT-6.1 Terra”，Model ID `gpt-6.1-terra`；`reasoning.effort` 支持 `none`、`low`、`medium`（默认）、`high`、`xhigh`、`max`；工具调用需要 Responses；输入模态 text、image；上下文 1,050,000，输出上限 128,000。 |
-| 厂商迁移指南 | [GPT-6 指南](https://developers.openai.com/api/docs/guides/latest-model.md)：明文 “GPT-6 Astra and GPT-6.1 Sol do not support the `none` reasoning effort; GPT-6.1 Terra, GPT-6 Sol, and GPT-6 Luna do.”；工具调用需 Responses 的名单含 GPT-6.1 Terra。 |
-| 服务目录 | 桌面随附 Vela CLI `vela model list --all --format json`（source 为 remote）返回 44 个唯一 ID，含 `gpt-6.1-terra`（`metadata.cost: high`、`metadata.capability: advanced`）。扣除 5 个媒体型号后，其余 39 个对话 ID 与本目录完全一致。 |
-| 分组预检 | 同一工作区 `billing preflight`：`codingPlan.eligible: true`、`modelCovered: false`、`funding: wallet`；对照 DeepSeek V4.1 Flash 为 `modelCovered: true` / `funding: coding_plan`。据此归付费通道 `opendesign-corouter-paid`。 |
+对同一工作区先以 DeepSeek V4.1 Flash 为对照，再为全部 46 个对话 ID 执行 `billing preflight --workspace-id <同一作用域> --model <精确ID> --format json`。本次 codingPlan.eligible=true、tier=pro：
 
-显示名沿用厂商文档标题；该型号在官网公开目录中尚未出现——`/zh/models/` 的 33 款 ID 清单里没有它，详情路径 `/zh/models/gpt-6-1-terra/` 虽返回 HTTP 200，但响应体是首页（标题为首页标题、717,945 字节，而真实型号页为 449,648 字节），即官网暂无该型号详情页。
+- 11 项 modelCovered=true、funding=coding_plan：DeepSeek V4 Flash、Vision Exp、V4 Pro、V4.1 Flash、V4.1 Flash Eco；GLM-5.3 Flash；Hy4 Preview；Kimi K2.7 Code；MiMo V2.6 Flash / Pro；MiniMax M3.1 Flash。
+- 其余 35 项 modelCovered=false。本次 funding=gateway、fundingCheck=insufficient，不能据此声称有钱包可用、也不能将它们当作全球不可用。
+- GPT-6 Luna、Claude Haiku 5.5、GLM-5.3 Flash-X 已不在本次账号 Coding Plan 覆盖内，旧的静态附赠分类失效。
 
-上下文、输出上限与输入模态取自厂商型号文档，与既有 `gpt-6-luna` 同一口径；CoRouter 网关侧的有效预算未实测，可在设置中按模型覆盖。
+HTTP 实测 `GET /api/v1/workspaces/current` 与 `GET /api/v1/workspaces/<id>/billing/preflight?modelId=deepseek-v4.1-flash` 返回 200，与 CLI 当前工作区、成员及模型相符。推理 runtimeKey 只发送到官方 Link；同一次授权的 controlKey 才用于该账号预检。控制令牌不用于推理，runtimeKey 不用于账单读取。
 
-### 桌面与官方源码交叉核验
+运行时目录按以下口径处理：
 
-2026-10-27，使用 Open Design 0.26.1 随附的 Vela CLI，在同一已选工作区执行只读 `model list --all --format json`、`team-projects list` 及 `billing preflight --workspace-id <id> --model <id> --format json`。未记录工作区或账号标识。以 DeepSeek V4.1 Flash 为对照，其与 MiniMax M3.1 Flash 均为 `codingPlan.eligible: true`、`modelCovered: true`、`funding: coding_plan`；另外四个新增模型均为 `modelCovered: false`、`funding: wallet`。CLI 的 `metadata.cost` 对 MiniMax 为 `low`、其他四个为 `high`，但费用标签不替代预检覆盖证据。同日复核 GPT-6.1 Terra，并以 gpt-6.1-sol、gpt-5.6-terra、gpt-6-sol 作同系列参照，四者同为 `modelCovered: false` / `funding: wallet`。
+1. 精确匹配设备或桌面的 runtime/control 令牌对，再解析工作区与成员；普通 Key 无法匹配时，不借用另一个桌面账号的数据。
+2. `/models` 与推理请求携带同一 `x-vela-workspace-id`；预检逐行校验 schemaVersion、workspaceId、workspaceMemberId、modelId 与订阅字段。
+3. eligible 且 modelCovered 为 true 归 `opendesign-corouter-plan`。额度用尽后 wallet/gateway 回退不改变覆盖；false 归非附赠；缺失、失败、冲突归未知。
+4. 保留历史两个 Provider ID。`opendesign-corouter-paid` 包含非附赠及未知行，设置页逐行明确区分；目录可见不是钱包准入或实际调用成功的证明。
+5. 首次读取及十分钟后按需刷新，手动刷新共用在途操作；更新一次发布，通知失败回滚。成功快照用插件随机密钥 HMAC 绑定推理身份、网关、工作区和成员；重启后重新确认身份及权益，旧无绑定快照不恢复附赠分类。
 
-已核对官方源码提交 [`26d60298`](https://github.com/nexu-io/open-design/tree/26d60298f8129e229a1c10aab4df7ca25b1e9ad3)：[模型缓存](https://github.com/nexu-io/open-design/blob/26d60298f8129e229a1c10aab4df7ca25b1e9ad3/apps/daemon/src/runtimes/amr-model-cache.ts)明确 preset 不携带套餐权益；[tier 辅助函数](https://github.com/nexu-io/open-design/blob/26d60298f8129e229a1c10aab4df7ca25b1e9ad3/apps/web/src/runtime/amr-unlimited-models.ts)明确标签不建立覆盖；[计费规范](https://github.com/nexu-io/open-design/blob/26d60298f8129e229a1c10aab4df7ca25b1e9ad3/specs/current/coding-plan-client-billing.md)规定用工作区及模型预检，最终准入仍由 Link 决定。
+## 官方源码
 
-这只是基于当次工作区证据的本地目录分类，不保证其他账号或未来套餐权益。实际权益、余额回退、扣款池与可用性由 OpenDesign 服务端决定；不能把“套餐赠送 Provider”解释为保证绝不动用钱包。后续更新查询步骤见[项目维护入口](../AGENTS.md#model-catalog-maintenance-evidence-lookup)。
+已检查提交 [`f2ecaa3f`](https://github.com/nexu-io/open-design/tree/f2ecaa3f88e1eba001379ea845e7b7754310ea6d)：
 
-客户端模型目录来自 `vela model list --all --format json`；其静态 preset 属于旧目录，不含完整当前套餐权益，因此没有用旧 preset 覆盖官网模型表。未公开精确 ID 的型号，以及需要媒体专用接口的图像生成型号，不编造 chat ID。
+- [amr-model-cache.ts](https://github.com/nexu-io/open-design/blob/f2ecaa3f88e1eba001379ea845e7b7754310ea6d/apps/daemon/src/runtimes/amr-model-cache.ts)：preset 不携带账号权益，remote cache 按作用域保存，十分钟刷新。
+- [vela-billing.ts](https://github.com/nexu-io/open-design/blob/f2ecaa3f88e1eba001379ea845e7b7754310ea6d/apps/daemon/src/integrations/vela-billing.ts)：预检绑定 workspace/member/model，funding=gateway 表示交由网关判断。
+- [计费契约](https://github.com/nexu-io/open-design/blob/f2ecaa3f88e1eba001379ea845e7b7754310ea6d/specs/current/coding-plan-client-billing.md)：预检不预留额度、不保证运行可完成，Link 是最终准入和计费方。
 
-## 能力元数据
+## 能力与验证边界
 
-原有 12 个套餐模型的上下文和输出上限保留同网关客户端 [dsh-opendesign-go 0.1.9](https://github.com/EliteOtaku/dsh-opendesign-go) 收录的厂商参考；其余上下文参考取自厂商公开规格或明确标注的暂定值，详见[型号窗口参考](model-context.md)。刷新目录时，明确的网关窗口字段可提供更小的参考预算；网关侧硬限制尚未实测，可在模型设置中覆盖。增加上下文参考不会新增目录输出能力字段，但自动输出预留可能随上下文预算变化。图片模态按[型号能力证据](model-capabilities.md)维护，存在来源冲突或型号映射不确定时保持未知。思考档位按[厂商逐型号文档](reasoning-evidence.md)维护，与容量证据分别记录。
+容量、输出、图片、思考默认分别按[上下文证据](model-context.md)、[图片证据](model-capabilities.md)、[思考证据](reasoning-evidence.md)维护；未知字段保持缺省。CoRouter 新 ID 与厂商产品的关联不证明网关协议透传，见[协议与问题反馈](protocols.md)。
 
-其余缺乏证据的容量和模态保持未知；图片输入可逐型号手动覆盖，未知模态不应被自动当作仅文本。思考能力区分离散档位、无离散控制与未知别名；Host 选择器和设置页使用同一协议交集，历史默认值不作为能力来源。目录与元数据由[目录测试](../test/catalog.test.ts)、[图片能力回归](../test/image-capabilities.test.ts)及[宿主档位回归](../test/reasoning.test.ts)约束。
-
-当前适配器支持 Chat Completions、Responses 和 Anthropic Messages，模型发现固定使用当前网关的 OpenAI 兼容 `/models` 接口。协议与取消行为有离线合成流回归覆盖；Responses 的完整工具参数会补齐已发送增量，矛盾终项按无效响应处理。未实现媒体生成接口。已使用真实设备授权的运行时令牌验证模型目录读取；尚未进行真实推理调用验收。
+本次已做真实 scoped 目录和逐模型预检，未把这些读操作当成推理成功或无转译证明。离线测试覆盖身份隔离、分组重算、缓存、协议选择、能力元数据及流式回放；真实推理和安装状态在发布验收中单独报告。

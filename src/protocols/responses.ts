@@ -2,9 +2,9 @@
  * OpenAI Responses 协议（无状态：`store: false` + 每次发送完整 `input`）。
  *
  * 为什么坚持无状态：DSH 的请求是会话日志的纯函数，适配器不持久化 `previous_response_id`，
- * 因此重放、重试与并行分支都不会依赖服务端会话；代价是 reasoning 项无法回放——Responses
- * 只在带 `encrypted_content` 时允许跨轮重放推理项，本插件不保存该内容，所以历史推理只映射
- * 为本轮可见的 reasoning 块，再次请求时不会伪装成已签名的上下文。
+ * 因此重放、重试与并行分支都不依赖服务端会话。带 encrypted_content 的 reasoning 与
+ * assistant phase 保存在有界、同凭据/作用域绑定的私有回放元数据；未取得密态的摘要
+ * 不伪装成可继续的私有推理，普通可见消息与函数工具仍完整投影。
  *
  * 终止语义（官方 `response.completed` / `response.incomplete` / `response.failed`）：
  * - `completed`：有 `function_call` 项 → tool-calls，否则 stop；
@@ -25,7 +25,8 @@ import { protocolAcceptsEffort } from '../reasoning.js';
 import { projectContent, type ImageLookup } from './parts.js';
 import { sseFrames } from './sse.js';
 import { openAiUsage } from './usage.js';
-import type { Protocol, ProtocolContext, WireRequest } from './types.js';
+import { responseReplay, responseReplayEnvelope } from './responses-replay.js';
+import type { Protocol, ProtocolContext, ProtocolStreamContext, WireRequest } from './types.js';
 
 type InputPart = { type: 'input_text'; text: string } | { type: 'input_image'; image_url: string; detail: 'auto' };
 
@@ -68,6 +69,8 @@ export function buildResponsesRequest(ctx: ProtocolContext): WireRequest {
         if (projected.text || projected.images.length) input.push({ role: 'user', content: userContent(projected.text, projected.images) });
         break;
       case 'assistant': {
+        const replay = responseReplay(message, ctx);
+        if (replay) { input.push(...replay); break; }
         if (projected.text) input.push({ role: 'assistant', content: projected.text });
         for (const block of message.content) {
           if (block.type === 'tool-call') input.push({ type: 'function_call', call_id: block.id, name: block.name, arguments: block.arguments });
@@ -88,7 +91,7 @@ export function buildResponsesRequest(ctx: ProtocolContext): WireRequest {
   flushLifted();
   if (options.system?.trim()) instructions.unshift(options.system);
 
-  const body: Record<string, unknown> = { model: model.id, input, stream: true, store: false };
+  const body: Record<string, unknown> = { model: model.id, input, stream: true, store: false, include: ['reasoning.encrypted_content'] };
   if (instructions.length) body.instructions = instructions.join('\n\n');
   if (options.tools?.length) body.tools = options.tools.map(tool => ({ type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters }));
   if (options.temperature !== undefined) body.temperature = options.temperature;
@@ -143,6 +146,7 @@ export async function* streamResponses(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   idleMs: number,
+  context?: ProtocolStreamContext,
 ): AsyncGenerator<StreamChunk> {
   let nextIndex = 0;
   let count = 0;
@@ -403,10 +407,12 @@ export async function* streamResponses(
         // finish 之前完成全部校验：消费者收到 finish 可能立即 return，之后的检查不会执行。
         if (reason.kind === 'tool-calls' && calls.size === 0) throw new LlmError('OpenDesign：响应声明工具调用，但未返回任何工具块', 'INVALID_RESPONSE');
         if (!count) throw new LlmError('OpenDesign：模型返回空响应', 'EMPTY_RESPONSE');
-        out.push(...close());
+        const closed = close();
+        out.push(...closed);
         if (usage) out.push({ type: 'usage', usage });
         finish = reason;
-        out.push({ type: 'finish', reason });
+        const replayState = responseReplayEnvelope(response.output, closed, context);
+        out.push({ type: 'finish', reason, ...(replayState ? { replayState } : {}) });
         break;
       }
       case 'error':

@@ -200,17 +200,17 @@ test('legacy/missing identities fail explicitly; absent service fails across new
   } finally { first.dispose(); second.dispose(); }
 });
 
-test('binding reads are only requested for the eight documented Claude Messages models', async () => {
+test('opaque Messages replay uses the shared durable binding while Chat never reads it', async () => {
   let reads = 0;
   const other: CatalogModel = { id: 'other-vendor', name: 'Fixture', group: 'paid' };
   let config = base;
   const adapter = new CoRouterAdapter({ config: () => config, models: () => [row, other], apiKey: async () => 'fixture',
     replayBindingSecret: async () => { reads++; return Buffer.alloc(32, 5); }, fetch: async () => response() });
   try {
-    await collect(adapter.stream({ ...request(), model: other.id })); assert.equal(reads, 0);
-    await collect(adapter.stream(request())); assert.equal(reads, 1);
+    await collect(adapter.stream({ ...request(), model: other.id })); assert.equal(reads, 1);
+    await collect(adapter.stream(request())); assert.equal(reads, 2);
     config = { ...base, apiProtocol: 'chat-completions' };
-    await assert.rejects(collect(adapter.stream(request()))); assert.equal(reads, 1);
+    await assert.rejects(collect(adapter.stream(request()))); assert.equal(reads, 2);
   } finally { adapter.dispose(); }
 });
 

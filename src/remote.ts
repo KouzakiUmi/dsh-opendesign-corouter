@@ -3,7 +3,8 @@
 import type { QuotaSnapshot, QuotaWindow, SessionSource } from './quota.js';
 import { record } from './util.js';
 import { validateActivationUrl } from './device-auth.js';
-import { API_PROTOCOL_IDS, type ApiProtocol } from './protocol-options.js';
+import { API_PROTOCOL_IDS, API_PROTOCOL_SELECTION_IDS, type ApiProtocol, type ProtocolSelection } from './protocol-options.js';
+import type { ModelEntitlements } from './model-entitlements.js';
 import { parseModelSettingsMap, type ModelSettingsMap } from './model-settings.js';
 import { MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES } from './image-budget.js';
 import { REVIEW_DECISIONS, REVIEW_REASONS, type TurnMonitorStatus } from './turn-monitor-status.js';
@@ -41,7 +42,7 @@ export interface StatusConfig {
   baseURL: string;
   /** Credential reference name (an env var or a DSH credential ref), never the value; empty when the profile names none. */
   apiKeyEnv: string;
-  apiProtocol?: ApiProtocol;
+  apiProtocol?: ProtocolSelection;
   modelSettings?: ModelSettingsMap;
   requestTimeoutMs?: number;
   streamIdleTimeoutMs?: number;
@@ -64,6 +65,9 @@ export interface StatusModel {
   reasoningEfforts?: readonly string[];
   /** Vendor-declared default effort of the catalog entry, always one of `reasoningEfforts`; omission means the vendor declares none. */
   defaultEffort?: string;
+  nativeProtocol?: ApiProtocol;
+  effectiveProtocol?: ApiProtocol;
+  coverage?: 'included' | 'not-included' | 'unknown';
 }
 
 /** Public website quotes, independent of account entitlements and gateway discovery. */
@@ -104,7 +108,7 @@ export interface Status {
   /** Opaque Host revision of the credential record; passed back on every write. */
   revision: string;
   apiKeyConfigured: boolean;
-  apiKeySource?: 'reference' | 'stored' | 'device';
+  apiKeySource?: 'reference' | 'stored' | 'device' | 'desktop';
   sessionSource?: SessionSource;
   quota: QuotaSnapshot;
   login: LoginState;
@@ -116,6 +120,7 @@ export interface Status {
   modelsSource?: 'builtin' | 'openai';
   modelsUpdatedAt?: string;
   modelsError?: string;
+  modelEntitlements?: ModelEntitlements;
 }
 
 export interface StartLoginRequest {
@@ -310,6 +315,9 @@ function parseStatusModel(value: unknown): StatusModel {
     ...(value.maxOutputTokens === undefined ? {} : { maxOutputTokens: positiveInteger(value.maxOutputTokens, '最大输出', 10_000_000) }),
     ...(value.reasoningEfforts === undefined ? {} : { reasoningEfforts: parseEfforts(value.reasoningEfforts) }),
     ...(value.defaultEffort === undefined ? {} : { defaultEffort: parseEffort(value.defaultEffort) }),
+    ...(value.nativeProtocol === undefined ? {} : { nativeProtocol: member(value.nativeProtocol, API_PROTOCOL_IDS, '原生协议') }),
+    ...(value.effectiveProtocol === undefined ? {} : { effectiveProtocol: member(value.effectiveProtocol, API_PROTOCOL_IDS, '生效协议') }),
+    ...(value.coverage === undefined ? {} : { coverage: member(value.coverage, ['included', 'not-included', 'unknown'] as const, '模型订阅覆盖') }),
   };
 }
 
@@ -334,7 +342,7 @@ function parseStatusConfig(value: unknown): StatusConfig {
     useDesktopCredential: flag(value.useDesktopCredential, '桌面登录态开关'),
     baseURL: text(value.baseURL, '推理地址', MAX_BASE_URL),
     apiKeyEnv,
-    ...(value.apiProtocol === undefined ? {} : { apiProtocol: member(value.apiProtocol, API_PROTOCOL_IDS, '推理协议') }),
+    ...(value.apiProtocol === undefined ? {} : { apiProtocol: member(value.apiProtocol, API_PROTOCOL_SELECTION_IDS, '推理协议') }),
     ...(value.modelSettings === undefined ? {} : { modelSettings: parseModelSettingsMap(value.modelSettings) }),
     ...(value.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: positiveInteger(value.requestTimeoutMs, '请求超时', 3_600_000, 1000) }),
     ...(value.streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs: positiveInteger(value.streamIdleTimeoutMs, '流空闲超时', 1_800_000, 1000) }),
@@ -357,7 +365,7 @@ export function parseStatus(value: unknown): Status {
     ids.add(model.id);
   }
   const apiKeyConfigured = flag(value.apiKeyConfigured, '凭据是否就绪');
-  const apiKeySource = value.apiKeySource === undefined ? undefined : member(value.apiKeySource, ['reference', 'stored', 'device'] as const, '推理凭据来源');
+  const apiKeySource = value.apiKeySource === undefined ? undefined : member(value.apiKeySource, ['reference', 'stored', 'device', 'desktop'] as const, '推理凭据来源');
   if (!apiKeyConfigured && apiKeySource !== undefined) throw new Error('未配置凭据时不能指定推理凭据来源');
   return {
     revision: text(value.revision, '配置版本', MAX_REVISION),
@@ -373,6 +381,17 @@ export function parseStatus(value: unknown): Status {
     ...(value.modelsSource === undefined ? {} : { modelsSource: member(value.modelsSource, ['builtin', 'openai'] as const, '模型目录来源') }),
     ...(value.modelsUpdatedAt === undefined ? {} : { modelsUpdatedAt: isoTime(value.modelsUpdatedAt, '模型更新时间') }),
     ...(value.modelsError === undefined ? {} : { modelsError: text(value.modelsError, '模型更新提示', MAX_MESSAGE) }),
+    ...(value.modelEntitlements === undefined ? {} : { modelEntitlements: parseModelEntitlements(value.modelEntitlements) }),
+  };
+}
+
+function parseModelEntitlements(value: unknown): ModelEntitlements {
+  if (!record(value)) throw new Error('模型权益状态无效');
+  return {
+    state: member(value.state, ['verified', 'partial', 'unavailable'] as const, '模型权益状态'),
+    ...(value.source === undefined ? {} : { source: member(value.source, ['device', 'desktop'] as const, '模型权益来源') }),
+    ...(value.tier === undefined ? {} : { tier: text(value.tier, '模型权益套餐', 32) }),
+    ...(value.updatedAt === undefined ? {} : { updatedAt: isoTime(value.updatedAt, '模型权益更新时间') }),
   };
 }
 

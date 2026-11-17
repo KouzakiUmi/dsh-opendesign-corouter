@@ -1,6 +1,17 @@
 # 推理档位取证
 
-本文记录 CoRouter 目录中 39 个对话模型 ID 的推理控制证据。采样日期 2026-10-27；所有来源在该日返回 HTTP 200。
+本文记录 CoRouter 目录的推理控制证据。旧 39 个 ID 的矩阵采样日期 2026-10-27；新增型号在 2026-11-17 核对，缺失能力不从旧型号外推。
+
+## 2026-11-17 新增型号
+
+| 精确 ID | 独立档位与默认 | 依据与限制 |
+| --- | --- | --- |
+| `claude-fable-5.2` | low / medium / high / xhigh / max，high | [厂商专页](https://platform.claude.com/docs/en/models/fable-5-2/overview.md)、[迁移](https://platform.claude.com/docs/en/models/fable-5-2/migration-guide.md)。adaptive 恒开，不能 none；签名绑定 system、tools 和此前历史前缀。 |
+| `hy4`、`hy4-flash` | 本插件暴露 high，默认 high | [腾讯深度推理](https://www.tencentcloud.com/document/product/1300/80637)逐 ID 支持 high / no_think，no_think 不在当前通用 wire effort 枚举中，未擅自映射成 none。 |
+| `qwen4-max` | low / high / xhigh，high | [精确型号页](https://help.aliyun.com/zh/model-studio/qwen4-max)。medium→high、max→xhigh 等为别名，非独立档；Chat / Responses / Messages 各有明确字段。 |
+| `deepseek-v4.1-flash-eco`、`gemini-4-carbon`、`muse-ember-1.0` | 未知 | Link 只证明 ID；未取得精确型号能力正文，不复制邻近模型的档位或默认。 |
+
+默认协议与显式覆盖见[协议策略](protocols.md)。GitHub [#9232](https://github.com/nexu-io/open-design/issues/9232)报告 CoRouter Flash Chat 各档位疑似被网关归一；厂商矩阵不等于网关逐档实测。
 
 ## 证据层级
 

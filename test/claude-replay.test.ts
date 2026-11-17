@@ -301,6 +301,78 @@ test('post-stream guard discards signed replay for residue but preserves prose f
   }
 });
 
+test('Fable 5.2 binds replay to projected system, tools and preceding history', async () => {
+  const model = { ...row, id: 'claude-fable-5.2' };
+  const streamIdentity = { ...identity, model: model.id };
+  const first: GenerateOptions = { ...request(), model: model.id, system: 'fixed system',
+    tools: [{ name: 'read', description: 'read a file', parameters: { type: 'object' } }] };
+  const build = (options: GenerateOptions) => buildMessagesRequest({ ...context(options), model });
+  const initial = build(first);
+  assert.match(initial.replayPrefix!, /^sha256:[a-f0-9]{64}$/u);
+  assert.equal(JSON.stringify(initial.body).includes(initial.replayPrefix!), false);
+  const parsed = assemble(await collect(streamMessages(body(events), new AbortController().signal, 1000,
+    { ...streamIdentity, replayPrefix: initial.replayPrefix! })));
+  const saved = createAssistantMessage({ content: parsed.blocks(), source: { provider: streamIdentity.provider, model: model.id, replayState: parsed.replayState } });
+  const next: GenerateOptions = { ...first, messages: [...first.messages, saved] };
+  const assistant = (options: GenerateOptions) => (build(options).body as { messages: { role: string; content: unknown[] }[] }).messages.find(item => item.role === 'assistant')!;
+  assert.deepEqual(assistant(next).content, native);
+  for (const changed of [
+    { ...next, system: 'edited system' },
+    { ...next, tools: [] },
+    { ...next, tools: [{ name: 'read', description: 'changed', parameters: { type: 'object' } }] },
+    { ...next, messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'edited history' }] }, saved] },
+    { ...next, messages: [saved] },
+    { ...next, messages: [...first.messages, { role: 'user' as const, content: [{ type: 'text' as const, text: 'inserted before assistant' }] }, saved] },
+  ]) {
+    const projected = JSON.stringify(assistant(changed));
+    assert.doesNotMatch(projected, /signature|redacted_thinking|先想|opaque-encrypted/u);
+    assert.match(projected, /先说明/u);
+    assert.match(projected, /tool_use/u);
+  }
+  const appended = { ...next, messages: [...next.messages, { role: 'user' as const, content: [{ type: 'text' as const, text: 'new turn' }] }] };
+  assert.deepEqual(assistant(appended).content, native, 'later input does not invalidate an earlier prefix');
+  assert.deepEqual(assistant(JSON.parse(JSON.stringify(next)) as GenerateOptions).content, native);
+  const result = createToolResultMessage({ callId: ToolCallId('tool-1'), content: [{ type: 'text', text: 'result' }], isError: false });
+  const continued = { ...next, messages: [...next.messages, result] };
+  const followup = build(continued);
+  const later = assemble(await collect(streamMessages(body(events), new AbortController().signal, 1000,
+    { ...streamIdentity, replayPrefix: followup.replayPrefix! })));
+  const laterMessage = createAssistantMessage({ content: later.blocks(), source: { provider: identity.provider, model: model.id, replayState: later.replayState } });
+  const twice = { ...continued, messages: [...continued.messages, laterMessage] };
+  const twiceWire = build(twice).body as { messages: { role: string; content: unknown[] }[] };
+  assert.deepEqual(twiceWire.messages.filter(item => item.role === 'assistant').map(item => item.content), [native, native]);
+  const editedResult = createToolResultMessage({ callId: ToolCallId('tool-1'), content: [{ type: 'text', text: 'edited result' }], isError: false });
+  const changedTool = build({ ...twice, messages: [...next.messages, editedResult, laterMessage] }).body as typeof twiceWire;
+  const assistantMessages = changedTool.messages.filter(item => item.role === 'assistant');
+  assert.deepEqual(assistantMessages[0]?.content, native);
+  assert.doesNotMatch(JSON.stringify(assistantMessages[1]), /signature|redacted_thinking|先想|opaque-encrypted/u);
+  const original = saved.source.replayState as ReplayEnvelope;
+  const pruned = createAssistantMessage({ content: saved.content.slice(1), source: { provider: identity.provider, model: model.id,
+    replayState: { response: original.response, blocks: original.blocks!.slice(1) } } });
+  assert.doesNotMatch(JSON.stringify(assistant({ ...next, messages: [...first.messages, pruned] })), /signature|redacted_thinking|opaque-encrypted/u,
+    'aligned pruning must not revive remaining prefix-bound opaque blocks');
+});
+
+test('Fable 5.2 never widens legacy, absent, oversized or malformed prefix metadata', async () => {
+  const model = { ...row, id: 'claude-fable-5.2' };
+  const streamIdentity = { ...identity, model: model.id };
+  for (const replayPrefix of [undefined, 'bad', 'sha256:' + 'a'.repeat(65)]) {
+    const parsed = assemble(await collect(streamMessages(body(events), new AbortController().signal, 1000,
+      { ...streamIdentity, ...(replayPrefix === undefined ? {} : { replayPrefix }) })));
+    assert.equal(parsed.replayState, undefined);
+  }
+  const old = message(assemble(await parse()));
+  const envelope = old.source.replayState as ReplayEnvelope;
+  const saved = createAssistantMessage({ content: old.content, source: { provider: identity.provider, model: model.id,
+    replayState: { ...envelope, response: { ...(envelope.response as Record<string, unknown>), model: model.id } } } });
+  const options = { ...request([saved]), model: model.id };
+  const legacy = buildMessagesRequest({ ...context(options), model });
+  assert.doesNotMatch(JSON.stringify(legacy.body), /signature|redacted_thinking|先想|opaque-encrypted/u);
+  const large = buildMessagesRequest({ ...context({ ...options, system: 'x'.repeat(32 * 1024 * 1024) }), model });
+  assert.equal(large.replayPrefix, undefined);
+  assert.doesNotMatch(JSON.stringify(large.body), /signature|redacted_thinking|opaque-encrypted/u);
+});
+
 test('aggregate private replay size and native block count have bounded failure paths', async () => {
   const big = 'x'.repeat(1024 * 1024);
   await assert.rejects(parse([start(0, { type: 'thinking', thinking: '' }),

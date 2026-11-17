@@ -24,6 +24,7 @@ const config: RuntimeConfig = { apiKeyEnv: 'FIXTURE_KEY', baseURL: 'https://amr-
 const quota: QuotaSnapshot = { state: 'ok', source: 'login', updatedAt: '2026-10-26T08:00:00Z', eligible: false, windows: [], balances: { subscriptionUsd: 10, rechargeUsd: 2, totalUsd: 12 } };
 function dependencies(calls: boolean[]): HostDependencies {
   return {
+    readDesktopCredential: async () => ({ state: 'missing' }), modelAccount: async () => undefined, modelAutoRefresh: false,
     resolveSession: async deps => {
       const desktop = deps?.useDesktop !== false; calls.push(desktop);
       return { state: 'ready', warnings: [], session: { source: desktop ? 'desktop' : 'login', via: desktop ? 'desktop' : 'login', apiUrl: 'https://amr-api.open-design.ai', headers: desktop ? { authorization: 'Bearer fixture' } : { cookie: 'fixture=session' } } };
@@ -182,7 +183,7 @@ test('model discovery uses the OpenAI base independently of inference selection 
     fail = true;
     const failed = await service.refreshModels();
     assert.equal(failed.models[0]?.id, 'new-model');
-    assert.match(failed.modelsError ?? '', /更新失败/u);
+    assert.match(failed.modelsError ?? '', /账号权益暂时无法读取/u);
     assert.equal(JSON.stringify(failed).includes('PRIVATE_SERVER_BODY'), false);
     assert.equal(notifications, 1);
   } finally { await fiber.dispose(); await credentials.dispose(); }

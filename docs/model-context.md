@@ -23,6 +23,8 @@
 
 ## 厂商型号参考
 
+2026-11-17 新增参考：Fable 5.2 为 1,000,000 合计窗口、128,000 同步输出（[厂商专页](https://platform.claude.com/docs/en/models/fable-5-2/overview.md)）；Hy4 / Hy4 Flash 各自为 1M、64k 输出（[腾讯逐型号表](https://www.tencentcloud.com/document/product/1300/78934)，本地保守取 1,000,000 / 64,000）。[Qwen4 Max](https://help.aliyun.com/zh/model-studio/qwen4-max)为 1,000,000 合计，非思考输出 131,072、思考输出 262,144；目录取两模式共同保守上限 131,072，不能视为完整思考模式最大值。Eco、Carbon、Ember 未取得精确能力正文，窗口和输出保持未知，不复制邻近型号。
+
 | 目录模型 ID | 参考窗口 | 依据与口径 |
 | --- | ---: | --- |
 | `gpt-6.1-sol`、`gpt-6.1-terra`、`gpt-6-astra`、`gpt-6-luna`、`gpt-6-sol`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra` | 1,050,000 | OpenAI 各型号页分别给出 context window：[6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol.md)、[6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra.md)、[6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra.md)、[6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna.md)、[6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol.md)、[5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna.md)、[5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol.md)、[5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra.md)。[上下文定义](https://developers.openai.com/api/docs/guides/conversation-state.md)包含输入、输出及思考 token。 |

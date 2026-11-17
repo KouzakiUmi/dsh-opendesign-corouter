@@ -32,7 +32,7 @@ const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/u;
  * 显式媒体输出模型的 id 前缀：官网证据里这些模型走 `/api/v1/media/*`，
  * 选中后 chat 请求必败。只按 id 前缀排除，不从名称或未知能力字段推断。
  */
-const MEDIA_MODEL_ID = /^(?:gpt-image-|nano-banana-|seedream-|imagen-|veo-|doubao-seedance-|sora-)/u;
+const MEDIA_MODEL_ID = /^(?:gpt-image-|nano-banana-|seedream-|imagen-|veo-|doubao-seedance-|seedance-|sora-|wan-|elevenlabs-|byteplus-)/u;
 
 /** Failure taxonomy; `status` is the HTTP status when one was received. */
 export type ModelDiscoveryErrorKind = 'url' | 'credential' | 'network' | 'timeout' | 'aborted' | 'auth' | 'permission' | 'rate-limit' | 'server' | 'response';
@@ -156,7 +156,7 @@ function normalize(body: unknown): readonly CatalogModel[] {
  * @param fetcher Optional `fetch` replacement (tests, hosts with a custom transport).
  * @throws {ModelDiscoveryError} Fixed classification and fixed message for every failure.
  */
-export async function fetchModelCatalog(openAiBaseURL: string, key: string, signal?: AbortSignal, fetcher?: typeof fetch): Promise<readonly CatalogModel[]> {
+export async function fetchModelCatalog(openAiBaseURL: string, key: string, signal?: AbortSignal, fetcher?: typeof fetch, workspaceId?: string): Promise<readonly CatalogModel[]> {
   let base: string;
   try { base = normalizeOpenAiBase(assertBaseURL(openAiBaseURL)); } catch { throw new ModelDiscoveryError('url'); }
   let credential: string;
@@ -167,7 +167,7 @@ export async function fetchModelCatalog(openAiBaseURL: string, key: string, sign
   try {
     response = await request(`${base}/models`, {
       method: 'GET',
-      headers: { ...attributionHeaders(), authorization: `Bearer ${credential}`, accept: 'application/json' },
+      headers: { ...attributionHeaders(), authorization: `Bearer ${credential}`, accept: 'application/json', ...(workspaceId && /^[A-Za-z0-9_-]{1,128}$/u.test(workspaceId) ? { 'x-vela-workspace-id': workspaceId } : {}) },
       signal: deadline,
       redirect: 'error',
     });

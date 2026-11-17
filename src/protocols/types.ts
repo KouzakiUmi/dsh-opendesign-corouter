@@ -33,6 +33,8 @@ export interface WireRequest {
   url: string;
   headers: Record<string, string>;
   body: unknown;
+  /** Local-only bounded request-prefix digest, forwarded to stream context, never upstream. */
+  replayPrefix?: string;
 }
 
 /** Prepared request identity; contains no transport credentials. */
@@ -41,6 +43,8 @@ export interface ProtocolStreamContext {
   model: string;
   baseURL: string;
   credentialIdentity?: string;
+  /** Digest from the exact WireRequest that produced this stream. */
+  replayPrefix?: string;
 }
 
 /** 一种线协议的实现。 */

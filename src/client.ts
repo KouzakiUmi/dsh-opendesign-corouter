@@ -10,7 +10,7 @@ import {
   type PriceTier,
 } from './remote.js';
 import type { QuotaSnapshot, QuotaWindow } from './quota.js';
-import { inferenceEndpoint, API_PROTOCOL_OPTIONS, type ApiProtocol } from './protocol-options.js';
+import { inferenceEndpoint, effectiveProtocol, API_PROTOCOL_OPTIONS, type ApiProtocol, type ProtocolSelection } from './protocol-options.js';
 import type { ModelSettings, ModelSettingsMap } from './model-settings.js';
 import { CONTEXT_WINDOW_PRESETS, contextWindowPreset, effectiveContextWindow, type ContextWindowPresetId } from './context-budget.js';
 import { validateActivationUrl } from './device-auth.js';
@@ -52,7 +52,7 @@ const DEFAULT_TURN_REVIEW_NO_PROGRESS_LIMIT = 2;
 const MIN_TURN_REVIEW_NO_PROGRESS_LIMIT = 1;
 const MAX_TURN_REVIEW_NO_PROGRESS_LIMIT = 5;
 /** Client wait per RPC. The Host's slowest operation (one activation open) budgets less. */
-const RPC_TIMEOUT_MS = 30_000;
+const RPC_TIMEOUT_MS = 100_000;
 /** 与 model-settings.ts 的容量上限保持一致，避免界面先接受再被 Host 拒绝。 */
 const MAX_OUTPUT_TOKENS = 10_000_000;
 
@@ -64,7 +64,7 @@ export interface FormValues {
   useDesktopCredential?: boolean;
   baseURL?: string;
   apiKeyEnv?: string;
-  apiProtocol?: ApiProtocol;
+  apiProtocol?: ProtocolSelection;
   modelSettings?: ModelSettingsMap;
   quotaRefreshSeconds?: number;
   requestTimeoutMs?: number;
@@ -572,6 +572,7 @@ export function writeModelSettings(map: ModelSettingsMap | undefined, id: string
   if (next.contextWindow !== undefined) entry.contextWindow = next.contextWindow;
   if (next.contextTier !== undefined) entry.contextTier = next.contextTier;
   if (next.reasoningEffort !== undefined) entry.reasoningEffort = next.reasoningEffort;
+  if (next.apiProtocol !== undefined) entry.apiProtocol = next.apiProtocol;
   if (Object.keys(entry).length === 0) delete out[id];
   else out[id] = entry;
   return out;
@@ -985,13 +986,14 @@ export interface ModelRowProps {
   writable: boolean;
   pending: boolean;
   disabledReason?: string | undefined;
-  protocol?: ApiProtocol;
+   protocol?: ProtocolSelection;
   price?: PriceCatalog['models'][number] | undefined;
   priceKnown?: boolean | undefined;
   onCommit: (next: ModelSettings | undefined) => Promise<boolean>;
 }
 
-export function ModelRow({ model, settings, authoritative, writable, pending, disabledReason, protocol = 'chat-completions', price, priceKnown = false, onCommit }: ModelRowProps) {
+export function ModelRow({ model, settings, authoritative, writable, pending, disabledReason, protocol: selection = 'auto', price, priceKnown = false, onCommit }: ModelRowProps) {
+  const protocol = effectiveProtocol(model, selection, settings.apiProtocol);
   const id = React.useId();
   const mounted = useMounted();
   const [error, setError] = React.useState<string | undefined>(undefined);
@@ -1081,6 +1083,7 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
         h('span', null, h('strong', null, model.name), h('code', null, model.id))),
       h('div', { className: 'odc-actions' },
         enabled ? null : h('span', { className: 'odc-chip' }, '已禁用'),
+        h('span', { className: 'odc-chip' }, model.coverage === 'included' ? '订阅已覆盖' : model.coverage === 'not-included' ? '不含 Coding Plan' : '权益未核实'),
         h('button', { className: 'odc-button odc-button-small', type: 'button', disabled: !writable || pending || !hasOverrides, onClick: () => { void reset(); } }, '重置'))),
     price !== undefined ? h('p', { className: 'odc-price-summary' }, `官网参考 · ${price.tiers[0]!.label} · 输入 ${priceAmount(price.tiers[0]!.input, price.tiers[0]!.currency)} / 输出 ${priceAmount(price.tiers[0]!.output, price.tiers[0]!.currency)} · ${priceUnit(price.tiers[0]!)}${price.tiers.length > 1 ? ` · 共 ${price.tiers.length} 档` : ''}`)
       : priceKnown ? h('p', { className: 'odc-price-summary' }, '官网暂未列出此模型价格') : null,
@@ -1103,6 +1106,16 @@ export function ModelRow({ model, settings, authoritative, writable, pending, di
     h('details', { className: 'odc-model-details' },
       h('summary', { 'aria-label': `${model.name} 参数设置${price === undefined ? '' : '与价格'}` }, `${price === undefined ? '参数设置' : '参数与价格'} · ${hasOverrides ? '已自定义' : '使用默认值'}`),
       h('p', { className: 'odc-model-meta' }, facts),
+      h('div', { className: 'odc-field' },
+        h('label', { htmlFor: `${id}-protocol` }, '此模型 API 协议'),
+        h('select', { id: `${id}-protocol`, className: 'odc-input', value: settings.apiProtocol ?? 'auto', disabled: !writable || pending,
+          onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
+            const next = { ...settings };
+            if (event.target.value === 'auto') delete next.apiProtocol;
+            else next.apiProtocol = event.target.value as ApiProtocol;
+            void commit(next);
+          } }, API_PROTOCOL_OPTIONS.map(option => h('option', { key: option.id, value: option.id }, option.name))),
+        h('small', { className: 'odc-hint' }, `当前 ${protocol} · ${model.nativeProtocol === undefined ? '原生路由未确认；默认 Responses，网关可能转译' : `型号首选 ${model.nativeProtocol}；网关内部透传未验证`}`)),
       model.id === 'claude-opus-5.5' && model.contextWindow === 1_000_000 ? h('p', { className: 'odc-hint' }, '上下文 1,000,000 为厂商参考，网关实际容量未验证；档位总窗口不会超过该参考容量。') : null,
       model.id === 'muse-wonder' && model.contextWindow === 1_048_576 ? h('p', { className: 'odc-hint' }, '上下文 1,048,576 为暂定参考，网关型号映射及实际容量未验证；档位总窗口不会超过该参考容量。') : null,
       samplingRestricted && model.id === 'claude-opus-4.8' ? h('p', { className: 'odc-hint' }, '未选择档位时按厂商默认档位 high 发送自适应思考；厂商在完全省略思考配置时不启用。') : null,
@@ -1147,7 +1160,7 @@ function ModelGroup({ title, group, models, settingsMap, authoritative, writable
   writable: boolean;
   pending: boolean;
   disabledReason: string;
-  protocol: ApiProtocol;
+  protocol: ProtocolSelection;
   prices?: PriceCatalog | undefined;
   onCommit: (id: string, next: ModelSettings | undefined) => Promise<boolean>;
 }) {
@@ -1219,9 +1232,9 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
   };
   const source = status?.modelsSource === 'openai' ? '当前网关' : status?.modelsSource === 'builtin' ? '内置目录' : '尚未确认';
   const updated = status?.modelsUpdatedAt === undefined ? '' : ` · 更新于 ${formatTime(status.modelsUpdatedAt)}`;
-  const protocol = formSnapshot.value?.apiProtocol ?? status?.config.apiProtocol ?? 'chat-completions';
+  const protocol = formSnapshot.value?.apiProtocol ?? status?.config.apiProtocol ?? 'auto';
   const models = (status?.models ?? []).map(model => {
-    const reasoningEfforts = modelReasoningEfforts(model, protocol);
+    const reasoningEfforts = modelReasoningEfforts(model, effectiveProtocol(model, protocol, settingsMap[model.id]?.apiProtocol));
     return { ...model, ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }) };
   });
   return h(React.Fragment, null,
@@ -1239,6 +1252,10 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
         }, refreshingModels ? '正在刷新模型…' : '刷新模型目录'))),
     status?.apiKeyConfigured === false ? h('p', { className: 'odc-hint' }, '刷新模型需要可用的 API Key；保存 Key 后重试。') : null,
     status?.modelsError !== undefined ? h('p', { className: 'odc-notice', 'data-kind': 'error', role: 'alert' }, status.modelsError) : null,
+    h('p', { className: 'odc-hint', role: 'status' }, status?.modelEntitlements?.state === 'verified'
+      ? `已按当前账号${status.modelEntitlements.tier ? ` ${status.modelEntitlements.tier}` : ''}订阅逐模型核实分组；额度耗尽不会改变覆盖分类。`
+      : status?.modelEntitlements?.state === 'partial' ? '部分模型权益未能核实，未确认项不标为附赠；可刷新重试。'
+      : '尚未取得与当前推理身份匹配的订阅权益；这些模型不代表已获附赠授权，请使用独立登录或匹配的桌面登录后刷新。'),
     h(NoticeView, { notice }),
     h('section', { className: 'odc-card', 'aria-label': '官网模型价格' },
       h('div', { className: 'odc-pricing-head' },
@@ -1249,7 +1266,7 @@ export function Models({ status, formSnapshot, setFormField, pendingField, onRef
     models.length === 0 ? h('p', { className: 'odc-hint', role: 'status' }, '暂无可用模型；可刷新模型列表后重试。') :
       h('div', { className: 'odc-model-groups' },
         h(ModelGroup, { title: '套餐赠送模型', group: 'plan', models, settingsMap, authoritative, writable, pending, disabledReason, protocol, onCommit: commit, prices }),
-        h(ModelGroup, { title: '付费模型', group: 'paid', models, settingsMap, authoritative, writable, pending, disabledReason, protocol, onCommit: commit, prices })));
+        h(ModelGroup, { title: '非附赠 / 权益未核实', group: 'paid', models, settingsMap, authoritative, writable, pending, disabledReason, protocol, onCommit: commit, prices })));
 }
 
 export interface AdvancedProps {
@@ -1323,7 +1340,7 @@ export function Advanced({ status, formSnapshot, setFormField, clearFormField, p
   const configuredProtocol = formSnapshot.value?.apiProtocol ?? status?.config.apiProtocol;
   const protocol = configuredProtocol !== undefined && API_PROTOCOL_OPTIONS.some(option => option.id === configuredProtocol)
     ? configuredProtocol
-    : 'chat-completions';
+    : 'auto';
   const baseURL = formSnapshot.value?.baseURL ?? status?.config.baseURL ?? '';
   const requestTimeout = formSnapshot.value?.requestTimeoutMs ?? status?.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const streamIdleTimeout = formSnapshot.value?.streamIdleTimeoutMs ?? status?.config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
@@ -1424,7 +1441,7 @@ export function Advanced({ status, formSnapshot, setFormField, clearFormField, p
           h('code', { className: 'odc-code' }, baseURL === '' ? '—' : baseURL)),
         h('div', null,
           h('span', { className: 'odc-label' }, '当前推理路径（只读）'),
-          h('code', { className: 'odc-code' }, protocolEndpoint(baseURL, protocol))),
+          h('code', { className: 'odc-code' }, protocol === 'auto' ? '按模型选择；未确认原生时使用 /responses' : protocolEndpoint(baseURL, protocol))),
         h('small', { className: 'odc-hint' }, '地址由插件配置提供，无需在此填写；切换协议只改变请求路径与报文格式。'))),
     h('section', { className: 'odc-card' },
       h('h3', null, '凭据与网关'),
@@ -1676,6 +1693,7 @@ function Connection({ status, formSnapshot, setFormField, pendingField, caller, 
   const keySource = status?.apiKeySource === 'reference' ? `环境或凭据引用（${status.config.apiKeyEnv || DEFAULT_KEY_REF}）`
     : status?.apiKeySource === 'stored' ? '已保存的 API Key'
     : status?.apiKeySource === 'device' ? '设备授权'
+    : status?.apiKeySource === 'desktop' ? 'OpenDesign 桌面授权（同一令牌对）'
     : status?.apiKeyConfigured ? '尚未确认' : '未配置';
   return h(React.Fragment, null,
     h('section', { className: 'odc-card' },

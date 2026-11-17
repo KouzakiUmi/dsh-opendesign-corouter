@@ -6,15 +6,16 @@ import { ReasoningEffortId, type GenerateOptions, type StreamChunk } from '@deep
 import { AttachmentId, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
 import { EMPTY_TURN_MESSAGE } from '../src/empty-turn.js';
 import { OPENDESIGN_EOT } from '../src/eot-code.js';
-const base: RuntimeConfig = { apiKeyEnv: 'FIXTURE_KEY', baseURL: 'https://amr-link.open-design.ai/v1', useDesktopCredential: false, emptyTurnGuard: true, requestTimeoutMs: 10000, streamIdleTimeoutMs: 1000 };
+// Existing stream fixtures specifically exercise the explicit Chat wire contract.
+const base: RuntimeConfig = { apiProtocol: 'chat-completions', apiKeyEnv: 'FIXTURE_KEY', baseURL: 'https://amr-link.open-design.ai/v1', useDesktopCredential: false, emptyTurnGuard: true, requestTimeoutMs: 10000, streamIdleTimeoutMs: 1000 };
 const options = (provider = PLAN_PROVIDER, model = 'deepseek-v4.1-flash'): GenerateOptions => ({ provider, model, messages: [{ role: 'user', content: [{ type: 'text', text: 'fixture' }] }] });
 const sse = (text: string) => new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
 async function collect(stream: AsyncIterable<StreamChunk>) { const chunks: StreamChunk[] = []; for await (const chunk of stream) chunks.push(chunk); return chunks; }
 test('two independent Providers advertise disjoint catalogs and reject cross-group calls', async () => {
   let calls = 0;
   const adapter = new CoRouterAdapter({ config: () => base, apiKey: async () => 'test-key', fetch: async () => { calls++; return sse('ok'); } });
-  assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 13);
-  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 26);
+  assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 11);
+  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 35);
   assert.throws(() => adapter.stream(options(PLAN_PROVIDER, 'gpt-6-astra')), { code: 'INVALID_REQUEST' });
   assert.equal(calls, 0);
 });
@@ -63,7 +64,7 @@ test('empty-turn monitor only changes gift chat tool-enabled steps; switch is in
   assert.deepEqual((await collect(adapter.stream(options()))).at(-1), { type: 'finish', reason: { kind: 'stop' } });
   assert.equal(hits, 1);
   for (const id of ['deepseek-v4-pro', 'deepseek-v4-flash', 'glm-5.3-flash', 'gpt-6-luna']) {
-    assert.deepEqual((await collect(adapter.stream({ ...options(PLAN_PROVIDER, id), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'stop' } });
+    assert.deepEqual((await collect(adapter.stream({ ...options(id === 'gpt-6-luna' ? PAID_PROVIDER : PLAN_PROVIDER, id), tools: [tool] }))).at(-1), { type: 'finish', reason: { kind: 'stop' } });
   }
 });
 test('DSv4.1 leaked REA markers become EOT failures only when its monitor and tools are enabled', async () => {
@@ -207,8 +208,8 @@ test('credential routing receives the prepared gateway even after configuration 
 test('model switches hide routes and enforce rejection on direct calls', async () => {
   const configured: RuntimeConfig = { ...base, modelSettings: { 'deepseek-v4.1-flash': { enabled: false } } };
   const adapter = new CoRouterAdapter({ config: () => configured, apiKey: async () => 'test-key', fetch: async () => { assert.fail('disabled model must not fetch'); } });
-  assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 12);
-  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 26);
+  assert.equal((await adapter.listModels(PLAN_PROVIDER)).length, 10);
+  assert.equal((await adapter.listModels(PAID_PROVIDER)).length, 35);
   assert.throws(() => adapter.stream(options()), { code: 'MODEL_DISABLED' });
   await assert.rejects(adapter.resolveModel(PLAN_PROVIDER, 'deepseek-v4.1-flash'), { code: 'MODEL_DISABLED' });
 });
@@ -302,6 +303,67 @@ test('all three selected protocols change the actual request path', async () => 
     } });
     await assert.rejects(collect(adapter.stream(options())));
   }
+});
+
+test('auto routes exact known models and unconfirmed additions through matching wire formats', async () => {
+  const { apiProtocol: _legacyChat, ...defaults } = base;
+  const cases = [
+    [PAID_PROVIDER, 'gpt-6.1-sol', 'responses'],
+    [PLAN_PROVIDER, 'deepseek-v4.1-flash', 'responses'],
+    [PAID_PROVIDER, 'claude-fable-5.2', 'messages'],
+    [PAID_PROVIDER, 'kimi-k3', 'chat-completions'],
+    [PLAN_PROVIDER, 'deepseek-v4.1-flash-eco', 'responses'],
+    [PAID_PROVIDER, 'gemini-4-carbon', 'responses'],
+    [PAID_PROVIDER, 'muse-ember-1.0', 'responses'],
+  ] as const;
+  for (const explicitAuto of [false, true]) for (const [provider, model, expected] of cases) {
+    let sent = 0;
+    const adapter = new CoRouterAdapter({ config: () => ({ ...defaults, ...(explicitAuto ? { apiProtocol: 'auto' as const } : {}) }), apiKey: async () => 'fixture-key', fetch: async (input, init) => {
+      sent++;
+      const suffix = expected === 'chat-completions' ? 'chat/completions' : expected;
+      assert.equal(String(input), `${base.baseURL}/${suffix}`, `${model}/${explicitAuto}`);
+      const wire = JSON.parse(String(init?.body));
+      assert.equal(wire.model, model);
+      if (expected === 'responses') {
+        assert.ok(Array.isArray(wire.input));
+        assert.equal(wire.store, false);
+        assert.equal(wire.messages, undefined);
+        return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { output: [{ type: 'message', id: 'fixture', content: [{ type: 'output_text', text: 'auto response' }] }] } })}\n\n`);
+      }
+      assert.ok(Array.isArray(wire.messages));
+      if (expected === 'messages') return new Response([
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'auto response' } },
+        { type: 'content_block_stop', index: 0 }, { type: 'message_delta', delta: { stop_reason: 'end_turn' } }, { type: 'message_stop' },
+      ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+      return sse('auto response');
+    } });
+    try {
+      const chunks = await collect(adapter.stream(options(provider, model)));
+      assert.equal(sent, 1);
+      assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } });
+      assert.ok(chunks.some(chunk => chunk.type === 'block-end' && chunk.block.type === 'text' && chunk.block.text === 'auto response'));
+    } finally { adapter.dispose(); }
+  }
+});
+
+test('model protocol overrides outrank global selection, and prepared calls keep their protocol snapshot', async () => {
+  let config: RuntimeConfig = { ...base, apiProtocol: 'auto' };
+  const sent: string[] = [];
+  const adapter = new CoRouterAdapter({ config: () => config, apiKey: async () => 'fixture-key', fetch: async input => {
+    sent.push(String(input));
+    return new Response('{}', { status: 401 });
+  } });
+  try {
+    const prepared = await adapter.prepareCall(PLAN_PROVIDER, 'deepseek-v4.1-flash');
+    config = { ...base, apiProtocol: 'chat-completions', modelSettings: { 'deepseek-v4.1-flash': { apiProtocol: 'messages' } } };
+    await assert.rejects(collect(prepared.stream(options())), { code: 'AUTH' });
+    await assert.rejects(collect(adapter.stream(options())), { code: 'AUTH' });
+    config = { ...base, apiProtocol: 'responses', modelSettings: { 'deepseek-v4.1-flash': { apiProtocol: 'auto' } } };
+    await assert.rejects(collect(adapter.stream(options())), { code: 'AUTH' });
+    config = { ...base, apiProtocol: 'chat-completions' };
+    await assert.rejects(collect(adapter.stream(options())), { code: 'AUTH' });
+    assert.deepEqual(sent, [`${base.baseURL}/responses`, `${base.baseURL}/messages`, `${base.baseURL}/responses`, `${base.baseURL}/chat/completions`]);
+  } finally { adapter.dispose(); }
 });
 
 test('unreadable images become named placeholders without failing the request or retrying the read', async () => {

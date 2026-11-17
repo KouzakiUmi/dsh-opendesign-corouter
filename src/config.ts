@@ -1,5 +1,5 @@
 import Schema from '@deepseek-ai/schemastery';
-import { API_PROTOCOL_IDS, type ApiProtocol } from './protocol-options.js';
+import { API_PROTOCOL_SELECTION_IDS, type ProtocolSelection } from './protocol-options.js';
 import { parseModelSettingsMap, type ModelSettingsMap } from './model-settings.js';
 import { serializableTransform } from './schema-serialization.js';
 import { parseModelCatalogSnapshot, type ModelCatalogSnapshot } from './model-catalog-snapshot.js';
@@ -21,7 +21,7 @@ export const DEFAULT_API_KEY_REF = 'COROUTER_API_KEY';
 export const Config = Schema.object({
   apiKeyEnv: Schema.string().max(128).pattern(/^[A-Za-z_][A-Za-z0-9_]*$/u).description(`CoRouter API Key 的环境变量或 DSH 凭据引用名；不设置时使用 ${DEFAULT_API_KEY_REF}`).volatile(),
   baseURL: Schema.transform(Schema.string(), serializableTransform(assertBaseURL)).default(DEFAULT_BASE_URL).description('CoRouter 网关地址；不用于控制台登录或额度查询').volatile(),
-  apiProtocol: Schema.union(API_PROTOCOL_IDS).default('chat-completions').description('网关支持的推理协议；模型目录通过该网关的兼容接口读取').volatile(),
+  apiProtocol: Schema.union(API_PROTOCOL_SELECTION_IDS).default('auto').description('默认按精确型号选择原生请求格式；可显式覆盖。未知路由使用兼容接口，不保证网关内部不转译').volatile(),
   modelSettings: Schema.transform(Schema.dict(Schema.any<unknown>()), serializableTransform(parseModelSettingsMap)).default({}).description('逐模型启用状态、图片输入和请求参数').volatile(),
   modelCatalog: Schema.transform(Schema.any<unknown>(), serializableTransform(parseModelCatalogSnapshot)).description('上次成功读取的网关模型目录快照；重启后继续使用，直到再次刷新').volatile(),
   useDesktopCredential: Schema.boolean().default(true).description('优先读取 OpenDesign 桌面端登录态查询额度').volatile(),
@@ -39,7 +39,7 @@ export interface RuntimeConfig {
   /** Credential reference this profile names; absent when the profile names none. */
   apiKeyEnv?: string;
   baseURL: string; useDesktopCredential: boolean; emptyTurnGuard: boolean; requestTimeoutMs: number; streamIdleTimeoutMs: number;
-  apiProtocol?: ApiProtocol;
+  apiProtocol?: ProtocolSelection;
   modelSettings?: ModelSettingsMap;
   modelCatalog?: ModelCatalogSnapshot;
   quotaRefreshSeconds?: number;

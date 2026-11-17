@@ -13,15 +13,17 @@ import { ReplayKeyStore } from './replay-key.js';
 import { installEotRecovery } from './eot-recovery.js';
 import { installTurnMonitor } from './turn-monitor.js';
 import type { TurnMonitorStatus } from './turn-monitor-status.js';
-import { fetchModelCatalog, ModelDiscoveryError } from './model-discovery.js';
+import { fetchModelCatalog } from './model-discovery.js';
+import { ModelDirectory } from './model-directory.js';
+import { resolveModelAccount, type ModelAccount, type EntitlementResult, type ModelScope } from './model-entitlements.js';
+import { effectiveProtocol } from './protocol-options.js';
 import { fetchPricingSnapshot } from './pricing.js';
 import { applyModelSettings, isModelEnabled } from './model-settings.js';
 import { modelReasoningEfforts, vendorDefaultEffort } from './reasoning.js';
 import type { CatalogModel } from './catalog.js';
 import { Config, SETTINGS_NS, PLAN_PROVIDER, PAID_PROVIDER, apiKeyRef, readConfig, type LiveConfig } from './config.js';
 import { parseModelCatalogSnapshot, type ModelCatalogSnapshot } from './model-catalog-snapshot.js';
-import { MODELS, findModel } from './catalog.js';
-import { resolveSession, deviceGrant, isOfficialRuntimeUrl, type LoginGrant } from './auth.js';
+import { resolveSession, deviceGrant, isOfficialRuntimeUrl, readDesktopCredential, type LoginGrant } from './auth.js';
 import { ConsoleLogin, type LoginOptions } from './login.js';
 import { ActivationLauncher, type ActivationLauncherOptions } from './browser-open.js';
 import { readQuota, ConsoleError, type QuotaSnapshot } from './quota.js';
@@ -70,11 +72,17 @@ interface SettingsWriter {
 }
 export interface HostDependencies {
   resolveSession: typeof resolveSession;
+  readDesktopCredential?: typeof readDesktopCredential;
   readQuota: typeof readQuota;
   readDesktopQuota: typeof readDesktopQuota;
   fetchModels?: typeof fetchModelCatalog;
+  modelAccount?: (key: string, baseURL: string, grant: LoginGrant | undefined, useDesktop: boolean) => Promise<ModelAccount | undefined>;
+  readModelScope?: (account: ModelAccount, signal?: AbortSignal) => Promise<ModelScope>;
+  readEntitlements?: (models: readonly CatalogModel[], options?: import('./model-entitlements.js').EntitlementOptions) => Promise<EntitlementResult>;
   fetchPrices?: typeof fetchPricingSnapshot;
   modelsChanged?: () => void;
+  /** Offline fixtures may drive the directory lifetime explicitly. Production defaults on. */
+  modelAutoRefresh?: boolean;
   loginOptions?: LoginOptions;
   activationOptions?: ActivationLauncherOptions;
 }
@@ -100,22 +108,37 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   private _quotaController: AbortController | undefined;
   guardedTurns: number = 0;
   turnMonitorStatus: (() => TurnMonitorStatus) | undefined;
-  private _models: readonly CatalogModel[] = MODELS;
-  private _modelsUpdatedAt: string | undefined;
-  private _modelsError: string | undefined;
+  private readonly _directory: ModelDirectory;
+  private readonly _catalogKeys: ReplayKeyStore;
   private _modelsFingerprint = '';
-  private _modelsEpoch = 0;
-  private _modelsPending: Promise<Status> | undefined;
-  private _modelsController: AbortController | undefined;
-  private _modelsWriteSerial = 0;
-  private _modelsWrite: Promise<void> = Promise.resolve();
   private _prices: PriceCatalog | undefined;
   private _pricesPending: Promise<PriceCatalog> | undefined;
-  modelCatalog(): readonly CatalogModel[] { return this._models; }
+  modelCatalog(): readonly CatalogModel[] { return this._directory.models(); }
+  modelWorkspace(): string | undefined { return this._directory.workspace(); }
+  modelCallIdentity(): import('./model-directory.js').DirectoryCallIdentity | undefined { return this._directory.callIdentity(); }
+  async currentModelCatalog(): Promise<readonly CatalogModel[]> {
+    await this._state();
+    if (this._directory.updatedAt() === undefined) await this._directory.refresh();
+    else if (this.dependencies.modelAutoRefresh !== false) this._directory.warm();
+    return this._directory.models();
+  }
   constructor(ctx: Context, config: () => ReturnType<typeof readConfig>, readonly dependencies: HostDependencies = { resolveSession, readQuota, readDesktopQuota }) {
     super(ctx, 'openDesignCoRouter');
     this._config = config;
-    this._restoreModels();
+    this._catalogKeys = new ReplayKeyStore(() => ctx.get('credentials'));
+    this._directory = new ModelDirectory({
+      config: this._config,
+      state: async () => {
+        const state = await this._state();
+        const account = state.key ? await (dependencies.modelAccount ?? resolveModelAccount)(state.key, state.config.baseURL, grantOf(state.sessionRecord), state.config.useDesktopCredential) : undefined;
+        return { ...(state.key ? { key: state.key } : {}), ...(account ? { account } : {}) };
+      },
+      changed: () => dependencies.modelsChanged?.(), persist: snapshot => this._persistModels(snapshot),
+      bindingSecret: signal => this._catalogKeys.get(signal),
+      ...(dependencies.fetchModels ? { fetchModels: dependencies.fetchModels } : {}),
+      ...(dependencies.readModelScope ? { readScope: dependencies.readModelScope } : {}),
+      ...(dependencies.readEntitlements ? { readEntitlements: dependencies.readEntitlements } : {}),
+    });
     this._login = new ConsoleLogin({
       capture: async expectedRevision => {
         const state = await this._state();
@@ -146,7 +169,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       onSettled: () => { void this._activation.close(); },
     });
     this._activation = new ActivationLauncher(dependencies.activationOptions);
-    ctx.effect(() => () => { this._lifetime.abort(); this._login.dispose(); return this._activation.dispose(); });
+    ctx.effect(() => () => { this._lifetime.abort(); this._directory.dispose(); this._catalogKeys.dispose(); this._login.dispose(); return this._activation.dispose(); });
   }
   private _credentials(): CredentialProvider {
     const service = this.ctx.get('credentials');
@@ -159,26 +182,16 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     if (ambient?.trim()) return { key: ambient, source: 'reference' };
     if (apiRecord?.kind === 'api-key' && apiRecord.key?.trim()) return { key: apiRecord.key, source: 'stored' };
     const grant = grantOf(sessionRecord);
-    return isOfficialRuntimeUrl(baseURL) && grant && 'kind' in grant && grant.kind === 'device' ? { key: grant.runtimeKey, source: 'device' } : undefined;
+    if (isOfficialRuntimeUrl(baseURL) && grant && 'kind' in grant && grant.kind === 'device') return { key: grant.runtimeKey, source: 'device' };
+    if (isOfficialRuntimeUrl(baseURL) && this._config().useDesktopCredential) {
+      const desktop = await (this.dependencies.readDesktopCredential ?? readDesktopCredential)();
+      if (desktop.state === 'credential' && desktop.credential.runtimeKey) return { key: desktop.credential.runtimeKey, source: 'desktop' };
+    }
   }
   async resolveApiKey(ref: string, baseURL = this._config().baseURL): Promise<string | undefined> {
     const credentials = this.ctx.get('credentials');
     const [apiRecord, sessionRecord] = await Promise.all([credentials?.readRecord(API_KEY), credentials?.readRecord(SESSION)]);
     return (await this._key(ref, baseURL, apiRecord, sessionRecord))?.key;
-  }
-  /** Restore the persisted gateway catalog when it belongs to the active gateway. */
-  private _restoreModels(): void {
-    const config = this._config();
-    const snapshot = config.modelCatalog;
-    if (!snapshot || snapshot.baseURL !== config.baseURL) return;
-    this._models = snapshot.models.map(row => {
-      const known = findModel(row.id);
-      // Snapshots written before the catalog carried a documented default keep the entry's
-      // evidence field, so the selector stops offering a provider-default entry after upgrade.
-      if (known?.defaultEffort === undefined || row.defaultEffort !== undefined) return row;
-      return (row.reasoningEfforts ?? []).includes(known.defaultEffort) ? { ...row, defaultEffort: known.defaultEffort } : row;
-    });
-    this._modelsUpdatedAt = snapshot.updatedAt;
   }
   /**
    * Persist the snapshot through the Host form service.
@@ -206,32 +219,8 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     }
     return 'failed';
   }
-  /** Serialize snapshot writes so the newest successful refresh is the last one persisted. */
-  private _queueModelsWrite(snapshot: ModelCatalogSnapshot, epoch: number): void {
-    const serial = ++this._modelsWriteSerial;
-    this._modelsWrite = this._modelsWrite.then(async () => {
-      const result = await this._persistModels(snapshot);
-      if (serial !== this._modelsWriteSerial || epoch !== this._modelsEpoch) return;
-      if (result === 'unavailable') this._modelsError = '模型目录已更新，但当前配置服务不可写；重启后需要重新刷新。';
-      else if (result === 'failed') this._modelsError = '模型目录已更新，但保存失败；重启后需要重新刷新。';
-    }).catch(() => {
-      if (serial !== this._modelsWriteSerial || epoch !== this._modelsEpoch) return;
-      this._modelsError = '模型目录已更新，但保存失败；重启后需要重新刷新。';
-    });
-  }
   private _invalidateModels(): void {
-    const changed = this._modelsUpdatedAt !== undefined;
-    this._modelsEpoch++;
-    this._modelsController?.abort();
-    this._modelsPending = undefined;
-    this._models = MODELS;
-    this._modelsUpdatedAt = undefined;
-    this._modelsError = undefined;
-    this._restoreModels();
-    if (changed || this._modelsUpdatedAt !== undefined) {
-      try { this.dependencies.modelsChanged?.(); }
-      catch { /* A notification failure cannot undo an accepted credential write or cache invalidation. */ }
-    }
+    this._directory.invalidate();
   }
   private async _state(): Promise<CapturedState> {
     const credentials = this.ctx.get('credentials'), config = this._config();
@@ -239,7 +228,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     const resolved = await this._key(apiKeyRef(config), config.baseURL, apiRecord, sessionRecord);
     const key = resolved?.key;
     const state = { apiRecord, sessionRecord, key, keySource: resolved?.source, config };
-    const modelsFingerprint = hash({ key, baseURL: config.baseURL });
+    const modelsFingerprint = hash({ key, baseURL: config.baseURL, session: sessionRecord, desktop: config.useDesktopCredential });
     if (modelsFingerprint !== this._modelsFingerprint) {
       this._modelsFingerprint = modelsFingerprint;
       this._invalidateModels();
@@ -254,6 +243,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   @Remote('status')
   async status(): Promise<Status> {
     const state = await this._state();
+    if (this.dependencies.modelAutoRefresh !== false) this._directory.warm();
     const quotaConfig = hash({ desktop: state.config.useDesktopCredential, session: state.sessionRecord, refreshSeconds: state.config.quotaRefreshSeconds });
     if (this._quotaConfig !== quotaConfig) { this._quotaConfig = quotaConfig; this._invalidateQuota(); }
     return parseStatus({
@@ -262,13 +252,16 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       ...(this._quota.source ? { sessionSource: this._quota.source } : {}),
       quota: this._quota, login: this._login.status(), config: { ...state.config, apiKeyEnv: state.config.apiKeyEnv ?? '' }, guardedTurns: this.guardedTurns,
       ...(this.turnMonitorStatus ? { turnMonitor: this.turnMonitorStatus() } : {}),
-      models: this._models.map(row => {
+      models: this._directory.models().map(row => {
         const { id, name, group, contextWindow, maxOutputTokens, inputModalities } = row;
-        const protocol = state.config.apiProtocol ?? 'chat-completions';
+        const protocol = effectiveProtocol(row, state.config.apiProtocol, state.config.modelSettings?.[row.id]?.apiProtocol);
         const reasoningEfforts = modelReasoningEfforts(row, protocol);
         const defaultEffort = vendorDefaultEffort(row, protocol);
         return {
           id, name, group, enabled: isModelEnabled(id, state.config.modelSettings),
+          ...(row.coverage ? { coverage: row.coverage } : {}),
+          ...(row.nativeProtocol ? { nativeProtocol: row.nativeProtocol } : {}),
+          effectiveProtocol: protocol,
           ...(inputModalities === undefined ? {} : { inputModalities }),
           ...(contextWindow === undefined ? {} : { contextWindow }),
           ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
@@ -276,52 +269,17 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
           ...(defaultEffort === undefined ? {} : { defaultEffort }),
         };
       }),
-      modelsSource: this._modelsUpdatedAt ? 'openai' : 'builtin',
-      ...(this._modelsUpdatedAt ? { modelsUpdatedAt: this._modelsUpdatedAt } : {}),
-      ...(this._modelsError ? { modelsError: this._modelsError } : {}),
+      modelsSource: this._directory.updatedAt() ? 'openai' : 'builtin',
+      ...(this._directory.updatedAt() ? { modelsUpdatedAt: this._directory.updatedAt() } : {}),
+      ...(this._directory.error() ? { modelsError: this._directory.error() } : {}),
+      modelEntitlements: this._directory.entitlements(),
     });
   }
   @Remote('refreshModels')
   async refreshModels(): Promise<Status> {
-    const state = await this._state();
-    if (this._modelsPending) return this._modelsPending;
-    const key = state.key;
-    if (!key?.trim()) {
-      this._modelsError = '请先配置 API Key，再从当前网关读取模型目录。';
-      return this.status();
-    }
-    const epoch = this._modelsEpoch;
-    const controller = new AbortController();
-    this._modelsController = controller;
-    const signal = AbortSignal.any([controller.signal, this._lifetime.signal]);
-    const run = (async () => {
-      try {
-        const models = await (this.dependencies.fetchModels ?? fetchModelCatalog)(state.config.baseURL, key, signal);
-        await this._state();
-        if (signal.aborted || epoch !== this._modelsEpoch) return this.status();
-        const previousModels = this._models;
-        const previousUpdatedAt = this._modelsUpdatedAt;
-        const updatedAt = new Date().toISOString();
-        this._models = models;
-        this._modelsUpdatedAt = updatedAt;
-        this._modelsError = undefined;
-        let accepted = true;
-        try { this.dependencies.modelsChanged?.(); }
-        catch {
-          accepted = false;
-          this._models = previousModels;
-          this._modelsUpdatedAt = previousUpdatedAt;
-          this._modelsError = '模型目录已读取，但模型选择器更新失败，请重试。';
-        }
-        if (accepted) this._queueModelsWrite({ baseURL: state.config.baseURL, updatedAt, models }, epoch);
-      } catch (error) {
-        if (!signal.aborted && epoch === this._modelsEpoch) this._modelsError = error instanceof ModelDiscoveryError ? error.message : '模型列表更新失败，请稍后重试。';
-      }
-      return this.status();
-    })();
-    this._modelsPending = run;
-    try { return await run; }
-    finally { if (this._modelsPending === run) this._modelsPending = undefined; }
+    await this._state();
+    await this._directory.refresh();
+    return this.status();
   }
   /** Public website prices do not use gateway credentials or alter the model catalog. */
   @Remote('refreshPrices')
@@ -495,7 +453,7 @@ export function apply(ctx: Context, config: LiveConfig): void {
   installEotRecovery(ctx, () => current().emptyTurnGuard, () => turnMonitor.requestRetried());
   const replayKeys = new ReplayKeyStore(() => ctx.get('credentials'));
   const adapter = new CoRouterAdapter({
-    config: current, models: () => service.modelCatalog(), apiKey: (ref, baseURL) => service.resolveApiKey(ref, baseURL), onEmptyTurn: () => { service.guardedTurns++; },
+    config: current, models: () => service.modelCatalog(), readyModels: () => service.currentModelCatalog(), callIdentity: () => service.modelCallIdentity(), apiKey: (ref, baseURL) => service.resolveApiKey(ref, baseURL), onEmptyTurn: () => { service.guardedTurns++; },
     replayBindingSecret: signal => replayKeys.get(signal),
     imageDataUrl: async (ref, signal) => {
       const attachments = ctx.get('attachments');

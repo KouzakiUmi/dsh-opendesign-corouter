@@ -9,7 +9,8 @@ import { API_PROTOCOL_IDS } from '../src/protocol-options.js';
 import { protocolFor } from '../src/protocols/index.js';
 import { modelReasoningEfforts } from '../src/reasoning.js';
 
-const base: RuntimeConfig = { apiKeyEnv: 'OFFLINE_FIXTURE', baseURL: 'https://example.invalid/v1', useDesktopCredential: false, emptyTurnGuard: false, requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 };
+// The omitted-effort request fixture emits Chat SSE and verifies that explicit format.
+const base: RuntimeConfig = { apiProtocol: 'chat-completions', apiKeyEnv: 'OFFLINE_FIXTURE', baseURL: 'https://example.invalid/v1', useDesktopCredential: false, emptyTurnGuard: false, requestTimeoutMs: 1000, streamIdleTimeoutMs: 1000 };
 const options = (provider: string, model: string): GenerateOptions => ({ provider, model, messages: [{ role: 'user', content: [{ type: 'text', text: 'fixture' }] }] });
 const sse = () => new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: 'ok' } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
 async function drain(stream: AsyncIterable<StreamChunk>): Promise<void> { for await (const _chunk of stream) { /* consume */ } }
@@ -97,6 +98,27 @@ test('the Host materializes the documented default instead of leaving the effort
     // Without a documented default the route keeps the provider's own answer.
     assert.equal((await ctx.llm.resolveCallConfig({ provider: PAID_PROVIDER, model: unstated.id })).reasoningEffort, undefined);
   } finally { registration(); adapter.dispose(); await fiber.dispose(); }
+});
+
+test('auto and model protocol overrides share effort intersection in metadata and requests', async () => {
+  let config: RuntimeConfig = { ...base, apiProtocol: 'auto' };
+  const wires: Record<string, unknown>[] = [];
+  const adapter = new CoRouterAdapter({ config: () => config, apiKey: async () => 'fixture-key', fetch: async (_url, init) => {
+    wires.push(JSON.parse(String(init?.body)));
+    return new Response('{}', { status: 401 });
+  } });
+  const request = options(PAID_PROVIDER, 'muse-spark-1.3');
+  try {
+    assert.deepEqual((await adapter.resolveModel(PAID_PROVIDER, request.model)).reasoning?.efforts.map(item => item.id), ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+    await assert.rejects(drain(adapter.stream(request)), { code: 'AUTH' });
+    assert.deepEqual(wires[0]?.reasoning, { effort: 'high', summary: 'auto' });
+    config = { ...base, apiProtocol: 'responses', modelSettings: { [request.model]: { apiProtocol: 'messages' } } };
+    assert.deepEqual((await adapter.resolveModel(PAID_PROVIDER, request.model)).reasoning?.efforts.map(item => item.id), ['low', 'medium', 'high', 'xhigh', 'max']);
+    await assert.rejects(drain(adapter.stream(request)), { code: 'AUTH' });
+    assert.deepEqual(wires[1]?.output_config, { effort: 'high' });
+    await assert.rejects(drain(adapter.stream({ ...request, reasoningEffort: ReasoningEffortId('minimal') })), { code: 'UNSUPPORTED_OPTION' });
+    assert.equal(wires.length, 2, 'invalid per-model-protocol effort fails before dispatch');
+  } finally { adapter.dispose(); }
 });
 
 test('an omitted effort travels as the documented default, never as an implicit off', async () => {

@@ -14,6 +14,8 @@ export interface ModelCatalogSnapshot {
   /** 成功读取时间的 ISO-8601 字符串。 */
   updatedAt: string;
   models: readonly CatalogModel[];
+  /** HMAC binding to the effective runtime key, gateway, workspace and member. */
+  binding?: string;
 }
 
 /**
@@ -25,11 +27,12 @@ export interface ModelCatalogSnapshot {
 export function parseModelCatalogSnapshot(value: unknown): ModelCatalogSnapshot | undefined {
   const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/u;
   const GROUPS = ['plan', 'paid'];
-  const KEYS = ['id', 'name', 'group', 'contextWindow', 'maxOutputTokens', 'inputModalities', 'reasoningEfforts', 'defaultEffort'];
+   const KEYS = ['id', 'name', 'group', 'contextWindow', 'maxOutputTokens', 'inputModalities', 'reasoningEfforts', 'defaultEffort', 'nativeProtocol', 'coverage'];
   /** Same reserved keys the per-model settings reject; they must not reach a plain copy. */
   const RESERVED = ['__proto__', 'constructor', 'prototype'];
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const snapshot = value as Record<string, unknown>;
+  if (snapshot.binding !== undefined && (typeof snapshot.binding !== 'string' || !/^[a-f0-9]{64}$/u.test(snapshot.binding))) return undefined;
   if (typeof snapshot.baseURL !== 'string' || snapshot.baseURL.length === 0 || snapshot.baseURL.length > 2048) return undefined;
   // Normalize exactly like the runtime base URL so values written by older versions still match.
   let base: URL;
@@ -51,6 +54,14 @@ export function parseModelCatalogSnapshot(value: unknown): ModelCatalogSnapshot 
     if (typeof name !== 'string' || name.trim().length === 0 || name.length > 128) return undefined;
     if (typeof group !== 'string' || !GROUPS.includes(group)) return undefined;
     const model: CatalogModel = { id, name, group: group as 'plan' | 'paid' };
+    if (item.nativeProtocol !== undefined) {
+      if (!['chat-completions', 'responses', 'messages'].includes(String(item.nativeProtocol))) return undefined;
+      model.nativeProtocol = item.nativeProtocol as NonNullable<CatalogModel['nativeProtocol']>;
+    }
+    if (item.coverage !== undefined) {
+      if (!['included', 'not-included', 'unknown'].includes(String(item.coverage))) return undefined;
+      model.coverage = item.coverage as NonNullable<CatalogModel['coverage']>;
+    }
     if (item.contextWindow !== undefined) {
       if (!Number.isSafeInteger(item.contextWindow) || (item.contextWindow as number) <= 0 || (item.contextWindow as number) > 100_000_000) return undefined;
       model.contextWindow = item.contextWindow as number;
@@ -88,5 +99,5 @@ export function parseModelCatalogSnapshot(value: unknown): ModelCatalogSnapshot 
     seen.add(id);
     models.push(model);
   }
-  return { baseURL, updatedAt: snapshot.updatedAt, models };
+  return { baseURL, updatedAt: snapshot.updatedAt, models, ...(snapshot.binding === undefined ? {} : { binding: snapshot.binding as string }) };
 }

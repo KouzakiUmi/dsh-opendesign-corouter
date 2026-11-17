@@ -14,7 +14,8 @@ test('configuration rejects unsafe URLs before persistence and exposes live defa
   assert.equal(config.turnReviewNoProgressLimit, 2);
   assert.equal(config.useDesktopCredential, true);
   assert.equal(config.baseURL, 'https://amr-link.open-design.ai/v1');
-  assert.equal(config.apiProtocol, 'chat-completions');
+  assert.equal(config.apiProtocol, 'auto');
+  assert.equal(readConfig(Config({ apiProtocol: 'chat-completions' })).apiProtocol, 'chat-completions', 'legacy explicit Chat stays explicit');
   assert.deepEqual(config.modelSettings, {});
   assert.equal(config.quotaRefreshSeconds, 60);
   assert.equal(config.maxRequestImageBytes, 20 * 1024 * 1024);
@@ -81,7 +82,7 @@ test('real Host volatile form projection survives repeated JSON hops before brow
   assert.ok(form);
   let current = form;
   const values = readConfig(Config({ emptyTurnGuard: false, useDesktopCredential: false,
-    modelSettings: { model: { imageInput: false, contextTier: 'maximum' }, legacy: { contextWindow: 500_000 } } }));
+    modelSettings: { model: { imageInput: false, contextTier: 'maximum', apiProtocol: 'messages' }, legacy: { contextWindow: 500_000, apiProtocol: 'auto' } } }));
   for (let hop = 0; hop < 4; hop++) {
     const wire = JSON.stringify(current.toJSON());
     const decoded = rehydrateInFreshVM(wire);
@@ -90,6 +91,7 @@ test('real Host volatile form projection survives repeated JSON hops before brow
     assert.throws(() => decoded({ ...values, baseURL: 'https://user:secret@example.com/v1' }));
     assert.throws(() => decoded({ ...values, modelSettings: { model: { apiKey: 'secret' } } }));
     assert.throws(() => decoded({ ...values, modelSettings: { model: { contextTier: 'extended', contextWindow: 500_000 } } }));
+    assert.throws(() => decoded({ ...values, modelSettings: { model: { apiProtocol: 'gemini' } } }));
     current = new Schema(JSON.parse(wire));
   }
 });
@@ -97,7 +99,7 @@ test('real Host volatile form projection survives repeated JSON hops before brow
 test('JSON-roundtripped settings validate complete checkbox values in a fresh VM', () => {
   const decoded = rehydrateInFreshVM();
   assert.deepEqual(JSON.parse(JSON.stringify(decoded({}))), readConfig(Config({})));
-  const settings = { 'vendor/model:v1': { enabled: false, imageInput: true, temperature: 0, topP: 1, maxTokens: 4096, contextWindow: 8192, reasoningEffort: 'high' } };
+  const settings = { 'vendor/model:v1': { enabled: false, imageInput: true, temperature: 0, topP: 1, maxTokens: 4096, contextWindow: 8192, reasoningEffort: 'high', apiProtocol: 'messages' as const } };
   for (const emptyTurnGuard of [true, false]) {
     for (const useDesktopCredential of [true, false]) {
       const input = {
@@ -164,7 +166,7 @@ test('the persisted gateway catalog snapshot is validated and survives rehydrati
     baseURL: 'https://amr-link.open-design.ai/v1',
     updatedAt: '2026-10-30T01:00:00.000Z',
     models: [
-      { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', group: 'plan', contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'], reasoningEfforts: ['low', 'high'] },
+      { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', group: 'plan', contextWindow: 1_000_000, maxOutputTokens: 384_000, inputModalities: ['text', 'image'], reasoningEfforts: ['low', 'high'], nativeProtocol: 'responses' },
       { id: 'gpt-6-astra', name: 'GPT-6 Astra', group: 'paid' },
     ],
   };
@@ -186,6 +188,7 @@ test('the persisted gateway catalog snapshot is validated and survives rehydrati
     { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', apiKey: 'fixture-secret' }] },
     { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', contextWindow: 0 }] },
     { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', inputModalities: ['audio'] }] },
+    { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', nativeProtocol: 'auto' }] },
     // A snapshot must never pass here and then fail the status transport.
     { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', inputModalities: [] }] },
     { ...snapshot, models: [{ id: 'x', name: 'X', group: 'paid', inputModalities: ['image'] }] },

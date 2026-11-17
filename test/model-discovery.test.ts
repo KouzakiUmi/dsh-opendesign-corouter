@@ -51,6 +51,7 @@ test('GET {base}/models carries Bearer auth, attribution and refuses redirects',
     inputModalities: ['text'],
     reasoningEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     defaultEffort: 'max',
+    nativeProtocol: 'chat-completions',
   }]);
   assert.equal(calls.length, 1);
   const call = calls[0]!;
@@ -92,7 +93,7 @@ test('known ids inherit catalog grouping and capabilities; new ids are paid rows
     data: [
       { id: 'claude-opus-5', object: 'model', name: 'api-supplied-name' },
       { id: 'deepseek-v4.1-flash', object: 'model', name: 'api-supplied-name' },
-      { id: 'brand-new-chat', object: 'model', name: '  Brand New  ', context_budget: 999999, capabilities: { vision: true }, architecture: { output_modalities: ['image'] } },
+      { id: 'brand-new-chat', object: 'model', name: '  Brand New  ', context_budget: 999999, capabilities: { vision: true }, architecture: { output_modalities: ['image'] }, nativeProtocol: 'messages' },
     ],
   }));
   const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
@@ -117,6 +118,7 @@ test('known ids inherit catalog grouping and capabilities; new ids are paid rows
   assert.equal(fresh.maxOutputTokens, undefined);
   assert.equal(fresh.inputModalities, undefined);
   assert.equal(fresh.reasoningEfforts, undefined);
+  assert.equal(fresh.nativeProtocol, undefined, 'untrusted protocol hints are not native-route evidence');
 });
 
 test('five verified API additions retain their catalog labels and evidenced capabilities', async () => {
@@ -147,6 +149,22 @@ test('five verified API additions retain their catalog labels and evidenced capa
   }
 });
 
+test('seven scoped additions preserve only individually evidenced capabilities', async () => {
+  const expected = [
+    { id: 'claude-fable-5.2', contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'], reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high', nativeProtocol: 'messages', group: 'paid' },
+    { id: 'deepseek-v4.1-flash-eco', group: 'plan' },
+    { id: 'gemini-4-carbon', group: 'paid' },
+    { id: 'hy4', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: ['text', 'image'], reasoningEfforts: ['high'], defaultEffort: 'high', group: 'paid' },
+    { id: 'hy4-flash', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: ['text', 'image'], reasoningEfforts: ['high'], defaultEffort: 'high', group: 'paid' },
+    { id: 'muse-ember-1.0', group: 'paid' },
+    { id: 'qwen4-max', contextWindow: 1_000_000, maxOutputTokens: 131_072, inputModalities: ['text', 'image'], reasoningEfforts: ['low', 'high', 'xhigh'], defaultEffort: 'high', group: 'paid' },
+  ];
+  const { fetcher } = stub(() => Response.json({ data: expected.map(({ id }) => ({ id, metadata: { cost: 'low', capability: 'best_quality' } })) }));
+  const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
+  assert.equal(rows.length, 7);
+  assert.deepEqual(rows.map(({ name: _label, ...row }) => row), expected);
+});
+
 test('discovery preserves GPT-6.1 Terra catalog metadata', async () => {
   const { fetcher } = stub(() => Response.json({ data: [{ id: 'gpt-6.1-terra', name: 'untrusted override' }] }));
   const [model] = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
@@ -155,6 +173,7 @@ test('discovery preserves GPT-6.1 Terra catalog metadata', async () => {
     contextWindow: 1_050_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'],
     reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     defaultEffort: 'medium',
+    nativeProtocol: 'responses',
   });
 });
 
@@ -206,7 +225,7 @@ test('drops unusable and duplicate rows instead of inventing models', async () =
 });
 
 test('explicit media-output models stay out of the chat catalog', async () => {
-  const media = ['gpt-image-2', 'nano-banana-2', 'seedream-5-lite', 'seedream-5-pro', 'imagen-4', 'veo-3', 'doubao-seedance-1', 'sora-2'];
+  const media = ['gpt-image-2', 'gpt-image-2.6-flare', 'gpt-image-2.6-sunburst', 'wan-2.7', 'nano-banana-2', 'seedream-5-lite', 'seedream-5-pro', 'imagen-4', 'veo-3', 'doubao-seedance-1', 'sora-2'];
   const { fetcher } = stub(() => Response.json({ data: [...media.map(id => ({ id })), { id: 'gpt-6-luna' }] }));
   const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
   assert.deepEqual(rows.map(row => row.id), ['gpt-6-luna']);

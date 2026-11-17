@@ -8,7 +8,7 @@
     },
     {
       "label": "1-light-模型",
-      "checked": 370,
+      "checked": 454,
       "minimum": 5.27
     },
     {
@@ -18,17 +18,17 @@
     },
     {
       "label": "1-light-高级",
-      "checked": 64,
+      "checked": 65,
       "minimum": 5.8
     },
     {
       "label": "1-light-model-options",
-      "checked": 377,
+      "checked": 458,
       "minimum": 4.97
     },
     {
       "label": "1-light-context-quick",
-      "checked": 386,
+      "checked": 467,
       "minimum": 4.97
     },
     {
@@ -48,7 +48,7 @@
     },
     {
       "label": "2-dark-模型",
-      "checked": 370,
+      "checked": 454,
       "minimum": 9.25
     },
     {
@@ -58,17 +58,17 @@
     },
     {
       "label": "2-dark-高级",
-      "checked": 64,
+      "checked": 65,
       "minimum": 9.25
     },
     {
       "label": "2-dark-model-options",
-      "checked": 377,
+      "checked": 458,
       "minimum": 9.25
     },
     {
       "label": "2-dark-context-quick",
-      "checked": 386,
+      "checked": 467,
       "minimum": 9.25
     },
     {
@@ -88,7 +88,7 @@
     },
     {
       "label": "3-light-模型",
-      "checked": 370,
+      "checked": 454,
       "minimum": 5.27
     },
     {
@@ -98,17 +98,17 @@
     },
     {
       "label": "3-light-高级",
-      "checked": 64,
+      "checked": 65,
       "minimum": 5.8
     },
     {
       "label": "3-light-model-options",
-      "checked": 377,
+      "checked": 458,
       "minimum": 4.97
     },
     {
       "label": "3-light-context-quick",
-      "checked": 386,
+      "checked": 467,
       "minimum": 4.97
     },
     {
@@ -128,22 +128,22 @@
     },
     {
       "label": "forced-colors-protocol-options",
-      "checked": 64,
+      "checked": 65,
       "minimum": 13.98
     },
     {
       "label": "forced-colors-compact-image-controls",
-      "checked": 370,
+      "checked": 454,
       "minimum": 13.98
     },
     {
       "label": "forced-colors-context-quick",
-      "checked": 379,
+      "checked": 463,
       "minimum": 13.98
     },
     {
       "label": "forced-colors-effort-editor",
-      "checked": 377,
+      "checked": 458,
       "minimum": 13.98
     },
     {
