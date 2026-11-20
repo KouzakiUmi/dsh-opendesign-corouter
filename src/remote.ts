@@ -125,6 +125,8 @@ export interface Status {
   modelsUpdatedAt?: string;
   modelsError?: string;
   modelEntitlements?: ModelEntitlements;
+  /** Last successful public price snapshot, persisted across rebuilds; restored copies are marked stale. */
+  prices?: PriceCatalog;
 }
 
 export interface StartLoginRequest {
@@ -389,6 +391,7 @@ export function parseStatus(value: unknown): Status {
     ...(value.modelsUpdatedAt === undefined ? {} : { modelsUpdatedAt: isoTime(value.modelsUpdatedAt, '模型更新时间') }),
     ...(value.modelsError === undefined ? {} : { modelsError: text(value.modelsError, '模型更新提示', MAX_MESSAGE) }),
     ...(value.modelEntitlements === undefined ? {} : { modelEntitlements: parseModelEntitlements(value.modelEntitlements) }),
+    ...(value.prices === undefined ? {} : { prices: parsePriceCatalog(value.prices) }),
   };
 }
 

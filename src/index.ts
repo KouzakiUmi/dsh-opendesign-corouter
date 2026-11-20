@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID, createHash, createHmac } from 'node:crypto';
 import type { Context } from '@deepseek-ai/cordis';
 import { credentialKey, credentialRef, type CredentialRecord, type CredentialProvider } from '@deepseek-ai/dsh-credentials';
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment';
@@ -15,6 +15,7 @@ import { installTurnMonitor } from './turn-monitor.js';
 import type { TurnMonitorStatus } from './turn-monitor-status.js';
 import { fetchModelCatalog } from './model-discovery.js';
 import { ModelDirectory } from './model-directory.js';
+import { SelectorBridge } from './selector-bridge.js';
 import { resolveModelAccount, type ModelAccount, type EntitlementResult, type ModelScope } from './model-entitlements.js';
 import { effectiveProtocol } from './protocol-options.js';
 import { fetchPricingSnapshot } from './pricing.js';
@@ -23,7 +24,10 @@ import { modelReasoningEfforts, vendorDefaultEffort } from './reasoning.js';
 import type { CatalogModel } from './catalog.js';
 import { Config, SETTINGS_NS, PLAN_PROVIDER, PAID_PROVIDER, apiKeyRef, readConfig, type LiveConfig } from './config.js';
 import { parseModelCatalogSnapshot, type ModelCatalogSnapshot } from './model-catalog-snapshot.js';
-import { resolveSession, deviceGrant, isOfficialRuntimeUrl, readDesktopCredential, type LoginGrant } from './auth.js';
+import { parseQuotaCache, quotaCacheSnapshot, restoredQuotaSnapshot } from './quota-cache.js';
+import type { QuotaCacheRecord } from './quota-cache.js';
+import { priceCacheRecord, restoredPriceCatalog } from './price-cache.js';
+import { resolveSession, deviceGrant, isOfficialRuntimeUrl, readDesktopCredential, COOKIE_ENV_REFS, type LoginGrant } from './auth.js';
 import { ConsoleLogin, type LoginOptions } from './login.js';
 import { ActivationLauncher, type ActivationLauncherOptions } from './browser-open.js';
 import { readQuota, ConsoleError, type QuotaSnapshot } from './quota.js';
@@ -41,6 +45,10 @@ const API_KEY = credentialKey(name, 'api-key');
 const SESSION = credentialKey(name, 'console');
 /** The Host settings service's revision-conflict code (`SettingsConflictError.code`). */
 const SETTINGS_CONFLICT = 'SETTINGS_CONFLICT';
+/** A saved reading keeps its numbers without a rewrite; refresh its timestamp at this cadence. */
+const QUOTA_CACHE_WRITE_MS = 6 * 60 * 60_000;
+/** Public price snapshots use the same write cadence: content change or an old timestamp. */
+const PRICE_CACHE_WRITE_MS = 6 * 60 * 60_000;
 /**
  * Both routes authenticate themselves: a saved API key, a profile-named reference, or an
  * OpenDesign device sign-in. Declaring that path tells the directory the plugin owns its
@@ -53,9 +61,9 @@ const SETTINGS_CONFLICT = 'SETTINGS_CONFLICT';
  */
 const NATIVE_AUTH = { env: [], oauth: true } as const;
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value) ?? '').digest('hex');
-/** The persisted catalog snapshot never participates in revision or login fingerprints. */
+/** The persisted catalog and price snapshots never participate in revision or login fingerprints. */
 const stableConfig = (config: ReturnType<typeof readConfig>): ReturnType<typeof readConfig> => {
-  const { modelCatalog: _snapshot, ...rest } = config;
+  const { modelCatalog: _snapshot, priceCache: _prices, ...rest } = config;
   return rest;
 };
 const needLogin = (): QuotaSnapshot => ({ state: 'need-login', updatedAt: new Date().toISOString(), windows: [], balances: {}, note: '请在连接与登录页完成账号授权后读取额度。' });
@@ -106,6 +114,14 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   private _quotaEpoch = 0;
   private _quotaPending: Promise<QuotaSnapshot> | undefined;
   private _quotaController: AbortController | undefined;
+  /** Identity fingerprint of the saved reading already considered by this instance. */
+  private _quotaCacheSeen: string | undefined;
+  /** True while the shown reading came from the saved cache rather than a live read. */
+  private _quotaRestored = false;
+  /** Content key of the saved reading; a timestamp-only difference never rewrites settings. */
+  private _quotaCacheKey = '';
+  private _quotaCacheAt = 0;
+  private _quotaWrite: Promise<void> = Promise.resolve();
   guardedTurns: number = 0;
   turnMonitorStatus: (() => TurnMonitorStatus) | undefined;
   private readonly _directory: ModelDirectory;
@@ -113,18 +129,33 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   private _modelsFingerprint = '';
   private _prices: PriceCatalog | undefined;
   private _pricesPending: Promise<PriceCatalog> | undefined;
+  /** Content key of the saved price snapshot; a timestamp-only difference never rewrites settings. */
+  private _priceCacheKey = '';
+  private _priceCacheAt = 0;
+  private _priceWrite: Promise<void> = Promise.resolve();
   modelCatalog(): readonly CatalogModel[] { return this._directory.models(); }
   modelWorkspace(): string | undefined { return this._directory.workspace(); }
   modelCallIdentity(): import('./model-directory.js').DirectoryCallIdentity | undefined { return this._directory.callIdentity(); }
   async currentModelCatalog(): Promise<readonly CatalogModel[]> {
     await this._state();
-    if (this._directory.updatedAt() === undefined) await this._directory.refresh();
+    // A saved, identity-bound directory answers without one preflight per model.
+    if (this._directory.updatedAt() === undefined) await this._directory.ensurePublished();
     else if (this.dependencies.modelAutoRefresh !== false) this._directory.warm();
     return this._directory.models();
   }
   constructor(ctx: Context, config: () => ReturnType<typeof readConfig>, readonly dependencies: HostDependencies = { resolveSession, readQuota, readDesktopQuota }) {
     super(ctx, 'openDesignCoRouter');
     this._config = config;
+    // A saved public price snapshot answers the first read after a rebuild, marked stale.
+    const savedPrices = this._config().priceCache;
+    if (savedPrices !== undefined) {
+      const restored = restoredPriceCatalog(savedPrices);
+      if (restored !== undefined) {
+        this._prices = restored;
+        this._priceCacheKey = JSON.stringify([savedPrices.state, savedPrices.models]);
+        this._priceCacheAt = Number.isFinite(Date.parse(savedPrices.fetchedAt)) ? Date.parse(savedPrices.fetchedAt) : 0;
+      }
+    }
     this._catalogKeys = new ReplayKeyStore(() => ctx.get('credentials'));
     this._directory = new ModelDirectory({
       config: this._config,
@@ -193,8 +224,12 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
     const [apiRecord, sessionRecord] = await Promise.all([credentials?.readRecord(API_KEY), credentials?.readRecord(SESSION)]);
     return (await this._key(ref, baseURL, apiRecord, sessionRecord))?.key;
   }
+  /** Persist the gateway catalog snapshot; see {@link _persistField} for the write policy. */
+  private async _persistModels(value: ModelCatalogSnapshot): Promise<'saved' | 'unsupported' | 'unavailable' | 'failed'> {
+    return this._persistField({ modelCatalog: value });
+  }
   /**
-   * Persist the snapshot through the Host form service.
+   * Persist one cache field through the Host form service.
    * `unsupported` means no settings service is composed (nothing to report);
    * `unavailable` means the service exists but exposes no writable form for this plugin.
    *
@@ -202,7 +237,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
    * only a concurrent revision conflict (`SETTINGS_CONFLICT`) is worth re-reading the revision
    * and trying once more. Every other failure repeats identically and is reported immediately.
    */
-  private async _persistModels(value: ModelCatalogSnapshot): Promise<'saved' | 'unsupported' | 'unavailable' | 'failed'> {
+  private async _persistField(patch: object): Promise<'saved' | 'unsupported' | 'unavailable' | 'failed'> {
     const settings = this.ctx.get('settings') as unknown as SettingsWriter | undefined;
     if (!settings) return 'unsupported';
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -211,7 +246,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       catch { return 'unavailable'; }
       if (!descriptor) return 'unavailable';
       try {
-        await settings.update(SETTINGS_NS, { modelCatalog: value }, descriptor.revision);
+        await settings.update(SETTINGS_NS, patch, descriptor.revision);
         return 'saved';
       } catch (error) {
         if (attempt > 0 || !record(error) || error.code !== SETTINGS_CONFLICT) return 'failed';
@@ -239,13 +274,113 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
   }
   private _conflict() { return new RemoteError('opendesign/revision-conflict', '连接或凭据已改变，请刷新页面后重试', undefined); }
   private _expect(revision: string) { if (revision !== this._revision) throw this._conflict(); }
-  private _invalidateQuota(): void { this._quotaAt = 0; this._quotaEpoch++; this._quota = unreadQuota(); this._quotaIdentity = undefined; this._quotaController?.abort(); this._quotaPending = undefined; }
+  private _invalidateQuota(): void { this._quotaAt = 0; this._quotaEpoch++; this._quota = unreadQuota(); this._quotaIdentity = undefined; this._quotaRestored = false; this._quotaController?.abort(); this._quotaPending = undefined; this._quotaCacheSeen = undefined; }
+  /**
+   * Publish the saved reading for this identity.
+   *
+   * Every settings write can rebuild this plugin, and an in-memory-only reading was gone by
+   * the next UI read: the settings page opened on “not read yet” until someone refreshed by
+   * hand. The saved reading answers that read; the upstream read stays a separate step.
+   */
+  private async _restoreQuota(state: CapturedState): Promise<void> {
+    const saved = state.config.quotaCache;
+    if (saved === undefined) return;
+    if (this._quotaAt !== 0 || this._quotaPending !== undefined) return;
+    if (this._quotaCacheSeen === saved.binding) return;
+    this._quotaCacheSeen = saved.binding;
+    const restored = restoredQuotaSnapshot(saved);
+    if (restored === undefined) return;
+    const binding = await this._quotaBinding(state);
+    if (binding === undefined || saved.binding !== binding) return;
+    if (this._quotaAt !== 0 || this._quotaPending !== undefined) return;
+    this._quota = restored;
+    this._quotaIdentity = undefined;
+    this._quotaRestored = true;
+    // The next read repeats these numbers; remember what is already saved so it does not
+    // rewrite the profile (a settings write rebuilds this plugin) once per refresh cycle.
+    this._quotaCacheKey = this._quotaContentKey(saved.snapshot);
+    this._quotaCacheAt = Number.isFinite(Date.parse(saved.readAt)) ? Date.parse(saved.readAt) : 0;
+  }
+  /**
+   * Identity the saved reading belongs to.
+   *
+   * The payload names the gateway, the credential records, the desktop login and the
+   * environment cookie references; the keyed digest keeps those values out of ordinary
+   * settings while still failing closed for another account. Undefined means the binding
+   * secret is unavailable, so nothing is saved or restored.
+   */
+  private async _quotaBinding(state: CapturedState): Promise<string | undefined> {
+    const config = this._config();
+    let secret: Uint8Array;
+    try { secret = await this._catalogKeys.get(this._lifetime.signal); }
+    catch { return undefined; }
+    try {
+      const environment = launchEnvironmentOf(this.ctx);
+      const envRefs = COOKIE_ENV_REFS.map(ref => environment.get(ref)?.value ?? '');
+      let desktop: unknown;
+      if (config.useDesktopCredential) {
+        const read = await (this.dependencies.readDesktopCredential ?? readDesktopCredential)();
+        desktop = read.state === 'credential' ? { profile: read.credential.profile, key: read.credential.runtimeKey ?? read.credential.controlKey } : read.state;
+      }
+      return createHmac('sha256', secret).update(JSON.stringify(['opendesign-quota-v1', config.baseURL, config.useDesktopCredential, desktop ?? null, state.apiRecord ?? null, state.sessionRecord ?? null, envRefs])).digest('hex');
+    } finally { secret.fill(0); }
+  }
+  /** What a saved reading records; the refresh plan, failure counters and staleness are runtime only. */
+  private _quotaContentKey(snapshot: QuotaSnapshot): string {
+    return JSON.stringify([snapshot.state, snapshot.source, snapshot.tier, snapshot.eligible, snapshot.windows, snapshot.balances, snapshot.subscriptionPeriodStart, snapshot.subscriptionPeriodEnd, snapshot.note]);
+  }
+  /** Save the committed reading for the next instance; only readings with data are kept. */
+  private _cacheQuota(result: QuotaSnapshot): void {
+    if (result.state === 'need-login' || result.state === 'error') return;
+    const snapshot = quotaCacheSnapshot(result);
+    if (snapshot.windows.length === 0 && Object.keys(snapshot.balances).length === 0) return;
+    // A read repeats its numbers every minute; only a content change (or an old timestamp) writes.
+    const content = this._quotaContentKey(snapshot);
+    if (content === this._quotaCacheKey && Date.now() - this._quotaCacheAt < QUOTA_CACHE_WRITE_MS) return;
+    this._quotaWrite = this._quotaWrite.then(async () => {
+      if (this._lifetime.signal.aborted) return;
+      const state = await this._state();
+      const binding = await this._quotaBinding(state);
+      if (binding === undefined) return;
+      const record = parseQuotaCache({ version: 1, binding, readAt: snapshot.updatedAt, snapshot });
+      if (record === undefined) return;
+      const saved = await this._persistQuota(record);
+      if (this._lifetime.signal.aborted) return;
+      if (saved === 'saved') { this._quotaCacheKey = content; this._quotaCacheAt = Date.now(); }
+      else this._quotaCacheKey = '';
+    }).catch(() => { this._quotaCacheKey = ''; });
+  }
+  /** Persist one saved reading; like the catalog snapshot, only a revision conflict is retried. */
+  private async _persistQuota(value: QuotaCacheRecord): Promise<'saved' | 'unsupported' | 'unavailable' | 'failed'> {
+    return this._persistField({ quotaCache: value });
+  }
+  /** Persist one saved public price snapshot; only a revision conflict is retried. */
+  private async _persistPrices(value: NonNullable<ReturnType<typeof priceCacheRecord>>): Promise<'saved' | 'unsupported' | 'unavailable' | 'failed'> {
+    return this._persistField({ priceCache: value });
+  }
+  /** Save the committed price snapshot for the next instance; only successful, non-empty reads are kept. */
+  private _cachePrices(result: PriceCatalog): void {
+    const record = priceCacheRecord(result);
+    if (record === undefined) return;
+    // A fetch repeats the same quotes; only a content change (or an old timestamp) writes.
+    const content = JSON.stringify([record.state, record.models]);
+    if (content === this._priceCacheKey && Date.now() - this._priceCacheAt < PRICE_CACHE_WRITE_MS) return;
+    this._priceWrite = this._priceWrite.then(async () => {
+      if (this._lifetime.signal.aborted) return;
+      const saved = await this._persistPrices(record);
+      if (this._lifetime.signal.aborted) return;
+      if (saved === 'saved') { this._priceCacheKey = content; this._priceCacheAt = Date.now(); }
+      else this._priceCacheKey = '';
+    }).catch(() => { this._priceCacheKey = ''; });
+  }
   @Remote('status')
   async status(): Promise<Status> {
     const state = await this._state();
     if (this.dependencies.modelAutoRefresh !== false) this._directory.warm();
     const quotaConfig = hash({ desktop: state.config.useDesktopCredential, session: state.sessionRecord, refreshSeconds: state.config.quotaRefreshSeconds });
     if (this._quotaConfig !== quotaConfig) { this._quotaConfig = quotaConfig; this._invalidateQuota(); }
+    // The UI read answers from the saved reading; the upstream read stays a separate step.
+    await this._restoreQuota(state);
     return parseStatus({
       revision: this._revision, apiKeyConfigured: Boolean(state.key?.trim()),
       ...(state.keySource ? { apiKeySource: state.keySource } : {}),
@@ -276,6 +411,7 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       ...(this._directory.updatedAt() ? { modelsUpdatedAt: this._directory.updatedAt() } : {}),
       ...(this._directory.error() ? { modelsError: this._directory.error() } : {}),
       modelEntitlements: this._directory.entitlements(),
+      ...(this._prices === undefined ? {} : { prices: this._prices }),
     });
   }
   @Remote('refreshModels')
@@ -297,6 +433,8 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
           models: result.models.map(({ id, tiers }) => ({ id, tiers })),
         });
         this._prices = next;
+        // Keep the UI read independent of the next website read.
+        this._cachePrices(next);
         return next;
       } catch {
         return this._prices === undefined
@@ -382,7 +520,9 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       const authFailure = error instanceof ConsoleError && error.kind === 'auth';
       refreshFailed = !authFailure;
       const hasReadings = this._quota.windows.length > 0 || Object.keys(this._quota.balances).length > 0;
-      if (!authFailure && identity !== undefined && identity === this._quotaIdentity && hasReadings) {
+      // The saved reading already matched this identity; only an observed identity switch clears it.
+      const sameIdentity = identity === this._quotaIdentity || (this._quotaRestored && this._quotaIdentity === undefined);
+      if (!authFailure && identity !== undefined && sameIdentity && hasReadings) {
         result = { ...this._quota, state: 'partial', stale: true, note: '额度刷新失败，当前显示上次成功读数。' };
       } else {
         result = { ...needLogin(), state: authFailure ? 'need-login' : 'error', note: error instanceof ConsoleError ? error.message : '额度读取暂时失败；请检查连接或重新登录' };
@@ -402,6 +542,9 @@ export class OpenDesignCoRouterService extends TypertRemoteService {
       }
       this._quota = result;
       this._quotaIdentity = identity;
+      if (!refreshFailed) this._quotaRestored = false;
+      // Keep the UI read independent of the next upstream read.
+      this._cacheQuota(result);
     }
     return epoch === this._quotaEpoch ? result : this._quota;
   }
@@ -466,14 +609,22 @@ export function apply(ctx: Context, config: LiveConfig): void {
     },
   });
   const registration = ctx.llm.registerAdapter([PLAN_PROVIDER, PAID_PROVIDER], adapter);
-  modelsChanged = () => registration.replace([PLAN_PROVIDER, PAID_PROVIDER]);
-  let configFingerprint = hash(current());
-  ctx.on('loader/volatile-update', () => {
-    const next = hash(current());
-    if (next === configFingerprint) return;
-    configFingerprint = next;
-    modelsChanged();
+  // The selector bridge is the only path from plugin state to the Host model selector:
+  // it diffs the advertised listModels projection, so a sampling/tier/protocol/quota write
+  // or an identical directory refresh never rebuilds session directories (which used to
+  // gray out and refresh the chat context control on every save).
+  const bridge = new SelectorBridge({
+    projection: () => {
+      const config = current();
+      return JSON.stringify(service.modelCatalog().map(row => {
+        const effective = applyModelSettings(row, config.modelSettings?.[row.id]);
+        return [row.id, row.group, row.name, isModelEnabled(row.id, config.modelSettings), effective.inputModalities ?? null];
+      }));
+    },
+    replace: () => registration.replace([PLAN_PROVIDER, PAID_PROVIDER]),
   });
+  modelsChanged = () => bridge.notify();
+  ctx.on('loader/volatile-update', () => bridge.notify());
   ctx.llm.registerModelDiscovery(SETTINGS_NS, async (request, signal) => {
     if (request.provider !== undefined && ![PLAN_PROVIDER, PAID_PROVIDER].includes(request.provider)) throw new LlmError('不是本插件的模型通道', 'INVALID_REQUEST');
     const config = current();
@@ -490,5 +641,5 @@ export function apply(ctx: Context, config: LiveConfig): void {
     { provider: PLAN_PROVIDER, displayName: 'OpenDesign CoRouter · 套餐赠送', settingsNs: SETTINGS_NS, settingsPath: [], defaultBaseURL: current().baseURL, nativeAuth: NATIVE_AUTH },
     { provider: PAID_PROVIDER, displayName: 'OpenDesign CoRouter · 付费模型', settingsNs: SETTINGS_NS, settingsPath: [], defaultBaseURL: current().baseURL, nativeAuth: NATIVE_AUTH },
   ]);
-  ctx.effect(() => () => { adapter.dispose(); replayKeys.dispose(); });
+  ctx.effect(() => () => { adapter.dispose(); replayKeys.dispose(); bridge.dispose(); });
 }

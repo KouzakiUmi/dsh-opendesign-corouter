@@ -27,6 +27,7 @@ import {
   quotaAutoRefresh,
   quotaStatusView,
   selectedContextTier,
+  shouldFetchPrices,
   sortModelsByEnabled,
   tabAfter,
   writeModelSettings,
@@ -34,7 +35,7 @@ import {
   type RpcCaller,
   type SettingsProps,
 } from '../src/client.js';
-import type { Status, StatusModel } from '../src/remote.js';
+import type { Status, StatusModel, PriceCatalog } from '../src/remote.js';
 import type { TurnMonitorStatus } from '../src/turn-monitor-status.js';
 import { TurnMonitorView } from '../src/client.js';
 import type { QuotaSnapshot } from '../src/quota.js';
@@ -538,6 +539,17 @@ test('auto refresh honours the interval and the host read plan, never a past res
   assert.equal(later?.delayMs, 1_800_500);
 });
 
+test('the models tab reads a fresh persisted price snapshot without a website fetch', () => {
+  const now = Date.parse('2026-11-18T09:00:00.000Z');
+  const fresh: PriceCatalog = { state: 'ok', stale: true, fetchedAt: '2026-11-18T08:55:00.000Z', models: [] };
+  assert.equal(shouldFetchPrices(fresh, now), false, 'a snapshot inside the refresh window answers locally');
+  assert.equal(shouldFetchPrices({ ...fresh, fetchedAt: '2026-11-18T08:00:00.000Z' }, now), true, 'an old snapshot triggers a read');
+  assert.equal(shouldFetchPrices(undefined, now), true);
+  const { fetchedAt: _noTime, ...withoutTime } = fresh;
+  assert.equal(shouldFetchPrices(withoutTime, now), true);
+  assert.equal(shouldFetchPrices({ ...fresh, fetchedAt: 'not-a-date' }, now), true);
+});
+
 test('next quota recovery only comes from future window resets', () => {
   const now = Date.parse('2026-10-26T12:00:00.000Z');
   const windows = [
@@ -789,7 +801,7 @@ test('common model controls precede advanced details and explain fixed, toggle a
   for (const [model, label] of [
     [{ id: 'kimi-k2.7-code', name: 'Kimi', group: 'plan', contextWindow: 262_144, reasoningMode: 'fixed', reasoningEfforts: [] }, '固定思考 · 始终开启'],
     [{ id: 'mimo-v2.6-pro', name: 'MiMo', group: 'plan', contextWindow: 1_000_000, reasoningMode: 'toggle', reasoningEfforts: ['none', 'high'], defaultEffort: 'high' }, '模型默认（开启）'],
-    [{ id: 'deepseek-v4.1-flash-eco', name: 'Eco', group: 'plan' }, '思考能力未核实'],
+    [{ id: 'gemini-4-carbon', name: 'Carbon', group: 'paid' }, '思考能力未核实'],
   ] as const) {
     const html = renderToStaticMarkup(h(ModelRow, { model, settings: {}, authoritative: true, writable: true, pending: false, onCommit: async () => true }));
     const advanced = html.indexOf('<details class="odc-model-details">');

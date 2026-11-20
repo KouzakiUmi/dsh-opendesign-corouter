@@ -11,6 +11,7 @@ import { OpenDesignCoRouterService, type HostDependencies } from '../src/index.j
 import { CoRouterAdapter } from '../src/adapter.js';
 import { PAID_PROVIDER, SETTINGS_NS, type RuntimeConfig } from '../src/config.js';
 import type { ModelCatalogSnapshot } from '../src/model-catalog-snapshot.js';
+import type { PriceCacheRecord } from '../src/price-cache.js';
 import { fetchModelCatalog } from '../src/model-discovery.js';
 import { MODELS } from '../src/catalog.js';
 import { ConsoleError, type QuotaSnapshot } from '../src/quota.js';
@@ -748,5 +749,49 @@ test('saving the catalog snapshot never rotates the status revision or blocks cr
     const status = await service.status();
     await service.saveApiKey({ value: 'second-fixture-key', expectedRevision: status.revision });
     assert.equal((await service.status()).apiKeyConfigured, true);
+  } finally { await dispose(); }
+});
+
+test('a successful price snapshot persists, answers the next Host read marked stale, and does not rewrite on repeat', async () => {
+  const current = runtimeConfig();
+  const fetchedAt = new Date().toISOString();
+  const snapshot = {
+    status: 'ok' as const,
+    source: { kind: 'official-website' as const, origin: 'https://corouter.open-design.ai', catalogUrl: 'https://corouter.open-design.ai/zh/models/' },
+    fetchedAt, currency: 'USD' as const, unit: 'per_1m_tokens' as const, issues: [],
+    models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', provider: null, slug: null, detailUrl: null,
+      tiers: [{ index: 0, label: '标准', currency: 'USD' as const, unit: 'per_1m_tokens' as const, input: 2, output: 10, cacheRead: 0.1, cacheWrite: null }] }],
+  };
+  const deps = hostDependencies([], () => list());
+  deps.fetchPrices = async () => snapshot;
+  const { service, settings, dispose } = await host(current, deps, true);
+  try {
+    const before = await service.status();
+    const fetched = await service.refreshPrices();
+    assert.equal(fetched.state, 'ok');
+    assert.equal(fetched.stale, false);
+    await waitFor(() => settings !== undefined && settings.patch.priceCache !== undefined);
+    const saved = settings!.patch.priceCache as PriceCacheRecord;
+    assert.equal(saved.version, 1);
+    assert.equal(saved.fetchedAt, fetchedAt);
+    // A cache write is not a credential change: the revision stays put.
+    assert.equal((await service.status()).revision, before.revision);
+    assert.equal((await service.status()).prices?.stale, false, 'the live fetch is not stale');
+    const writesBefore = settings!.writes.length;
+    await service.refreshPrices();
+    await tick(); await tick();
+    assert.equal(settings!.writes.length, writesBefore, 'unchanged quotes do not rewrite settings');
+
+    // A rebuilt Host answers from the saved snapshot without any website read.
+    current.priceCache = saved;
+    const offline = hostDependencies([], () => list());
+    offline.fetchPrices = async () => { throw new Error('must not read the website on a status read'); };
+    const restarted = await host(current, offline, false);
+    try {
+      const status = await restarted.service.status();
+      assert.equal(status.prices?.stale, true, 'the saved snapshot is shown as the last successful read');
+      assert.equal(status.prices?.fetchedAt, fetchedAt);
+      assert.deepEqual(status.prices?.models, fetched.models);
+    } finally { await restarted.dispose(); }
   } finally { await dispose(); }
 });

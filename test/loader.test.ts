@@ -96,6 +96,18 @@ test('official Loader mounts the built package, typert-loader auto-registers its
       assert.equal((await ctx.llm.listModels(PAID_PROVIDER)).length, 46);
       assert.deepEqual((await ctx.llm.resolveModelInfo(PAID_PROVIDER, 'gpt-6-luna')).inputModalities, ['text', 'image']);
       assert.equal((await ctx.llm.resolveModelInfo(PAID_PROVIDER, 'muse-wonder')).inputModalities, undefined);
+      // Writes that leave the advertised listModels projection identical must not rebuild
+      // session model directories (which grayed out the chat context control on every save).
+      const steady = updates;
+      await loader.root.update([entry({ modelSettings: { 'gpt-6-luna': { temperature: 0.5 } } })]);
+      await loader.await();
+      assert.equal(updates, steady, 'a sampling-only write must not republish the selector');
+      await loader.root.update([entry({ modelSettings: { 'gpt-6-luna': { contextTier: 'maximum' } } })]);
+      await loader.await();
+      assert.equal(updates, steady, 'a context-tier write must not republish the selector');
+      await loader.root.update([entry({ modelSettings: { 'gpt-6-luna': { enabled: false } } })]);
+      await loader.await();
+      assert.ok(updates > steady, 'an enablement change still republishes the selector');
     } finally { stopUpdates(); }
 
     // 2. Activate typert-loader once the entry exists; its activation pass covers it.

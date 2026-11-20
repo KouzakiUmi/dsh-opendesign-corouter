@@ -3,7 +3,8 @@
 // official compatibility guarantee). No browser automation or credential discovery.
 export interface DeviceTokens { controlKey: string; runtimeKey: string }
 export const DEVICE_AUTH_ENDPOINT = 'https://amr-api.open-design.ai/api/v1/cli/device-authorizations';
-export const DEVICE_AUTH_PLUGIN_VERSION = '0.3.1';
+/** Must equal package.json `version`; test/device-auth.test.ts enforces the match. */
+export const DEVICE_AUTH_PLUGIN_VERSION = '0.3.4';
 export const DEVICE_REQUEST_TIMEOUT_MS = 20_000;
 /** One bounded launch step of the temporary activation window. */
 export const DEVICE_OPEN_TIMEOUT_MS = 30_000;

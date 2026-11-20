@@ -9,7 +9,8 @@
 | `claude-fable-5.2` | low / medium / high / xhigh / max，high | [厂商专页](https://platform.claude.com/docs/en/models/fable-5-2/overview.md)、[迁移](https://platform.claude.com/docs/en/models/fable-5-2/migration-guide.md)。adaptive 恒开，不能 none；签名绑定 system、tools 和此前历史前缀。 |
 | `hy4`、`hy4-flash` | 思考开关，默认开启；关闭仅 Chat 开放 | [腾讯深度推理](https://www.tencentcloud.com/document/product/1300/80637)逐 ID 支持 high / no_think。2026-11-18 补充精确投影：内部 none/high 表示关闭/开启，Chat 发送 no_think/high；其他协议保留既有 high、不开放关闭，详见下节。 |
 | `qwen4-max` | low / high / xhigh，high | [精确型号页](https://help.aliyun.com/zh/model-studio/qwen4-max)。medium→high、max→xhigh 等为别名，非独立档；Chat / Responses / Messages 各有明确字段。 |
-| `deepseek-v4.1-flash-eco`、`gemini-4-carbon`、`muse-ember-1.0` | 未知 | Link 只证明 ID；未取得精确型号能力正文，不复制邻近模型的档位或默认。 |
+| `deepseek-v4.1-flash-eco` | none / low / high / max，high | Eco 就是 V4.1 Flash 的另一个名字（2026-11-18 操作者说明），沿用同一档位集合与默认；Eco 自身没有独立厂商页。 |
+| `gemini-4-carbon`、`muse-ember-1.0` | 未知 | Link 只证明 ID；未取得精确型号能力正文，不复制邻近模型的档位或默认。 |
 
 默认协议与显式覆盖见[协议策略](protocols.md)。GitHub [#9232](https://github.com/nexu-io/open-design/issues/9232)报告 CoRouter Flash Chat 各档位疑似被网关归一；厂商矩阵不等于网关逐档实测。
 
@@ -25,7 +26,7 @@
 | `hy4`、`hy4-flash` | toggle，开启 | 内部 none→`reasoning_effort: no_think`，high→`reasoning_effort: high` | 不开放关闭；保留既有 high 投影，不把它称作新增验收 | 同左 |
 | `hy4-preview` | toggle，开启 | 保留已有 `reasoning_effort: none/high` 两态，仅改为开启/关闭名称 | 保留既有投影 | 保留既有投影 |
 | `deepseek-v4.1-flash`、`deepseek-v4-pro`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` | graded，可关闭；默认 high | `reasoning_effort: none/low/high/max` | `reasoning.effort: none/low/high/max` | none→`thinking.type: disabled`；开启时 thinking 配置加 `output_config.effort` |
-| `deepseek-v4.1-flash-eco`、`gemini-4-carbon`、`muse-ember-1.0`、`muse-wonder` | unknown | 无推断值 | 无推断值 | 无推断值 |
+| `gemini-4-carbon`、`muse-ember-1.0`、`muse-wonder` | unknown | 无推断值 | 无推断值 | 无推断值 |
 
 ### 一手资料与边界
 
@@ -35,8 +36,9 @@
 - **Kimi**：[思考模型](https://platform.kimi.com/docs/guide/use-thinking-models.md)逐 ID 写明 reasoning_effort 不支持，thinking.type 仅 enabled、disabled 报错，thinking.keep 恒 all，建议不传 thinking；固定开启不能显示成可关闭。
 - **Hy4**：[深度推理](https://www.tencentcloud.com/document/product/1300/80637)逐 ID 写 high/no_think、默认 high。[联网搜索](https://cloud.tencent.com/document/product/1823/132358)更新 2026-11-12，具名 hy4 的 Responses 搜索场景写 reasoning.effort=no_think，但未列 hy4-flash；本版本不将该场景外推为两款通用关闭契约。[Responses 通用字段](https://cloud.tencent.com/document/product/1823/135873)更新 2026-10-13，表列 none/low/medium/high；[兼容模式](https://cloud.tencent.com/document/product/1823/133813)更新 2026-10-15，none/no_think 属平台转换说明，不能替代原生路由逐型号证据。[Messages 字段](https://cloud.tencent.com/document/product/1823/135874)更新 2026-11-03，通用 enabled/disabled/adaptive 表同时警告模型差异；未取得两款 Hy4 精确关闭兼容行。
 - **DeepSeek**：[Chat schema](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion/)、[Responses schema](https://api-docs.deepseek.com/zh-cn/api/create-response/)、[Messages schema](https://api-docs.deepseek.com/zh-cn/api/create-message/)本轮复核；Chat 与 Responses 明确 none/low/high/max，none 关闭、默认开启/high；Chat 显式 thinking 优先。[价格与别名页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)确认旧 Flash 别名转当前 V4.1 Flash。它不证明 CoRouter 的映射，更不涵盖 Eco。
-- **四款 unknown**：Carbon 精确官方型号页本轮 404、Context7 无精确命中；Meta reasoning/models 页 404/504，Wonder 无版本 CoRouter ID 与官方带版本 ID 也未取得精确映射；Eco 公开资料未建立源型号映射。未知不是没有推理，不补默认 high。
-- **CoRouter**：以上是源 API 契约，新增开关未做真实推理验收。[#9368](https://github.com/nexu-io/open-design/issues/9368)的 Eco 工具参数缺失后来在 Responses 也出现，不能声称切换协议规避；2026-11-13 评论仅认可观察工作负载约 95 小时/268 session 的恢复信号。维护者说明托管 amr-link 翻译服务不在开源仓库，issue 不建立 Eco 身份或 effort 契约。
+- **三款 unknown**：Carbon 精确官方型号页本轮 404、Context7 无精确命中；Meta reasoning/models 页 404/504，Wonder 无版本 CoRouter ID 与官方带版本 ID 也未取得精确映射。未知不是没有推理，不补默认 high。
+- **Eco 不再按未知处理**：Eco 与 `deepseek-v4.1-flash` 是同一条路由（2026-11-18 操作者说明），因此沿用 DeepSeek 的 none / low / high / max 与默认 high。该结论来自操作者对路由的说明，不是新的厂商文档；网关是否逐档转发仍未验证。
+- **CoRouter**：以上是源 API 契约，新增开关未做真实推理验收。[#9368](https://github.com/nexu-io/open-design/issues/9368)的 Eco 工具参数缺失后来在 Responses 也出现，不能声称切换协议规避；2026-11-13 评论仅认可观察工作负载约 95 小时/268 session 的恢复信号。维护者说明托管 amr-link 翻译服务不在开源仓库，该 issue 本身不建立 Eco 的档位契约——目录给 Eco 的参数来自操作者的同路由说明，不来自该 issue。
 
 ## 证据层级
 
@@ -74,15 +76,15 @@
 | `EFFORTS_OPENAI` | none + `EFFORTS_REASONING` | OpenAI 6.1-terra、6-sol、6-luna、5.6-sol、5.6-terra、5.6-luna |
 | `EFFORTS_GLM52` | none / minimal / low / medium / high / xhigh / max | GLM-5.2 |
 | `EFFORTS_LOW_HIGH` | low / high / max | GLM-5.3-flash、5.3-flashx；Kimi K3、K3.1 Pro |
-| `EFFORTS_DEEPSEEK` | none / low / high / max | 普通 DeepSeek 4 款，不含 Eco |
+| `EFFORTS_DEEPSEEK` | none / low / high / max | DeepSeek 5 款，含与 Flash 同路由的 Eco |
 | `EFFORTS_TOGGLE` 及 Preview 两态 | 内部 none / high（关闭 / 开启） | MiMo 两款、Qwen3.7 Max、Hy4 三款；逐协议过滤见本轮审计 |
 | `EFFORTS_LEVELS` | low / medium / high | Gemini 4 Argon、3.8 Flash、3.7 Flash；Grok 4.5 |
 | `EFFORTS_GROK` | low / medium / high / xhigh | Grok 4.7、4.6 |
 | `EFFORTS_MUSE` | minimal / low / medium / high / xhigh / max | Muse Spark 1.3 |
 | 空数组 `[]` + fixed | 始终开启，无可调控制 | Kimi K2.7 Code |
-| 缺省 | 未知 | Eco、Carbon、Ember、Wonder |
+| 缺省 | 未知 | Carbon、Ember、Wonder |
 
-当前 46 款合计 35 款分级控制、6 款显式 toggle、1 款 fixed、4 款 unknown。41 款非空控制集合均带目录 defaultEffort，协议交集可能将其移除；toggle 默认 high 是开启编码而非强度。GPT-6 Astra 与 Muse Spark 1.3 取上一节的路由默认，其余有厂商默认依据。
+当前 46 款合计 36 款分级控制、6 款显式 toggle、1 款 fixed、3 款 unknown。42 款非空控制集合均带目录 defaultEffort，协议交集可能将其移除；toggle 默认 high 是开启编码而非强度。GPT-6 Astra 与 Muse Spark 1.3 取上一节的路由默认，其余有厂商默认依据（Eco 依操作者的同路由说明）。
 
 ## 证据矩阵
 

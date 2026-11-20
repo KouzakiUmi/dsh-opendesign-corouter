@@ -488,7 +488,6 @@ test('toggle defaults have on/off Host labels and exact Chat wire fields instead
 test('unsupported fixed/unknown/protocol toggle choices fail before credentials, replay binding or transport', async () => {
   const matrix = [
     [PLAN_PROVIDER, 'kimi-k2.7-code', 'chat-completions', 'none'],
-    [PLAN_PROVIDER, 'deepseek-v4.1-flash-eco', 'responses', 'high'],
     [PAID_PROVIDER, 'gemini-4-carbon', 'responses', 'high'],
     [PAID_PROVIDER, 'muse-ember-1.0', 'messages', 'high'],
     [PAID_PROVIDER, 'muse-wonder', 'responses', 'high'],

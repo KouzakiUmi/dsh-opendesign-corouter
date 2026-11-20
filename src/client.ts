@@ -656,6 +656,17 @@ export function normaliseQuotaRefreshSeconds(value: number | undefined): number 
   return value;
 }
 
+/** A persisted price snapshot younger than this answers the models tab without a new website read. */
+export const PRICE_REFRESH_MS = 10 * 60_000;
+
+/** Whether the models tab needs a website read: no snapshot, no timestamp, or an old one. */
+export function shouldFetchPrices(prices: PriceCatalog | undefined, now: number): boolean {
+  if (prices === undefined) return true;
+  const at = prices.fetchedAt === undefined ? Number.NaN : Date.parse(prices.fetchedAt);
+  if (!Number.isFinite(at)) return true;
+  return now - at > PRICE_REFRESH_MS;
+}
+
 export interface QuotaAutoRefresh {
   delayMs: number;
   at: string;
@@ -1613,6 +1624,11 @@ export function SettingsPage({ caller, form }: SettingsProps) {
   const [refreshingModels, setRefreshingModels] = React.useState(false);
   const [prices, setPrices] = React.useState<PriceCatalog>();
   const [refreshingPrices, setRefreshingPrices] = React.useState(false);
+  // A persisted snapshot answers the first read after a rebuild; a local fresh fetch wins over it.
+  const savedPrices = status?.prices;
+  React.useEffect(() => {
+    if (savedPrices !== undefined) setPrices(previous => previous ?? savedPrices);
+  }, [savedPrices]);
   const pricesBusy = React.useRef(false);
   const pricesRequested = React.useRef(false);
   const [modelsNotice, setModelsNotice] = React.useState<Notice | null>(null);
@@ -1812,8 +1828,9 @@ export function SettingsPage({ caller, form }: SettingsProps) {
   React.useEffect(() => {
     if (tab !== 'models' || pricesRequested.current) return;
     pricesRequested.current = true;
-    void refreshPrices();
-  }, [tab, refreshPrices]);
+    // Reading is decoupled from fetching: a fresh persisted snapshot answers without a website read.
+    if (shouldFetchPrices(prices, Date.now())) void refreshPrices();
+  }, [tab, prices, refreshPrices]);
 
   const loginState = status?.login.state;
   const loginActive = loginState !== undefined && loginInFlight(loginState);

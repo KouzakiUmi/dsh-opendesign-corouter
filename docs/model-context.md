@@ -28,7 +28,9 @@
 
 ## 厂商型号参考
 
-2026-11-17 新增参考：Fable 5.2 为 1,000,000 合计窗口、128,000 同步输出（[厂商专页](https://platform.claude.com/docs/en/models/fable-5-2/overview.md)）；Hy4 / Hy4 Flash 各自为 1M、64k 输出（[腾讯逐型号表](https://www.tencentcloud.com/document/product/1300/78934)，本地保守取 1,000,000 / 64,000）。[Qwen4 Max](https://help.aliyun.com/zh/model-studio/qwen4-max)为 1,000,000 合计，非思考输出 131,072、思考输出 262,144；目录取两模式共同保守上限 131,072，不能视为完整思考模式最大值。Eco、Carbon、Ember 未取得精确能力正文，窗口和输出保持未知，不复制邻近型号。
+2026-11-17 新增参考：Fable 5.2 为 1,000,000 合计窗口、128,000 同步输出（[厂商专页](https://platform.claude.com/docs/en/models/fable-5-2/overview.md)）；Hy4 / Hy4 Flash 各自为 1M、64k 输出（[腾讯逐型号表](https://www.tencentcloud.com/document/product/1300/78934)，本地保守取 1,000,000 / 64,000）。[Qwen4 Max](https://help.aliyun.com/zh/model-studio/qwen4-max)为 1,000,000 合计，非思考输出 131,072、思考输出 262,144；目录取两模式共同保守上限 131,072，不能视为完整思考模式最大值。Carbon、Ember 未取得精确能力正文，窗口和输出保持未知，不复制邻近型号。
+
+2026-11-18 操作者说明：CoRouter 的 `deepseek-v4.1-flash-eco` 就是 V4.1 Flash 本身，不是另一款型号。目录因此让 Eco 与 `deepseek-v4.1-flash` 共用同一份参数（1,000,000 窗口、384,000 输出、文本与图片输入、none/low/high/max 思考档位、默认 high），不再显示未知。这是操作者的路由说明，不是新的厂商文档；网关对该 ID 报告的 `context_limit` 只作参考上限。
 
 | 目录模型 ID | 参考窗口 | 依据与口径 |
 | --- | ---: | --- |
@@ -43,6 +45,7 @@
 | `minimax-m3.1-flash` | 1,000,000 | [MiniMax 型号表](https://platform.minimax.io/docs/guides/text-generation)列出当前 `MiniMax-M3.1-Flash` 为 1,000,000；厂商页面未明确该数值是否为输入输出合计，此处作为保守的合计预算。CoRouter 使用小写 ID，实际网关映射与预算未实测。 |
 | `muse-spark-1.3` | 1,048,576 | [Meta 型号表](https://dev.meta.ai/docs/getting-started/models)列出精确 ID 与窗口；[长上下文说明](https://dev.meta.ai/docs/cookbook/long-context)说明输入和请求输出共用预算。 |
 | `muse-wonder` | 1,048,576 | **暂定参考**：Meta 的 [Muse Wonder 型号](https://dev.meta.ai/docs/models)为 `muse-wonder-1.0`、窗口 1,048,576；[OpenRouter 公共目录](https://openrouter.ai/meta/muse-wonder)以同名 ID 列出该模型，其[公开模型列表](https://openrouter.ai/api/v1/models)返回 `meta/muse-wonder` 的 `context_length: 1048576`。CoRouter 的 `muse-wonder` 实际对应版本尚未确认，不能把此值当作已验证网关能力；可按实际限制覆盖。 |
+| `deepseek-v4.1-flash-eco` | 1,000,000 | **路由说明**：与 `deepseek-v4.1-flash` 是同一条 V4.1 Flash 路由（2026-11-18 操作者说明），沿用 DeepSeek 官方价格页给出的 1M 上下文与 384K 最大输出；Eco 自身没有独立厂商页。 |
 
 ## 既有部署参考
 
@@ -54,6 +57,8 @@ Kimi K2.7 Code 的[厂商说明](https://platform.kimi.ai/docs/guide/kimi-k2-7-c
 
 ## 网关发现与字节限制
 
-OpenDesign 的 [Vela 模型解析](https://github.com/nexu-io/open-design/blob/c6bb5a8b8190e17b7e9c546c731814ffe10d4f67/apps/daemon/src/runtimes/defs/amr.ts#L202-L235)识别可选的上下文窗口字段；同网关第三方客户端的[历史模型响应样本](https://github.com/EliteOtaku/dsh-opendesign-go/blob/15ac4ba144e914fe9eef56dbef8d0acbee56b5b9/.tmpw/models.json)另含 `metadata.context_limit`，[Pi 客户端](https://github.com/Lokeraar/pi-opendesign-bridge/blob/8641954aa11629db61d855ee91e254ab5eec5c35/opendesign-live.ts#L370-L384)也将其解释为窗口。刷新时，插件接受有界正整数窗口字段，并取它们与内置参考中较小的值；新 ID 仅在网关提供明确窗口字段时获得参考。网关给出的较小窗口同样降低已知参考，使更高的档位不可选；已保存的自定义数值仍按旧值生效。`context_budget` 和 `output_budget` 的网关语义尚不足以证明是硬上限，因此不用于替代窗口或输出限制。不同来源的报告仍可能不准确，已保存的自定义数值优先。
+OpenDesign 的 [Vela 模型解析](https://github.com/nexu-io/open-design/blob/c6bb5a8b8190e17b7e9c546c731814ffe10d4f67/apps/daemon/src/runtimes/defs/amr.ts#L202-L235)识别可选的上下文窗口字段；同网关第三方客户端的[历史模型响应样本](https://github.com/EliteOtaku/dsh-opendesign-go/blob/15ac4ba144e914fe9eef56dbef8d0acbee56b5b9/.tmpw/models.json)另含 `metadata.context_limit`，[Pi 客户端](https://github.com/Lokeraar/pi-opendesign-bridge/blob/8641954aa11629db61d855ee91e254ab5eec5c35/opendesign-live.ts#L370-L384)也将其解释为窗口。刷新时，插件接受有界正整数窗口字段，并取它们与内置参考中较小的值；新 ID 仅在网关提供明确窗口字段时获得参考。`context_budget` 和 `output_budget` 的网关语义尚不足以证明是硬上限，因此不用于替代窗口或输出限制。不同来源的报告仍可能不准确，已保存的自定义数值优先。
+
+网关报告的是取整近似值：2026-11-18 实测它对 1,048,576 的型号报 `context_limit: 1048000`，对 262,144 的型号报 `262000`。因此小于或等于参考、且差值在 `min(1024, 参考的 1%)` 之内的报告视为同一窗口的取整写法，保留厂商参考与二进制档位；差值更大的报告仍按较小值下调参考，更高档位随之不可选。没有参考的新 ID 仍只取网关报告值。
 
 HTTP 413 是请求体大小限制，不等于 token 窗口限制。[Anthropic 错误文档](https://platform.claude.com/docs/en/api/errors)对其直接 Messages API 给出 32 MB 请求上限；CoRouter 或其他协议可能不同。图片编码后的字节预算和 413 恢复见[排障指南](troubleshooting.md)。

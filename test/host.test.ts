@@ -1,14 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Context } from '@deepseek-ai/cordis';
+import { Context, Service } from '@deepseek-ai/cordis';
+import { setImmediate as tick } from 'node:timers/promises';
 import { CredentialProvider, type CredentialKey, type CredentialRecord, type CredentialRef } from '@deepseek-ai/dsh-credentials';
 import { OpenDesignCoRouterService, type HostDependencies } from '../src/index.js';
 import { parseStatus } from '../src/remote.js';
 import type { RuntimeConfig } from '../src/config.js';
 import { ConsoleError, type QuotaSnapshot } from '../src/quota.js';
+import type { QuotaCacheRecord } from '../src/quota-cache.js';
+/** Every credential store created by a fixture context, in creation order. */
+const credentialStores: MemoryCredentials[] = [];
 class MemoryCredentials extends CredentialProvider {
   readonly data = new Map<CredentialKey, CredentialRecord>();
-  constructor(ctx: Context) { super(ctx); }
+  constructor(ctx: Context) { super(ctx); credentialStores.push(this); }
   readonly resolved: string[] = [];
   async resolve(ref: CredentialRef) { this.resolved.push(String(ref)); return undefined; }
   async describe(_ref: CredentialRef) { return { configured: false, writable: true }; }
@@ -86,7 +90,7 @@ test('Host status and transport preserve toggle/fixed evidence without claiming 
       const fixed = snapshot.models.find(model => model.id === 'kimi-k2.7-code')!;
       assert.equal(fixed.reasoningMode, 'fixed');
       assert.deepEqual(fixed.reasoningEfforts, []);
-      for (const id of ['deepseek-v4.1-flash-eco', 'gemini-4-carbon', 'muse-ember-1.0', 'muse-wonder']) {
+      for (const id of ['gemini-4-carbon', 'muse-ember-1.0', 'muse-wonder']) {
         const row = snapshot.models.find(model => model.id === id)!;
         assert.equal(row.reasoningMode, undefined);
         assert.equal(row.reasoningEfforts, undefined);
@@ -320,5 +324,147 @@ test('API key saves use owned credential records, reject stale writes and never 
     assert.equal(await service.resolveApiKey('FIXTURE_KEY'), 'fixture-secret-not-echoed');
     await assert.rejects(service.saveApiKey({ value: 'fixture-stale', expectedRevision: before.revision }), { code: 'opendesign/revision-conflict' });
     assert.equal(await service.resolveApiKey('FIXTURE_KEY'), 'fixture-secret-not-echoed');
+  } finally { await fiber.dispose(); await credentials.dispose(); }
+});
+
+/** Minimal settings writer: the plugin persists its saved readings through this service. */
+class FakeSettings extends Service {
+  readonly stored: Record<string, unknown> = {};
+  updates = 0;
+  private revision = 0;
+  constructor(ctx: Context) { super(ctx, 'settings'); }
+  describe() { return [{ ns: 'llm-opendesign-corouter', revision: this.revision }]; }
+  async update(ns: string, patch: Record<string, unknown>) {
+    this.updates += 1; this.revision += 1;
+    Object.assign(this.stored, structuredClone(patch));
+  }
+}
+/** A reading taken now: the saved copy is recent enough not to be rewritten immediately. */
+const METERED_READ_AT = new Date().toISOString();
+const meteredQuota: QuotaSnapshot = {
+  state: 'ok', source: 'login', updatedAt: METERED_READ_AT, tier: 'go', eligible: true,
+  windows: [{ durationSeconds: 18_000, used: 120, limit: 500, remaining: 380, percent: 24, resetsAt: '2026-11-18T13:00:00.000Z' }],
+  balances: { subscriptionUsd: 12.5, rechargeUsd: 3, totalUsd: 15.5 },
+};
+async function until(check: () => boolean) { for (let i = 0; i < 200; i++) { if (check()) return; await tick(); } assert.fail('fixture did not settle'); }
+/** The binding secret lives in the credential service; a reloaded profile keeps the same store. */
+function seedCredentials(target: MemoryCredentials, source: MemoryCredentials) {
+  for (const [key, value] of source.data) target.data.set(key, structuredClone(value));
+}
+function meteredDependencies(reads: { count: number }, quota: QuotaSnapshot = meteredQuota): HostDependencies {
+  return { ...dependencies([]), readDesktopQuota: async () => { reads.count += 1; throw new ConsoleError('auth', 401); }, readQuota: async () => { reads.count += 1; return structuredClone(quota); } };
+}
+
+test('a committed quota reading survives a plugin reload and answers the status read', async () => {
+  const first = new Context();
+  const firstCredentials = await first.plugin(MemoryCredentials);
+  const firstStore = credentialStores.at(-1)!;
+  const firstSettings = await first.plugin(FakeSettings);
+  const firstFiber = await first.plugin(scope => { new OpenDesignCoRouterService(scope, () => config, meteredDependencies({ count: 0 })); });
+  let saved: QuotaCacheRecord | undefined;
+  try {
+    await first.openDesignCoRouter.refreshQuotaNow();
+    const writer = first.get('settings') as unknown as FakeSettings;
+    await until(() => writer.stored.quotaCache !== undefined);
+    saved = writer.stored.quotaCache as QuotaCacheRecord;
+    assert.equal(saved.version, 1);
+    assert.match(saved.binding, /^[a-f0-9]{64}$/u);
+    assert.deepEqual(saved.snapshot.windows, meteredQuota.windows);
+    assert.equal(saved.snapshot.nextRefreshAt, undefined, 'the refresh plan stays in memory');
+    assert.equal(writer.updates, 1);
+    // A repeated read with the same numbers does not rewrite the profile.
+    await first.openDesignCoRouter.refreshQuotaNow();
+    await tick();
+    assert.equal(writer.updates, 1);
+  } finally { await firstFiber.dispose(); await firstCredentials.dispose(); await firstSettings.dispose(); }
+
+  const second = new Context();
+  const secondCredentials = await second.plugin(MemoryCredentials);
+  seedCredentials(credentialStores.at(-1)!, credentialStores.at(-2)!);
+  const secondSettings = await second.plugin(FakeSettings);
+  const reads = { count: 0 };
+  const restoredConfig: RuntimeConfig = { ...config, quotaCache: saved };
+  const secondFiber = await second.plugin(scope => { new OpenDesignCoRouterService(scope, () => restoredConfig, meteredDependencies(reads)); });
+  try {
+    const service = second.openDesignCoRouter;
+    const status = await service.status();
+    assert.equal(status.quota.stale, true, 'the saved reading is shown as the last successful read');
+    assert.deepEqual(status.quota.windows, meteredQuota.windows);
+    assert.deepEqual(status.quota.balances, meteredQuota.balances);
+    assert.equal(status.quota.updatedAt, meteredQuota.updatedAt, 'the reading keeps its own update time');
+    assert.equal(status.sessionSource, 'login');
+    assert.equal(reads.count, 0, 'the UI read never waits for an upstream read');
+    // A read that repeats the saved numbers must not rewrite the profile and rebuild the plugin.
+    const repeated = await service.refreshQuotaNow();
+    await tick();
+    assert.deepEqual(repeated.windows, meteredQuota.windows);
+    assert.equal((second.get('settings') as unknown as FakeSettings).updates, 0, 'unchanged numbers do not write settings');
+  } finally { await secondFiber.dispose(); await secondCredentials.dispose(); await secondSettings.dispose(); }
+});
+
+test('a saved reading is not shown for another identity, an expired record or a damaged one', async () => {
+  const first = new Context();
+  const firstCredentials = await first.plugin(MemoryCredentials);
+  const firstStore = credentialStores.at(-1)!;
+  const firstSettings = await first.plugin(FakeSettings);
+  const firstFiber = await first.plugin(scope => { new OpenDesignCoRouterService(scope, () => config, meteredDependencies({ count: 0 })); });
+  let saved: QuotaCacheRecord;
+  try {
+    await first.openDesignCoRouter.refreshQuotaNow();
+    const writer = first.get('settings') as unknown as FakeSettings;
+    await until(() => writer.stored.quotaCache !== undefined);
+    saved = writer.stored.quotaCache as QuotaCacheRecord;
+  } finally { await firstFiber.dispose(); await firstCredentials.dispose(); await firstSettings.dispose(); }
+
+  const cases: Array<[string, RuntimeConfig]> = [
+    ['another identity', { ...config, useDesktopCredential: false, quotaCache: saved }],
+    ['an expired record', { ...config, quotaCache: { ...saved, readAt: new Date(Date.now() - 8 * 24 * 60 * 60_000).toISOString() } }],
+    ['a damaged record', { ...config, quotaCache: { ...saved, binding: 'broken' } as unknown as QuotaCacheRecord }],
+  ];
+  for (const [label, runtime] of cases) {
+    const ctx = new Context();
+    const credentials = await ctx.plugin(MemoryCredentials);
+    seedCredentials(credentialStores.at(-1)!, firstStore);
+    const reads = { count: 0 };
+    const fiber = await ctx.plugin(scope => { new OpenDesignCoRouterService(scope, () => runtime, meteredDependencies(reads)); });
+    try {
+      const status = await ctx.openDesignCoRouter.status();
+      assert.equal(status.quota.stale, undefined, label);
+      assert.deepEqual(status.quota.windows, [], `${label} shows no foreign numbers`);
+      assert.equal(reads.count, 0);
+    } finally { await fiber.dispose(); await credentials.dispose(); }
+  }
+});
+
+test('a failed refresh after a reload keeps the saved reading instead of replacing it with an error', async () => {
+  const first = new Context();
+  const firstCredentials = await first.plugin(MemoryCredentials);
+  const firstStore = credentialStores.at(-1)!;
+  const firstSettings = await first.plugin(FakeSettings);
+  const firstFiber = await first.plugin(scope => { new OpenDesignCoRouterService(scope, () => config, meteredDependencies({ count: 0 })); });
+  let saved: QuotaCacheRecord;
+  try {
+    await first.openDesignCoRouter.refreshQuotaNow();
+    const writer = first.get('settings') as unknown as FakeSettings;
+    await until(() => writer.stored.quotaCache !== undefined);
+    saved = writer.stored.quotaCache as QuotaCacheRecord;
+  } finally { await firstFiber.dispose(); await firstCredentials.dispose(); await firstSettings.dispose(); }
+
+  const ctx = new Context();
+  const credentials = await ctx.plugin(MemoryCredentials);
+  seedCredentials(credentialStores.at(-1)!, firstStore);
+  const failing: HostDependencies = {
+    ...dependencies([]),
+    readDesktopQuota: async () => { throw new ConsoleError('network'); },
+    readQuota: async () => { throw new ConsoleError('network'); },
+  };
+  const fiber = await ctx.plugin(scope => { new OpenDesignCoRouterService(scope, () => ({ ...config, quotaCache: saved }), failing); });
+  try {
+    const service = ctx.openDesignCoRouter;
+    assert.equal((await service.status()).quota.stale, true);
+    const afterFailure = await service.refreshQuotaNow();
+    assert.deepEqual(afterFailure.windows, meteredQuota.windows, 'the saved numbers survive a failed read');
+    assert.equal(afterFailure.stale, true);
+    assert.match(afterFailure.note ?? '', /上次成功读数/u);
   } finally { await fiber.dispose(); await credentials.dispose(); }
 });

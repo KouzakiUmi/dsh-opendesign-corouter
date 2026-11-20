@@ -75,3 +75,98 @@ test('an identity invalidation cancels stale discovery and cannot publish a late
   try {const pending=directory.refresh();await until(()=>called);key='two';directory.invalidate();release();await pending;assert.equal(directory.models().some(model=>model.id===row.id),false);}
   finally{directory.dispose();}
 });
+
+test('a saved, identity-bound directory is republished without one preflight per model', async () => {
+  const current = config();
+  let snapshots = 0;
+  const shared = {
+    config: () => current,
+    state: async () => ({ key: 'runtime-fixture', account }),
+    bindingSecret: async () => new Uint8Array(32).fill(3),
+    readScope: async () => scope,
+    persist: async (value: ModelCatalogSnapshot) => { snapshots++; current.modelCatalog = value; return 'saved' as const; },
+  };
+  const first = new ModelDirectory({ ...shared, changed: () => {}, fetchModels: async () => [row],
+    readEntitlements: async models => ({ models: models.map(model => ({ ...model, group: 'plan' as const, coverage: 'included' as const })), summary: { state: 'verified' } }) });
+  await first.refresh();
+  await until(() => snapshots === 1);
+  first.dispose();
+
+  // A settings write reloads this plugin: the restarted instance answers from the saved copy.
+  let fetches = 0, changed = 0;
+  const restarted = new ModelDirectory({ ...shared, changed: () => { changed++; }, fetchModels: async () => { fetches++; return [row]; } });
+  try {
+    restarted.warm();
+    await until(() => restarted.updatedAt() !== undefined);
+    assert.equal(fetches, 0, 'a fresh saved directory is not crawled again');
+    assert.equal(changed, 1, 'the model selector is updated once');
+    assert.equal(restarted.models().some(model => model.id === row.id), true);
+    assert.equal(restarted.models()[0]?.coverage, 'unknown', 'saved coverage is never claimed before a preflight');
+    assert.equal(restarted.callIdentity()?.workspace, scope.workspaceId, 'the surviving snapshot stays scoped');
+    restarted.warm();
+    await tick();
+    assert.equal(fetches, 0, 'the refresh window keeps the saved copy in place');
+  } finally { restarted.dispose(); }
+});
+
+test('an old saved directory is published first and then refreshed in the background', async () => {
+  const current = config();
+  let fetches = 0, changed = 0;
+  const options = {
+    config: () => current,
+    state: async () => ({ key: 'runtime-fixture', account }),
+    bindingSecret: async () => new Uint8Array(32).fill(4),
+    readScope: async () => scope,
+    persist: async () => 'saved' as const,
+  };
+  const seed = new ModelDirectory({ ...options, changed: () => {}, fetchModels: async () => [row], readEntitlements: async models => ({ models, summary: { state: 'verified' } }) });
+  let snapshot: ModelCatalogSnapshot | undefined;
+  const capture = new ModelDirectory({ ...options, changed: () => {}, fetchModels: async () => [row], persist: async value => { snapshot = value; return 'saved'; } });
+  await capture.refresh();
+  await until(() => snapshot !== undefined);
+  current.modelCatalog = { ...snapshot!, updatedAt: new Date(Date.now() - 11 * 60_000).toISOString() };
+  seed.dispose(); capture.dispose();
+  const restarted = new ModelDirectory({ ...options, changed: () => { changed++; }, fetchModels: async () => { fetches++; return [row]; } });
+  try {
+    restarted.warm();
+    await until(() => restarted.updatedAt() !== undefined);
+    assert.equal(restarted.models()[0]?.coverage, 'unknown', 'the saved copy answers at once');
+    await until(() => fetches === 1);
+    assert.ok(changed >= 1);
+  } finally { restarted.dispose(); }
+});
+
+test('a stale bound snapshot answers ensurePublished at once while the full read runs in the background', async () => {
+  const current = config();
+  let snapshot: ModelCatalogSnapshot | undefined;
+  const verified = async (models: readonly CatalogModel[]) => ({ models: models.map(model => ({ ...model, group: 'plan' as const, coverage: 'included' as const })), summary: { state: 'verified' as const } });
+  const shared = {
+    config: () => current,
+    state: async () => ({ key: 'runtime-fixture', account }),
+    bindingSecret: async () => new Uint8Array(32).fill(5),
+    readScope: async () => scope,
+    persist: async (value: ModelCatalogSnapshot) => { snapshot = value; return 'saved' as const; },
+    readEntitlements: verified,
+  };
+  const first = new ModelDirectory({ ...shared, changed: () => {}, fetchModels: async () => [row] });
+  await first.refresh();
+  await until(() => snapshot !== undefined);
+  first.dispose();
+  current.modelCatalog = { ...snapshot!, updatedAt: new Date(Date.now() - 11 * 60_000).toISOString() };
+
+  let release!: () => void;
+  const gate = new Promise<void>(done => { release = done; });
+  let fetches = 0;
+  const restarted = new ModelDirectory({ ...shared, changed: () => {}, fetchModels: async () => { fetches++; await gate; return [row]; } });
+  try {
+    // The model picker's wait path must settle without the gated gateway read.
+    await restarted.ensurePublished();
+    assert.equal(restarted.models().some(model => model.id === row.id), true, 'the stale bound snapshot answers selection at once');
+    assert.equal(restarted.models()[0]?.coverage, 'unknown', 'saved coverage is never claimed before a preflight');
+    // ensurePublished already returned while the gate is held; the read now runs in background.
+    await until(() => fetches === 1);
+    release();
+    await until(() => restarted.models()[0]?.coverage === 'included');
+    assert.equal(restarted.error(), undefined);
+  } finally { release(); restarted.dispose(); }
+});

@@ -142,6 +142,17 @@ test('public price payload is bounded, sanitised and keeps missing rates unknown
   assert.throws(() => parsePriceCatalog({ ...snapshot, fetchedAt: undefined, stale: true }), /更新时间/u);
 });
 
+test('status carries a persisted price snapshot and drops fields outside its allowlist', () => {
+  const prices = { state: 'ok', stale: true, fetchedAt: '2026-11-18T08:00:00Z', models: [{
+    id: 'gpt-6.1-sol', tiers: [{ label: '标准', currency: 'USD', unit: 'per_1m_tokens', input: 2, output: 10, cacheRead: 0.1, cacheWrite: null }],
+  }] };
+  const parsed = through('status', { ...status, prices }) as Status;
+  assert.deepEqual(parsed.prices, prices);
+  assert.equal(parseStatus(status).prices, undefined, 'absence stays absent for legacy Hosts');
+  const leaked = parseStatus({ ...status, prices: { ...prices, models: [{ ...prices.models[0], hidden: 'ignored' }] } });
+  assert.equal(JSON.stringify(leaked).includes('ignored'), false);
+});
+
 test('credential source is an optional credential-free enum and preserves legacy status payloads', () => {
   for (const apiKeySource of ['reference', 'stored', 'device'] as const) {
     const parsed = through('status', { ...status, apiKeySource }) as Status;

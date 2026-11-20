@@ -39,7 +39,7 @@ test('toggle catalog declarations encode off/on, while fixed and four unknown mo
     assert.deepEqual(modelReasoningEfforts(fixed, protocol), []);
     assert.equal(defaultReasoningEffort(fixed, protocol), undefined);
   }
-  for (const id of ['deepseek-v4.1-flash-eco', 'gemini-4-carbon', 'muse-ember-1.0', 'muse-wonder']) {
+  for (const id of ['gemini-4-carbon', 'muse-ember-1.0', 'muse-wonder']) {
     const model = findModel(id)!;
     assert.equal(model.reasoningMode, undefined, id);
     assert.equal(model.reasoningEfforts, undefined, id);

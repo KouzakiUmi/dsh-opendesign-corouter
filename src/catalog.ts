@@ -73,6 +73,19 @@ const EFFORTS_GROK = [...EFFORTS_LEVELS, 'xhigh'] as const;
 const EFFORTS_MUSE = ['minimal', ...EFFORTS_REASONING] as const;
 
 /**
+ * DeepSeek V4.1 Flash route parameters, shared by the Eco alias served from that route.
+ * Values follow the vendor V4.1 Flash specification recorded in docs/model-context.md and
+ * docs/reasoning-evidence.md; Eco has no separate publication.
+ */
+const DEEPSEEK_V41_FLASH = {
+  contextWindow: 1_000_000,
+  maxOutputTokens: 384_000,
+  inputModalities: TEXT_AND_IMAGE,
+  reasoningEfforts: EFFORTS_DEEPSEEK,
+  defaultEffort: 'high',
+} as const satisfies Partial<CatalogModel>;
+
+/**
  * 种子分组不进入实际账号授权；Host 从匹配推理身份的工作区逐型号覆盖。
  *
  * `defaultEffort` 只写有出处的默认档位：厂商文档声明的默认（docs/reasoning-evidence.md 矩阵），
@@ -130,18 +143,11 @@ const REFERENCE_MODELS: readonly CatalogModel[] = [
   },
 
   // ── DeepSeek（4） ───────────────────────────────────────────
-  // Exact route confirmed by Link; Eco-specific capability evidence is not published.
-  { id: 'deepseek-v4.1-flash-eco', name: 'DeepSeek V4.1 Flash Eco', group: 'plan' },
-  {
-    id: 'deepseek-v4.1-flash',
-    name: 'DeepSeek V4.1 Flash',
-    group: 'plan',
-    contextWindow: 1_000_000,
-    maxOutputTokens: 384_000,
-    inputModalities: TEXT_AND_IMAGE,
-    reasoningEfforts: EFFORTS_DEEPSEEK,
-    defaultEffort: 'high',
-  },
+  // Eco and Flash are two names for the same DeepSeek V4.1 Flash route (operator
+  // instruction, 2026-11-18): no Eco-specific vendor page exists, so the two entries
+  // share one parameter set instead of guessing a separate capability list.
+  { id: 'deepseek-v4.1-flash-eco', name: 'DeepSeek V4.1 Flash Eco', group: 'plan', ...DEEPSEEK_V41_FLASH },
+  { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', group: 'plan', ...DEEPSEEK_V41_FLASH },
   {
     id: 'deepseek-v4-pro',
     name: 'DeepSeek V4 Pro',

@@ -111,6 +111,7 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
         modelEntitlements: entitlementsUnknown ? { state: 'unavailable' } : { state: 'verified', source: 'device', tier: 'pro', updatedAt: new Date().toISOString() },
         ...(modelsUpdatedAt === undefined ? {} : { modelsUpdatedAt }),
         ...(modelsError === undefined ? {} : { modelsError }),
+        ...(savedPrices === undefined ? {} : { prices: savedPrices }),
       };
       window.__lastStatus = value;
       return value;
@@ -129,16 +130,23 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
     };
     window.__restoreQuota = () => { quota = initialQuota(); };
     window.__setWindowResetSoon = () => { quota = { ...quota, windows: quota.windows.map((item, index) => index === 0 ? { ...item, resetsAt: new Date(Date.now() + 1800).toISOString() } : item) }; };
+    const pricePayload = fail => {
+      const base = { label: '27.2 万 Token 及以内', currency: 'USD', unit: 'per_1m_tokens', input: 2, output: 10, cacheRead: 0.1, cacheWrite: null };
+      return { state: fail ? 'error' : 'ok', stale: fail, fetchedAt: new Date().toISOString(), models: [
+        { id: 'gpt-6.1-sol', tiers: [base, { ...base, label: '超过 27.2 万 Token', input: 4, output: 15 }] },
+        { id: 'gpt-6-luna', tiers: [{ ...base, label: '不按输入长度分档', input: 0.25, output: 1 }] },
+      ] };
+    };
+    // A persisted snapshot answers the models tab immediately after a rebuild, marked stale.
+    let savedPrices = { ...pricePayload(false), stale: true };
     const api = {
       status: async (...args) => { if (args.length) throw new Error('status requires zero arguments'); if (window.__failStatusReads) throw new Error('fixture-status-unavailable'); window.__statusCalls += 1; return { ok: true, value: status() }; },
       refreshPrices: async (...args) => {
         if (args.length) throw new Error('refreshPrices requires zero arguments');
         window.__refreshPricesCalls += 1;
-        const base = { label: '27.2 万 Token 及以内', currency: 'USD', unit: 'per_1m_tokens', input: 2, output: 10, cacheRead: 0.1, cacheWrite: null };
-        return { ok: true, value: { state: window.__pricesFail ? 'error' : 'ok', stale: window.__pricesFail, fetchedAt: '2026-10-27T08:00:00Z', models: [
-          { id: 'gpt-6.1-sol', tiers: [base, { ...base, label: '超过 27.2 万 Token', input: 4, output: 15 }] },
-          { id: 'gpt-6-luna', tiers: [{ ...base, label: '不按输入长度分档', input: 0.25, output: 1 }] },
-        ] } };
+        const value = pricePayload(window.__pricesFail);
+        if (!window.__pricesFail) savedPrices = value;
+        return { ok: true, value };
       },
       refreshModels: async (...args) => {
         if (args.length) throw new Error('refreshModels requires zero arguments');
@@ -544,7 +552,7 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   assert.equal(await page.locator('.odc-model-item').count(), fixtureModels.length);
   const luna = modelRow('gpt-6-luna');
   await luna.getByText(/官网参考.*输入 \$0\.25/u).waitFor();
-  assert.equal(await page.evaluate(() => window.__refreshPricesCalls), 1, 'model tab loads prices once');
+  assert.equal(await page.evaluate(() => window.__refreshPricesCalls), 0, 'a fresh persisted snapshot answers the models tab without a website read');
   const solPrice = modelRow('gpt-6.1-sol');
   await solPrice.getByText(/共 2 档/u).waitFor();
   await solPrice.locator('.odc-model-details > summary').click();
@@ -556,7 +564,7 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await page.getByText(/读取失败，显示上次价格/u).waitFor();
   await page.evaluate(() => { window.__pricesFail = false; });
   await page.getByRole('button', { name: '更新价格', exact: true }).click();
-  await page.waitForFunction(() => window.__refreshPricesCalls === 3);
+  await page.waitForFunction(() => window.__refreshPricesCalls === 2);
   const lunaSwitch = luna.locator('.odc-model-switch input[type=checkbox]');
   assert.equal(await lunaSwitch.isChecked(), true);
   await lunaSwitch.uncheck();
@@ -609,17 +617,29 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await knownFlashTiers.getByRole('button', { name: /^默认 /u }).click();
   await page.waitForFunction(() => window.__config.modelSettings?.['deepseek-v4.1-flash']?.contextTier === undefined);
   await knownFlash.locator('.odc-model-details>summary').click();
+  // Eco is the same V4.1 Flash route, so it now offers that route's three tiers.
   const eco = modelRow('deepseek-v4.1-flash-eco');
   await eco.locator('.odc-model-details>summary').click();
-  await eco.getByText('容量未知', { exact: true }).waitFor();
-  assert.equal(await eco.locator('.odc-context [data-preset]').count(), 0);
-  assert.doesNotMatch(await eco.locator('.odc-context').innerText(), /272,000|872,000|256,000|512,000/u);
-  await page.evaluate(() => window.__setModelSettings('deepseek-v4.1-flash-eco', { contextWindow: 872000 }));
-  await eco.getByText('自定义 872K', { exact: true }).waitFor();
-  await eco.locator('.odc-context').getByRole('button', { name: '恢复默认', exact: true }).click();
+  const ecoTiers = eco.locator('.odc-context');
+  for (const [tier, tokens] of [['default', '256,000'], ['extended', '512,000'], ['maximum', '1,000,000']]) {
+    assert.match(await eco.locator(`.odc-context-option[data-preset=${tier}]`).getAttribute('title'), new RegExp(`${tokens} tokens`, 'u'));
+  }
+  await ecoTiers.getByRole('button', { name: /^最大 /u }).click();
+  await page.waitForFunction(() => window.__config.modelSettings?.['deepseek-v4.1-flash-eco']?.contextTier === 'maximum');
+  await ecoTiers.getByRole('button', { name: /^默认 /u }).click();
   await page.waitForFunction(() => window.__config.modelSettings?.['deepseek-v4.1-flash-eco'] === undefined);
-  await eco.getByText('容量未知', { exact: true }).waitFor();
-  await eco.locator('.odc-model-details>summary').click();
+  // A model without evidenced capacity keeps the unknown state and never invents tiers.
+  const carbon = modelRow('gemini-4-carbon');
+  await carbon.locator('.odc-model-details>summary').click();
+  await carbon.getByText('容量未知', { exact: true }).waitFor();
+  assert.equal(await carbon.locator('.odc-context [data-preset]').count(), 0);
+  assert.doesNotMatch(await carbon.locator('.odc-context').innerText(), /272,000|872,000|256,000|512,000/u);
+  await page.evaluate(() => window.__setModelSettings('gemini-4-carbon', { contextWindow: 872000 }));
+  await carbon.getByText('自定义 872K', { exact: true }).waitFor();
+  await carbon.locator('.odc-context').getByRole('button', { name: '恢复默认', exact: true }).click();
+  await page.waitForFunction(() => window.__config.modelSettings?.['gemini-4-carbon'] === undefined);
+  await carbon.getByText('容量未知', { exact: true }).waitFor();
+  await carbon.locator('.odc-model-details>summary').click();
   // Reset deletes the whole map entry; the ready form must win over the now-stale catalog flag.
   await luna.getByRole('button', { name: '重置', exact: true }).click();
   await page.waitForFunction(() => !('gpt-6-luna' in (window.__config.modelSettings ?? {})));
@@ -876,7 +896,9 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   assert.equal(await unknownEdit.count(), 0);
   // Thinking controls distinguish capabilities and remain available before advanced disclosure.
   assert.equal(await modelRow('kimi-k2.7-code').getByText('固定思考 · 始终开启', { exact: true }).isVisible(), true);
-  assert.equal(await modelRow('deepseek-v4.1-flash-eco').getByText('思考能力未核实', { exact: true }).isVisible(), true);
+  assert.equal(await modelRow('gemini-4-carbon').getByText('思考能力未核实', { exact: true }).isVisible(), true);
+  // Eco shares the V4.1 Flash route, so its thinking control is a real graded editor.
+  assert.equal(await modelRow('deepseek-v4.1-flash-eco').getByText('模型默认（高 · high）', { exact: true }).isVisible(), true);
   const mimo = modelRow('mimo-v2.6-pro');
   assert.equal(await mimo.locator('.odc-model-details').evaluate(element => element.open), false);
   await mimo.getByRole('button', { name: '编辑思考模式', exact: true }).click();
@@ -1026,13 +1048,18 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''));
   await page.locator('#context-design-comparison').screenshot({ path: join(previewDir, 'context-kxy-comparison-dark.png') });
   await page.evaluate(() => { document.body.removeAttribute('data-ds-dark-theme'); document.getElementById('context-design-comparison').remove(); });
-  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-plan', model: 'deepseek-v4.1-flash-eco' } }));
+  // The capacity row is cached: switching to another CoRouter model stays local.
+  const statusReads = await page.evaluate(() => window.__statusCalls);
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'gpt-6-luna' } }));
+  await waitQuickReady();
+  assert.equal(await page.evaluate(() => window.__statusCalls), statusReads, 'a cached capacity row keeps the model switch local');
+  await page.evaluate(() => window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'gemini-4-carbon' } }));
   await quickA.getByText('容量未知', { exact: true }).waitFor();
   assert.equal(await quickA.locator('[data-preset]').count(), 0);
   assert.doesNotMatch(await quickA.innerText(), /272,000|872,000|256,000|512,000/u);
-  await page.evaluate(() => window.__setModelSettings('deepseek-v4.1-flash-eco', { contextTier: 'maximum' }));
+  await page.evaluate(() => window.__setModelSettings('gemini-4-carbon', { contextTier: 'maximum' }));
   await quickA.getByRole('button', { name: '恢复默认', exact: true }).click();
-  await page.waitForFunction(() => window.__config.modelSettings?.['deepseek-v4.1-flash-eco'] === undefined);
+  await page.waitForFunction(() => window.__config.modelSettings?.['gemini-4-carbon'] === undefined);
   await page.evaluate(() => {
     window.__setModelSettings('gpt-6-luna', { contextTier: 'maximum', maxTokens: 384000 });
     window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'gpt-6-luna' } });

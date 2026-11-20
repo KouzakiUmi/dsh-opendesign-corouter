@@ -3,6 +3,8 @@ import { API_PROTOCOL_SELECTION_IDS, type ProtocolSelection } from './protocol-o
 import { parseModelSettingsMap, type ModelSettingsMap } from './model-settings.js';
 import { serializableTransform } from './schema-serialization.js';
 import { parseModelCatalogSnapshot, type ModelCatalogSnapshot } from './model-catalog-snapshot.js';
+import { parseQuotaCache, type QuotaCacheRecord } from './quota-cache.js';
+import { parsePriceCache, type PriceCacheRecord } from './price-cache.js';
 import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, MAX_REQUEST_IMAGE_BYTES, MIN_REQUEST_IMAGE_BYTES } from './image-budget.js';
 export { DEFAULT_MAX_REQUEST_IMAGE_BYTES } from './image-budget.js';
 export const SETTINGS_NS = 'llm-opendesign-corouter';
@@ -24,6 +26,8 @@ export const Config = Schema.object({
   apiProtocol: Schema.union(API_PROTOCOL_SELECTION_IDS).default('auto').description('默认按精确型号选择原生请求格式；可显式覆盖。未知路由使用兼容接口，不保证网关内部不转译').volatile(),
   modelSettings: Schema.transform(Schema.dict(Schema.any<unknown>()), serializableTransform(parseModelSettingsMap)).default({}).description('逐模型启用状态、图片输入和请求参数').volatile(),
   modelCatalog: Schema.transform(Schema.any<unknown>(), serializableTransform(parseModelCatalogSnapshot)).description('上次成功读取的网关模型目录快照；重启后继续使用，直到再次刷新').volatile(),
+  quotaCache: Schema.transform(Schema.any<unknown>(), serializableTransform(parseQuotaCache)).description('上次成功读取的额度；插件重建后先显示该读数，再按刷新策略读取上游').volatile(),
+  priceCache: Schema.transform(Schema.any<unknown>(), serializableTransform(parsePriceCache)).description('上次成功读取的官网价格；插件重建后先显示该快照，再按刷新策略读取官网').volatile(),
   useDesktopCredential: Schema.boolean().default(true).description('优先读取 OpenDesign 桌面端登录态查询额度').volatile(),
   emptyTurnGuard: Schema.boolean().default(true).description('保护 DeepSeek V4.1 Flash 工具对话：恢复空回答与已知协议残留结束').volatile(),
   turnCompletionReview: Schema.boolean().default(false).description('回复结束后追加有界的结构化收尾核验，要求模型调用收尾工具报告状态').volatile(),
@@ -42,6 +46,8 @@ export interface RuntimeConfig {
   apiProtocol?: ProtocolSelection;
   modelSettings?: ModelSettingsMap;
   modelCatalog?: ModelCatalogSnapshot;
+  quotaCache?: QuotaCacheRecord;
+  priceCache?: PriceCacheRecord;
   quotaRefreshSeconds?: number;
   maxRequestImageBytes?: number;
   turnCompletionReview?: boolean;
@@ -72,12 +78,16 @@ export function apiKeyRef(config: RuntimeConfig): string {
 }
 export function readConfig(config: LiveConfig): RuntimeConfig {
   const modelCatalog = parseModelCatalogSnapshot(config.modelCatalog.get());
+  const quotaCache = parseQuotaCache(config.quotaCache.get());
+  const priceCache = parsePriceCache(config.priceCache.get());
   const apiKeyEnv = config.apiKeyEnv.get();
   return {
     ...(apiKeyEnv === undefined ? {} : { apiKeyEnv }),
     baseURL: assertBaseURL(config.baseURL.get()),
     apiProtocol: config.apiProtocol.get(), modelSettings: parseModelSettingsMap(config.modelSettings.get()),
     ...(modelCatalog === undefined ? {} : { modelCatalog }),
+    ...(quotaCache === undefined ? {} : { quotaCache }),
+    ...(priceCache === undefined ? {} : { priceCache }),
     quotaRefreshSeconds: config.quotaRefreshSeconds.get(),
     useDesktopCredential: config.useDesktopCredential.get(), emptyTurnGuard: config.emptyTurnGuard.get(),
     requestTimeoutMs: config.requestTimeoutMs.get(), streamIdleTimeoutMs: config.streamIdleTimeoutMs.get(),

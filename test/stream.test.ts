@@ -47,6 +47,19 @@ test('repeated complete tool names do not corrupt the target, and missing tool b
   assert.ok(chunks.some(x => x.type === 'block-end' && x.block.type === 'tool-call' && x.block.name === 'read' && x.block.arguments === '{}'));
   await assert.rejects(collect(event({ choices: [{ delta: { content: '<thinking></thinking>' }, finish_reason: 'tool_calls' }] })), { code: 'INVALID_RESPONSE' });
 });
+test('a re-stamped tool call id keeps the id the Host already received', async () => {
+  // The gateway re-sends the whole tool call with a new id on later fragments. The first id is
+  // already inside a `tool-call-delta`, so the block keeps it and the turn still completes.
+  const raw = event({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_a', function: { name: 'read', arguments: '{"pa' } }] } }] })
+    + event({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_b', function: { name: 'read' } }] } }] })
+    + event({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_c', function: { arguments: 'th":"x"}' } }] } }] })
+    + event({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] });
+  const chunks = await collect(raw);
+  const ends = chunks.filter(x => x.type === 'block-end').map(x => x.block);
+  assert.deepEqual(ends, [{ type: 'tool-call', id: 'call_a', name: 'read', arguments: '{"path":"x"}' }]);
+  assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'tool-calls' } });
+  assert.ok(chunks.filter(x => x.type === 'tool-call-delta').every(x => x.id === 'call_a'), 'no later fragment renames the delivered block');
+});
 test('idle and abort close the upstream reader', async () => {
   let cancelled = false;
   const stream = new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } });

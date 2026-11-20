@@ -6,7 +6,8 @@
  *   `redirect: 'error'`，20 秒上限，响应体上限 2 MiB。
  * - 与推理协议解耦：本函数不接受 protocol 参数，也不根据协议挑选路径。
  * - 归一化只接受 `data[]` 中可用且有界的 id；已知 id 继承 catalog 的分组与能力，
- *   新 id 归 `paid`。显式上下文容量只作为保守参考，不凭名称推断能力。
+ *   新 id 归 `paid`，显示名经 `model-name.ts` 本地归一化（上游真实名字优先）。
+ *   显式上下文容量只作为保守参考，不凭名称推断能力。
  * - 媒体输出模型（图像/视频/语音，走 `/api/v1/media/*`）不进对话目录。
  * - 所有失败折叠为 `ModelDiscoveryError` 的固定分类与固定文字，不回显凭据、
  *   请求头或响应体。
@@ -15,6 +16,7 @@
 import { attributionHeaders } from '@deepseek-ai/dsh-llm';
 import { findModel, type CatalogModel } from './catalog.js';
 import { assertBaseURL } from './config.js';
+import { normalizeModelName } from './model-name.js';
 import { openAiBaseURL as normalizeOpenAiBase } from './protocol-options.js';
 import { combinedSignal, record, safeSecret } from './util.js';
 
@@ -25,7 +27,6 @@ export const MAX_DISCOVERY_BODY_BYTES = 2 * 1024 * 1024;
 /** 单次发现的模型条数上限。 */
 const MAX_MODELS = 512;
 const MAX_MODEL_ID_LENGTH = 128;
-const MAX_MODEL_NAME_LENGTH = 128;
 const MAX_CONTEXT_WINDOW = 100_000_000;
 const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/u;
 /**
@@ -109,6 +110,22 @@ async function boundedJson(response: Response, signal: AbortSignal | undefined, 
 }
 
 /**
+ * Combine a catalog reference with the window the gateway reports.
+ *
+ * Gateways report rounded approximations of the same window — this one publishes 1,048,000
+ * for a 1,048,576 model and 262,000 for 262,144 — so an under-report inside the rounding
+ * tolerance keeps the documented reference instead of degrading it (which would also turn a
+ * binary window into decimal K tiers). Only a materially smaller report lowers the
+ * reference and stays the conservative cap it has always been. A previously unknown model
+ * takes the reported window as its reference.
+ */
+export function referenceContextWindow(known: number | undefined, offered: number): number {
+  if (known === undefined || offered >= known) return known === undefined ? offered : known;
+  const tolerance = Math.min(1024, Math.ceil(known * 0.01));
+  return known - offered <= tolerance ? known : offered;
+}
+
+/**
  * Normalize an OpenAI list body. Rows without a usable id are dropped, duplicates keep
  * their first occurrence, and no capability is invented. Explicit gateway window fields
  * may lower a catalog reference, or supply a reference for a previously unknown id.
@@ -136,12 +153,12 @@ function normalize(body: unknown): readonly CatalogModel[] {
     const offeredContext = gatewayContext(value);
     if (known) {
       const contextWindow = offeredContext === undefined ? known.contextWindow
-        : known.contextWindow === undefined ? offeredContext : Math.min(known.contextWindow, offeredContext);
+        : referenceContextWindow(known.contextWindow, offeredContext);
       rows.push({ ...known, ...(contextWindow === undefined ? {} : { contextWindow }) });
       continue;
     }
-    const offered = typeof value.name === 'string' ? value.name.trim() : '';
-    const name = offered !== '' && offered.length <= MAX_MODEL_NAME_LENGTH ? offered : value.id;
+    // 新 id 的显示名做本地归一化（纯格式化，不是能力证据）；上游真实名字优先。
+    const name = normalizeModelName(value.id, typeof value.name === 'string' ? value.name : undefined);
     rows.push({ id: value.id, name, group: 'paid', ...(offeredContext === undefined ? {} : { contextWindow: offeredContext }) });
   }
   return rows;

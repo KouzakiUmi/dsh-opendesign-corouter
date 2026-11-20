@@ -3,6 +3,7 @@ import test from 'node:test';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ContextQuickSwitch, isCoRouterProvider, quickWindowLabel } from '../src/client-context-quick.js';
+import { ensureModelRows, resetModelCapacity } from '../src/client-model-capacity.js';
 
 const h = React.createElement;
 
@@ -105,4 +106,43 @@ test('a pending model selection cannot be written through the quick switch', () 
   }));
   assert.match(pending, /正在切换模型，请稍候。/u);
   assert.doesNotMatch(pending, /data-preset=/u);
+});
+
+test('a cached capacity row renders the tiers without a second remote read', async () => {
+  resetModelCapacity();
+  let reads = 0;
+  const caching = (async () => {
+    reads++;
+    return { models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna', group: 'paid', contextWindow: 1_050_000 }] };
+  }) as unknown as QuickProps['caller'];
+  await ensureModelRows(caching);
+  const html = renderToStaticMarkup(h(ContextQuickSwitch, { directory: ownDirectory, form, caller: caching }));
+  assert.match(html, /data-preset="default"/u, 'a cached row renders the segments immediately');
+  assert.match(html, /data-preset="extended"/u);
+  assert.match(html, /data-preset="maximum"/u);
+  assert.doesNotMatch(html, /正在读取模型参考容量…/u, 'nothing is pending once the row is cached');
+  assert.equal(reads, 1, 'rendering the control does not read the Host again');
+  resetModelCapacity();
+});
+
+test('a background directory refresh keeps the capsule clickable; only an error blocks it', async () => {
+  resetModelCapacity();
+  const caching = (async () => ({ models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna', group: 'plan', contextWindow: 1_050_000 }] })) as unknown as QuickProps['caller'];
+  await ensureModelRows(caching);
+  for (const status of ['loading', 'idle', 'selecting'] as const) {
+    const html = renderToStaticMarkup(h(ContextQuickSwitch, {
+      directory: directory({ current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' }, pending: null, status, groups: [], routable: true }),
+      form, caller: caching,
+    }));
+    assert.match(html, /data-preset="default"/u, status);
+    assert.doesNotMatch(html, /disabled=""/u, `${status}: a background refresh must not gray out the buttons`);
+    assert.doesNotMatch(html, /正在切换模型|读取失败|尚未就绪/u, status);
+  }
+  const failed = renderToStaticMarkup(h(ContextQuickSwitch, {
+    directory: directory({ current: { provider: 'opendesign-corouter-plan', model: 'gpt-6-luna' }, pending: null, status: 'error', groups: [], routable: true }),
+    form, caller: caching,
+  }));
+  assert.match(failed, /会话模型目录读取失败/u);
+  assert.match(failed, /disabled=""/u);
+  resetModelCapacity();
 });

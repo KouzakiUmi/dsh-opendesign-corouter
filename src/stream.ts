@@ -102,8 +102,10 @@ export async function* consumeSse(body: ReadableStream<Uint8Array>, signal: Abor
       if (!call) { call = { index: nextIndex++, id: '', name: '', arguments: '', started: false }; tools.set(item.index, call); count++; sawTool = true; }
       const fn = record(item.function) ? item.function : {};
       if (typeof item.id === 'string' && item.id) {
-        if (call.id && call.id !== item.id) throw new LlmError('OpenDesign：工具调用标识发生变化', 'INVALID_RESPONSE');
-        call.id = item.id;
+        // The first id already reached the Host in a `tool-call-delta`, so a later fragment
+        // that re-stamps the same call keeps that id: failing the whole turn over a gateway's
+        // re-stamped id turned an ordinary completion into "本轮运行失败".
+        if (!call.id) call.id = item.id;
       }
       if (typeof fn.name === 'string' && fn.name) call.name = fn.name; // gateway may repeat the complete name; only arguments are deltas
       if (typeof fn.arguments === 'string') call.arguments += fn.arguments;

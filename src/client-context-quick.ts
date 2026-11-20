@@ -1,13 +1,14 @@
 import * as React from 'react';
 import type { ConfigForm, RpcCaller } from './client.js';
-import type { Status } from './remote.js';
+import type { StatusModel } from './remote.js';
 import type { ModelSettings } from './model-settings.js';
+import { cachedModelRow, ensureModelRows } from './client-model-capacity.js';
 import { configWritesFor } from './client-config-writes.js';
+import { quickControlState, useQuickStores } from './client-control-state.js';
 import { contextWindowPreset, contextTierAvailable, effectiveContextWindow, type ContextWindowPresetId } from './context-budget.js';
 import { ContextWindowControl, formatContextShort } from './client-model-controls.js';
 
 const h = React.createElement;
-const EMPTY_GROUPS: readonly unknown[] = [];
 
 /** Minimal projection of the Core per-session model directory. */
 export interface QuickDirectorySnapshot {
@@ -41,6 +42,7 @@ export const QUICK_CONTEXT_CSS = `
 .odc-quick .odc-context-note,.odc-quick-feedback{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;pointer-events:none}
 .odc-quick[data-error=true] .odc-context-options{border-color:var(--dsw-alias-state-error-primary,CanvasText)}
 .odc-quick[data-error=true]:is(:hover,:focus-within)::after{content:attr(data-error-message);position:absolute;inset-inline-start:0;bottom:calc(100% + 6px);z-index:var(--odc-quick-tooltip-layer,50);width:max-content;max-width:min(260px,calc(100vw - 24px));box-sizing:border-box;padding:8px;border:1px solid var(--dsw-alias-state-error-primary,CanvasText);border-radius:6px;background:var(--dsw-alias-bg-layer-1,Canvas);color:var(--dsw-alias-label-primary,CanvasText);font:11px/1.5 system-ui,sans-serif;white-space:normal;overflow-wrap:anywhere;pointer-events:none}
+.odc-quick .odc-quick-retry{min-height:0;padding:var(--odc-quick-space) var(--odc-quick-inset);border:1px solid var(--odc-quick-border);border-radius:var(--odc-quick-radius);background:transparent;color:inherit;font:inherit;font-size:var(--odc-quick-font);cursor:pointer}
 @media(forced-colors:active){.odc-quick .odc-context-options{border-color:ButtonText}.odc-quick .odc-context-option[aria-pressed=true]{background:Highlight;color:HighlightText;forced-color-adjust:none}.odc-quick .odc-context-option:disabled{color:GrayText;opacity:1}}
 `;
 
@@ -54,63 +56,65 @@ export function ContextQuickSwitch({ directory, form, caller }: ContextQuickProp
   const current = snapshot.current;
   if (current === null || !isCoRouterProvider(current.provider)) return null;
   return h(ContextQuickControl, {
-    key: `${current.provider}/${current.model}`, provider: current.provider, modelId: current.model,
-    selecting: snapshot.pending !== null || snapshot.status === 'selecting',
-    directoryUnavailable: snapshot.status !== 'ready',
-    catalog: snapshot.groups.length === 0 ? EMPTY_GROUPS : snapshot.groups, form, caller,
+    key: `${current.provider}/${current.model}`, modelId: current.model,
+    directory, form, caller,
   });
 }
 
-function ContextQuickControl({ provider, modelId, selecting, directoryUnavailable, catalog, form, caller }: {
-  provider: string; modelId: string; selecting: boolean; directoryUnavailable: boolean; catalog: readonly unknown[]; form: ConfigForm; caller: RpcCaller;
+/**
+ * The chat-side window switch.
+ *
+ * The capacity reference comes from the cached model rows ({@link cachedModelRow}): reading
+ * `status` here, on mount and again on every model-directory publish, is what made this
+ * control stall before a saved value appeared. A cached row renders immediately, one shared
+ * read fills the cache at most once per refresh window, and a missing row degrades to the
+ * existing unknown-capacity state instead of a wall of disabled buttons. A background
+ * directory refresh likewise never disables the control: only a pending model switch, a
+ * directory error, an unreadable form or an in-flight save blocks it.
+ */
+function ContextQuickControl({ modelId, directory, form, caller }: {
+  modelId: string; directory: QuickDirectoryStore; form: ConfigForm; caller: RpcCaller;
 }): React.ReactElement {
   const writes = React.useMemo(() => configWritesFor(form), [form]);
-  const writeState = React.useSyncExternalStore(
-    React.useCallback(listener => writes.subscribe(listener), [writes]),
-    React.useCallback(() => writes.getSnapshot(), [writes]),
-    React.useCallback(() => writes.getSnapshot(), [writes]),
-  );
-  const formState = React.useSyncExternalStore(
-    React.useCallback(listener => form.subscribe(listener), [form]),
-    React.useCallback(() => form.getSnapshot(), [form]),
-    React.useCallback(() => form.getSnapshot(), [form]),
-  );
-  const [status, setStatus] = React.useState<Status>();
-  const [loading, setLoading] = React.useState(true);
+  const { snapshot, formState, writeState } = useQuickStores(directory, form, writes);
+  const [row, setRow] = React.useState<StatusModel | undefined>(() => cachedModelRow(modelId));
+  const [awaiting, setAwaiting] = React.useState(() => cachedModelRow(modelId) === undefined);
   const [loadError, setLoadError] = React.useState(false);
   const [error, setError] = React.useState<string>();
   const [notice, setNotice] = React.useState<string>();
   const alive = React.useRef(true);
-  const generation = React.useRef(0);
   const id = React.useId();
-  React.useEffect(() => { alive.current = true; return () => { alive.current = false; generation.current++; }; }, []);
-  const loadStatus = React.useCallback(async () => {
-    const version = ++generation.current;
-    setLoading(true); setLoadError(false);
-    try {
-      const next = await caller<Status>('status');
-      if (alive.current && version === generation.current) setStatus(next);
-    } catch {
-      if (alive.current && version === generation.current) setLoadError(true);
-    } finally {
-      if (alive.current && version === generation.current) setLoading(false);
-    }
-  }, [caller]);
-  React.useEffect(() => { void loadStatus(); }, [loadStatus, catalog]);
-  const values = { ...(formState.value ?? status?.config), ...writeState.pendingValues };
-  const settingsMap = values.modelSettings ?? {};
-  const settings = settingsMap[modelId] ?? {};
-  const row = status?.models.find(model => model.id === modelId && model.group === (provider === 'opendesign-corouter-plan' ? 'plan' : 'paid'));
-  const pending = writeState.pendingFields.includes('modelSettings');
-  const reason = selecting ? '正在切换模型，请稍候。'
-    : directoryUnavailable ? '会话模型目录尚未就绪，请稍后重试。'
-      : formState.status === 'unavailable' ? '模型设置暂不可用。'
-        : formState.status !== 'ready' || formState.value === undefined ? '正在载入模型设置。'
-          : !formState.writable ? '当前设置为只读。'
-            : pending ? '正在保存模型设置…'
-              : loading ? '正在读取模型参考容量…'
-                : loadError ? '模型信息读取失败，请重试。'
-                  : row === undefined ? '当前模型不在 CoRouter 目录中。' : undefined;
+  React.useEffect(() => {
+    alive.current = true;
+    const cached = cachedModelRow(modelId);
+    setRow(cached);
+    setLoadError(false);
+    setAwaiting(cached === undefined);
+    if (cached !== undefined) return () => { alive.current = false; };
+    void ensureModelRows(caller).then(() => {
+      if (!alive.current) return;
+      const next = cachedModelRow(modelId);
+      setRow(next);
+      setLoadError(next === undefined);
+      setAwaiting(false);
+    });
+    return () => { alive.current = false; };
+  }, [caller, modelId]);
+  const retry = React.useCallback(() => {
+    setLoadError(false);
+    setAwaiting(true);
+    void ensureModelRows(caller, { force: true }).then(() => {
+      if (!alive.current) return;
+      const next = cachedModelRow(modelId);
+      setRow(next);
+      setLoadError(next === undefined);
+      setAwaiting(false);
+    });
+  }, [caller, modelId]);
+  const values = { ...(formState.value ?? {}), ...writeState.pendingValues };
+  const { reason, pending, settings, settingsMap } = quickControlState({
+    directory: snapshot, form: formState, values, pendingFields: writeState.pendingFields, modelId, row, awaiting,
+  });
   const choose = async (nextTier: ContextWindowPresetId) => {
     if (reason !== undefined || row === undefined || !contextTierAvailable(nextTier, row.contextWindow)) return;
     if (settings.contextWindow === undefined && contextWindowPreset(undefined, settings.contextTier) === nextTier) return;
@@ -135,7 +139,7 @@ function ContextQuickControl({ provider, modelId, selecting, directoryUnavailabl
     'aria-label': `CoRouter 上下文 · ${modelId}`, title: `${error ?? reason ?? ''} 修改 ${modelId} 的默认窗口，使用此模型的其他会话同步。`.trim() },
     h(ContextWindowControl, { id, reference: row?.contextWindow, settings, disabled: reason !== undefined && !pending, pending,
       ...(reason === undefined ? {} : { reason }), onSelect: tier => { void choose(tier); } }),
-    loadError ? h('button', { type: 'button', className: 'odc-button odc-button-small', onClick: () => { void loadStatus(); } }, '重试读取模型信息') : null,
+    loadError ? h('button', { type: 'button', className: 'odc-quick-retry', onClick: retry }, '重试读取模型信息') : null,
     error === undefined ? null : h('span', { className: 'odc-quick-feedback odc-quick-error', role: 'alert' }, error),
     notice === undefined ? null : h('span', { className: 'odc-quick-feedback', role: 'status' }, notice));
 }

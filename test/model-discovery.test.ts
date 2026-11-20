@@ -153,7 +153,15 @@ test('five verified API additions retain their catalog labels and evidenced capa
 test('seven scoped additions preserve only individually evidenced capabilities', async () => {
   const expected = [
     { id: 'claude-fable-5.2', contextWindow: 1_000_000, maxOutputTokens: 128_000, inputModalities: ['text', 'image'], reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high', nativeProtocol: 'messages', group: 'paid' },
-    { id: 'deepseek-v4.1-flash-eco', group: 'plan' },
+    {
+      id: 'deepseek-v4.1-flash-eco',
+      contextWindow: 1_000_000,
+      maxOutputTokens: 384_000,
+      inputModalities: ['text', 'image'],
+      reasoningEfforts: ['none', 'low', 'high', 'max'],
+      defaultEffort: 'high',
+      group: 'plan',
+    },
     { id: 'gemini-4-carbon', group: 'paid' },
     { id: 'hy4', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: ['text', 'image'], reasoningMode: 'toggle', reasoningEfforts: ['none', 'high'], defaultEffort: 'high', group: 'paid' },
     { id: 'hy4-flash', contextWindow: 1_000_000, maxOutputTokens: 64_000, inputModalities: ['text', 'image'], reasoningMode: 'toggle', reasoningEfforts: ['none', 'high'], defaultEffort: 'high', group: 'paid' },
@@ -206,16 +214,29 @@ test('explicit gateway windows conservatively lower references without interpret
   const { fetcher } = stub(() => Response.json({ data: [
     { id: 'kimi-k2.7-code', metadata: { context_limit: 262_000, context_budget: 20_000, output_budget: 2_000 } },
     { id: 'claude-opus-5.5', context_length: 500_000, contextWindow: 600_000 },
+    { id: 'muse-spark-1.3', metadata: { context_limit: 1_048_000 } },
     { id: 'new-sized', metadata: { context_window_tokens: 96_000 } },
     { id: 'new-invalid', context_window: -1, metadata: { context_limit: 100_000_001, context_budget: 20_000, output_budget: 2_000 } },
   ] }));
   const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
-  assert.equal(rows[0]?.contextWindow, 262_000);
-  assert.equal(rows[0]?.maxOutputTokens, 262_144, 'gateway output_budget is not an output limit');
+  // Both numbers are rounded reports of the documented window: 262,144 and 1,048,576 stay.
+  assert.equal(rows[0]?.contextWindow, 262_144, 'a rounding tolerance keeps the exact reference');
   assert.equal(rows[1]?.contextWindow, 500_000, 'the more conservative explicit value wins');
   assert.equal(rows[1]?.maxOutputTokens, undefined);
-  assert.equal(rows[2]?.contextWindow, 96_000);
-  assert.equal(rows[3]?.contextWindow, undefined);
+  assert.equal(rows[2]?.contextWindow, 1_048_576, '1,048,000 is 1 MiB rounded, not a smaller window');
+  assert.equal(rows[3]?.contextWindow, 96_000);
+  assert.equal(rows[4]?.contextWindow, undefined);
+  assert.equal(rows[0]?.maxOutputTokens, 262_144, 'gateway output_budget is not an output limit');
+});
+
+test('a materially smaller gateway window still lowers the reference', async () => {
+  const { fetcher } = stub(() => Response.json({ data: [
+    { id: 'gemini-4-argon', metadata: { context_limit: 500_000 } },
+    { id: 'muse-spark-1.3', metadata: { context_limit: 200_000 } },
+  ] }));
+  const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
+  assert.equal(rows[0]?.contextWindow, 500_000, 'half the documented window is a real cap');
+  assert.equal(rows[1]?.contextWindow, 200_000);
 });
 
 test('drops unusable and duplicate rows instead of inventing models', async () => {
@@ -237,9 +258,31 @@ test('drops unusable and duplicate rows instead of inventing models', async () =
   const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
   assert.deepEqual(rows, [
     { id: 'usable-model', name: 'Usable', group: 'paid' },
-    // 名称缺失或不是字符串时回退为 id，而不是编造显示名。
-    { id: 'second-model', name: 'second-model', group: 'paid' },
+    // 名称缺失或不是字符串时回退为归一化后的 id，而不是原始 id 或编造显示名。
+    { id: 'second-model', name: 'Second Model', group: 'paid' },
   ]);
+});
+
+test('new ids without a usable upstream name are normalized into readable display names', async () => {
+  const { fetcher } = stub(() => Response.json({ data: [
+    { id: 'gpt-7-sol' },
+    { id: 'claude-3-5-sonnet-20241022', name: 'claude-3-5-sonnet-20241022' },
+    { id: 'qwen3-30b-a3b', name: 'Qwen3 30B A3B' },
+    { id: 'gpt-6.1-sol-remote', name: '  GPT-6.1   Sol Remote ' },
+  ] }));
+  const rows = await fetchModelCatalog(BASE, KEY, undefined, fetcher);
+  assert.deepEqual(rows.map(row => row.name), [
+    'GPT-7 Sol',
+    'Claude 3.5 Sonnet 20241022',
+    'Qwen3 30B A3B',
+    'GPT-6.1 Sol Remote',
+  ]);
+  // 归一化只改显示名：新 id 仍归 paid，且不凭空产生容量或能力。
+  for (const row of rows) {
+    assert.equal(row.group, 'paid');
+    assert.equal(row.contextWindow, undefined);
+    assert.equal(row.inputModalities, undefined);
+  }
 });
 
 test('explicit media-output models stay out of the chat catalog', async () => {

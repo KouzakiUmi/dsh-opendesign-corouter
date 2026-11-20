@@ -56,7 +56,7 @@ test('new context references survive Host preparation without adding an output c
     [262_144, [65_536, 131_072, 262_144]],
     [500_000, [128_000, 256_000, 500_000]],
   ]);
-  assert.equal(added.length, 29, '17 exact model rows have evidenced output caps; the other 29 do not');
+  assert.equal(added.length, 28, '18 exact model rows have evidenced output caps; the other 28 do not');
   try {
     for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
       for (const [index, contextTier] of (['default', 'extended', 'maximum'] as const).entries()) {

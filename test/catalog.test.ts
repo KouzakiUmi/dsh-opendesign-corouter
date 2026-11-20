@@ -91,7 +91,7 @@ const GO_CAPACITY = new Map<string, {
  */
 const EFFORT_MATRIX = new Map<string, readonly string[] | null>([
   ['claude-fable-5.2', ['low', 'medium', 'high', 'xhigh', 'max']],
-  ['deepseek-v4.1-flash-eco', null], ['gemini-4-carbon', null], ['muse-ember-1.0', null],
+  ['gemini-4-carbon', null], ['muse-ember-1.0', null],
   // 2026-11-18 official audit: Hy4 Chat no_think is a switch, not another depth level.
   ['hy4', ['none', 'high']], ['hy4-flash', ['none', 'high']], ['qwen4-max', ['low', 'high', 'xhigh']],
   // OpenAI：`reasoning.effort` 支持集合；GPT-6.1 Sol 与 GPT-6 Astra 官方明文不支持 `none`。
@@ -113,6 +113,8 @@ const EFFORT_MATRIX = new Map<string, readonly string[] | null>([
   ['claude-sonnet-5', ['low', 'medium', 'high', 'xhigh', 'max']],
   ['claude-haiku-5.5', ['low', 'medium', 'high', 'xhigh', 'max']],
   // DeepSeek / Z.ai / Moonshot / Google / xAI / Xiaomi / Tencent / Alibaba。
+  // Eco 与 Flash 是同一条 V4.1 Flash 路由（2026-11-18 操作者说明），参数集合相同。
+  ['deepseek-v4.1-flash-eco', ['none', 'low', 'high', 'max']],
   ['deepseek-v4.1-flash', ['none', 'low', 'high', 'max']],
   ['deepseek-v4-pro', ['none', 'low', 'high', 'max']],
   ['deepseek-v4-flash', ['none', 'low', 'high', 'max']],
@@ -200,7 +202,7 @@ test('原 12 款容量/输出参考不因套餐分组变化而丢失', () => {
 
 test('46 个模型容量按完整证据矩阵固定，未知不借用相邻型号', () => {
   const windows = new Map<string, number | undefined>([
-    ['claude-fable-5.2', 1_000_000], ['deepseek-v4.1-flash-eco', undefined],
+    ['claude-fable-5.2', 1_000_000], ['deepseek-v4.1-flash-eco', 1_000_000],
     ['gemini-4-carbon', undefined], ['muse-ember-1.0', undefined],
     ['hy4', 1_000_000], ['hy4-flash', 1_000_000], ['qwen4-max', 1_000_000],
     ['gpt-6.1-sol', 1_050_000], ['gpt-6.1-terra', 1_050_000], ['gpt-6-astra', 1_050_000],
@@ -226,6 +228,7 @@ test('46 个模型容量按完整证据矩阵固定，未知不借用相邻型�
   outputCaps.set('claude-fable-5.2', 128_000);
   outputCaps.set('hy4', 64_000); outputCaps.set('hy4-flash', 64_000);
   outputCaps.set('qwen4-max', 131_072); // Conservative cap shared by both documented modes.
+  outputCaps.set('deepseek-v4.1-flash-eco', 384_000); // Same V4.1 Flash route as `deepseek-v4.1-flash`.
   for (const row of MODELS) assert.equal(row.maxOutputTokens, outputCaps.get(row.id), `${row.id} output cap`);
 });
 
@@ -234,12 +237,12 @@ test('图片输入能力采用逐型号证据，未确认模型保持未知', ()
     'claude-fable-5.2', 'hy4', 'hy4-flash', 'qwen4-max',
     'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra',
     'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'claude-opus-5', 'claude-opus-4.8', 'claude-sonnet-5.5', 'claude-sonnet-5', 'claude-haiku-5.5',
-    'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flashx', 'glm-5.3-flash',
+    'deepseek-v4.1-flash', 'deepseek-v4.1-flash-eco', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'glm-5.3-flashx', 'glm-5.3-flash',
     'kimi-k2.7-code', 'kimi-k3', 'kimi-k3.1-pro', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash',
     'grok-4.7', 'grok-4.6', 'grok-4.5', 'mimo-v2.6-pro', 'mimo-v2.6-flash', 'minimax-m3.1-flash', 'muse-spark-1.3',
   ];
   const text = ['glm-5.2', 'qwen3.7-max', 'hy4-preview'];
-  const unknown = ['deepseek-v4-pro', 'muse-wonder', 'deepseek-v4.1-flash-eco', 'gemini-4-carbon', 'muse-ember-1.0'];
+  const unknown = ['deepseek-v4-pro', 'muse-wonder', 'gemini-4-carbon', 'muse-ember-1.0'];
   assert.deepEqual([...image, ...text, ...unknown].sort(), MODELS.map(model => model.id).sort());
   for (const id of image) assert.deepEqual(findModel(id)?.inputModalities, ['text', 'image'], id);
   for (const id of text) assert.deepEqual(findModel(id)?.inputModalities, ['text'], id);
@@ -275,7 +278,7 @@ const DEFAULT_EFFORT_MATRIX = new Map<string, string>([
   ['claude-fable-5.1', 'high'], ['claude-fable-5', 'high'], ['claude-opus-5.5', 'medium'],
   ['claude-opus-5', 'high'], ['claude-opus-4.8', 'high'], ['claude-sonnet-5.5', 'high'],
   ['claude-sonnet-5', 'high'], ['claude-haiku-5.5', 'medium'],
-  ['deepseek-v4.1-flash', 'high'], ['deepseek-v4-pro', 'high'],
+  ['deepseek-v4.1-flash', 'high'], ['deepseek-v4.1-flash-eco', 'high'], ['deepseek-v4-pro', 'high'],
   ['deepseek-v4-flash', 'high'], ['deepseek-v4-flash-vision-exp', 'high'],
   ['glm-5.3-flashx', 'max'], ['glm-5.3-flash', 'max'], ['glm-5.2', 'max'],
   ['kimi-k3', 'max'], ['kimi-k3.1-pro', 'max'],
@@ -345,7 +348,7 @@ test('fixed与toggle按完整精确矩阵区分，未知型号不伪造控制', 
     assert.deepEqual(findModel(id)!.reasoningEfforts, ['none', 'high'], `${id} internal off/on only`);
     assert.equal(findModel(id)!.defaultEffort, 'high', `${id} defaults enabled`);
   }
-  for (const id of ['muse-wonder', 'deepseek-v4.1-flash-eco', 'gemini-4-carbon', 'muse-ember-1.0']) {
+  for (const id of ['muse-wonder', 'gemini-4-carbon', 'muse-ember-1.0']) {
     const unknown = findModel(id);
     assert.ok(unknown);
     assert.equal(unknown.reasoningEfforts, undefined, `${id} 档位未确认，应保持缺省`);
@@ -376,7 +379,7 @@ test('首选协议采用精确 ID 证据，未确认路由只按产品策略默�
     assert.equal(model.nativeProtocol, preferred.get(model.id), `${model.id} native evidence`);
     assert.equal(effectiveProtocol(model), preferred.get(model.id) ?? 'responses', `${model.id} auto selection`);
   }
-  for (const id of ['deepseek-v4.1-flash-eco', 'gemini-4-carbon', 'muse-ember-1.0']) {
+  for (const id of ['gemini-4-carbon', 'muse-ember-1.0']) {
     const row = findModel(id)!;
     assert.equal(row.contextWindow, undefined, `${id} context unknown`);
     assert.equal(row.maxOutputTokens, undefined, `${id} output unknown`);
