@@ -102,7 +102,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-opendesign-corouter-0.1.15.tg
 | 项目 | 要求 / 证据 |
 | --- | --- |
 | 目标 DSH Core | `0.2.1-rc.3`，以官方同版本发布包验证 |
-| Core 声明范围 | `>=0.2.1-rc.3 <0.3.0-0`，范围内其他版本不代表已实测 |
+| Core 声明范围 | `>=0.2.1-rc.3 <0.2.2-0 \|\| >=0.2.2-0 <0.3.0-0`，逐 0.2.x minor 带预发布下界分支；范围内其他版本不代表已实测 |
 | Node.js | `>=24.9.0` |
 | 独立登录 | 自动打开需本机 Chrome；也可复制链接到常用浏览器确认 |
 | 默认推理接口 | 自动按模型选择 `/v1/responses`、`/v1/messages` 或 `/v1/chat/completions` |

@@ -1,6 +1,6 @@
 {
   "name": "dsh-opendesign-corouter",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "OpenDesign CoRouter：套餐赠送与付费模型双 Provider、桌面登录态额度及独立登录",
   "type": "module",
   "license": "MIT",
@@ -52,7 +52,7 @@
   ],
   "engines": {
     "node": ">=24.9.0",
-    "dsh": ">=0.2.1-rc.3 <0.3.0-0"
+    "dsh": ">=0.2.1-rc.3 <0.2.2-0 || >=0.2.2-0 <0.3.0-0"
   },
   "dsh": {
     "bundle": {
@@ -80,14 +80,14 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",
-    "@deepseek-ai/dsh-api-remotes": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-attachment": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-credentials": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-launch-environment": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-settings": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-typert-protocol": ">=0.2.1-rc.3 <0.3.0-0",
-    "@deepseek-ai/dsh-typert-registry": ">=0.2.1-rc.3 <0.3.0-0"
+    "@deepseek-ai/dsh-api-remotes": ">=0.2.1-rc.3 <0.2.2-0 || >=0.2.2-0 <0.3.0-0",
+    "@deepseek-ai/dsh-attachment": ">=0.2.1-rc.3 <0.2.2-0 || >=0.2.2-0 <0.3.0-0",
+    "@deepseek-ai/dsh-credentials": ">=0.2.1-rc.3 <0.2.2-0 || >=0.2.2-0 <0.3.0-0",
+    "@deepseek-ai/dsh-launch-environment": ">=0.2.1-rc.3 <0.2.2-0 || >=0.2.2-0 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.3 <0.2.2-0 || >=0.2.2-0 <0.3.0-0",
+    "@deepseek-ai/dsh-settings": ">=0.2.1-rc.3 <0.2.2-0 || >=0.2.2-0 <0.3.0-0",
+    "@deepseek-ai/dsh-typert-protocol": ">=0.2.1-rc.3 <0.2.2-0 || >=0.2.2-0 <0.3.0-0",
+    "@deepseek-ai/dsh-typert-registry": ">=0.2.1-rc.3 <0.2.2-0 || >=0.2.2-0 <0.3.0-0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-settings": {
@@ -120,6 +120,7 @@
     "esbuild": "^0.28.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "semver": "^7.8.5",
     "tsx": "^4.23.13",
     "typescript": "^6.0.3"
   }

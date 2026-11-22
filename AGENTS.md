@@ -68,7 +68,7 @@ Required behavior:
 
 ## Design and maintenance
 
-See [usage](docs/usage.md), [quota evidence](docs/quota-evidence.md), and [UI design](docs/ui-design.md). The dependency and Core compatibility baseline is declared in `package.json`; consult its installed types instead of an unrelated DSH checkout.
+See [usage](docs/usage.md), [quota evidence](docs/quota-evidence.md), and [UI design](docs/ui-design.md). Release and marketplace listing flow (fixed-name GitHub Release assets, the awesome-dsh-plugin entry and the repo-side contract) live in [publishing](docs/publishing.md). The dependency and Core compatibility baseline is declared in `package.json`; consult its installed types instead of an unrelated DSH checkout.
 
 Keep API keys and console credentials in the host credential service or environment references. Browser state and ordinary settings contain no credential values. The opened page is untrusted input: the plugin never types into it, clicks in it, or reads from it. All network readers need cancellation, size/time bounds, and safe errors. Model capabilities come from evidence or explicit user overrides, not guesses from vendor names.
 

@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,3 +56,19 @@ jobs:
         env:
           REQUIRE_PROVENANCE: ${{ steps.registry.outputs.publish }}
         run: node scripts/release-check.mjs verify "./release/${{ steps.preflight.outputs.filename }}"
+      - name: Stage the fixed-name release asset
+        run: cp "release/${{ steps.preflight.outputs.filename }}" release/dsh-opendesign-corouter.tgz
+      - name: Create the GitHub Release with the verified tarball
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            release/dsh-opendesign-corouter.tgz
+            release/${{ steps.preflight.outputs.filename }}
+            release/${{ steps.preflight.outputs.filename }}.sha256
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          generate_release_notes: true
+          # 由 GitHub 按版本和发布时间判定 latest。
+          make_latest: legacy

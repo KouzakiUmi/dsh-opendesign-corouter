@@ -1,5 +1,12 @@
 # 更新记录
 
+## 0.3.5
+
+- Core peer 范围与 `engines.dsh` 改为逐 minor 预发布分支 `>=0.2.1-rc.3 <0.2.2-0 || >=0.2.2-0 <0.3.0-0`：旧单分支按 node-semver 规则静默排除 0.2.2 起的全部预发布 Core（本机宿主为 0.2.2-rc.5）。新增 `test/peer-range.test.mjs` 用 semver 实测各分支的接受与排除边界；Core 升新 minor 时按同一规则补分支并同步测试。
+- 发布工作流在 npm 核验通过后为同一标签创建 GitHub Release：不带版本名的 `dsh-opendesign-corouter.tgz` 与带版本名的安装包、校验和各一份，固定下载地址跨发布有效；重跑只更新 Release 与资产，不重复发布 npm。
+- 根目录新增 `screenshots.json`，声明六张市场截图（额度概览、模型分组、连接与登录、聊天上下文胶囊、每模型控制、窄屏深色）；`ui-smoke` 增加模型分组与聊天输入区两张局部区域截图，整页长图不再作为市场卡片。
+- 提交 awesome-dsh-plugin 收录条目（分类 `model`），仓库加 `dsh-plugin` topic；发布与市场收录流程、仓库侧契约见 `docs/publishing.md`。
+
 ## 0.3.4
 
 - 新拉取到的模型自动获得可读显示名：新增 `src/model-name.ts` 纯本地归一化（品牌/缩略词大小写、版本号与日期折叠、尺寸后缀），与内置目录惯例一致（`gpt-7-sol` → `GPT-7 Sol`、`claude-3-5-sonnet-20241022` → `Claude 3.5 Sonnet 20241022`）。上游给出的真实名字优先；已知 ID 仍沿用目录取证名。归一化只是显示格式化，不产生任何能力、容量或权益证据。

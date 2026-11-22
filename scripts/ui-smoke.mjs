@@ -870,6 +870,8 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
   await temperature.blur();
   await page.waitForFunction(() => window.__config.modelSettings?.['gpt-6-luna']?.temperature === 0.7);
   await page.screenshot({ path: join(previewDir, 'models.png'), fullPage: true });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: join(previewDir, 'market-models.png'), clip: { x: 0, y: 0, width: 1040, height: 1000 } });
   for (const group of await page.locator('.odc-model-groups > section').all()) {
     const expand = group.getByRole('button', { name: /^显示全部/u });
     if (await expand.count()) await expand.click();
@@ -1142,6 +1144,36 @@ assert.equal(fixtureModels.filter(model => model.group === 'paid').length, 35);
     window.__setDirectory('session-a', { current: { provider: 'opendesign-corouter-paid', model: 'gpt-6-luna' } });
   });
   await waitQuickReady();
+  // Market tile: the real capsule mounted in a mock chat composer (offline fixture, simulated data).
+  await page.evaluate(() => {
+    const frame = document.createElement('div');
+    frame.id = 'market-chat-frame';
+    frame.style.cssText = 'max-width:640px;margin:0 auto 16px;border:1px solid var(--dsw-alias-border-l4);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:10px;background:var(--dsw-alias-bg-base)';
+    const user = document.createElement('div');
+    user.textContent = '把 GPT-6 Luna 的上下文切到最大档。';
+    user.style.cssText = 'align-self:flex-end;max-width:70%;padding:8px 10px;border-radius:10px;background:var(--dsw-alias-bg-l2);font-size:13px';
+    const assistant = document.createElement('div');
+    assistant.textContent = '已保存为最大档；已准备的请求保留原窗口快照。';
+    assistant.style.cssText = 'align-self:flex-start;max-width:70%;padding:8px 10px;border-radius:10px;border:1px solid var(--dsw-alias-border-l4);font-size:13px';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;border:1px solid var(--dsw-alias-border-l4);border-radius:10px;padding:8px 10px';
+    const selector = document.createElement('span');
+    selector.textContent = 'GPT-6 Luna';
+    selector.style.cssText = 'margin-right:auto;font-size:12px;color:var(--dsw-alias-label-secondary)';
+    // React createRoot clears its container, so the mock selector lives outside the mount node.
+    const mount = document.createElement('div');
+    mount.id = 'market-chat-row';
+    row.append(selector, mount);
+    const note = document.createElement('div');
+    note.textContent = '离线界面预览 · 模拟数据，非真实账号';
+    note.style.cssText = 'font-size:11px;color:var(--dsw-alias-label-secondary)';
+    frame.append(user, assistant, row, note);
+    document.body.insertBefore(frame, document.getElementById('root'));
+    window.__mountQuick('session-a', 'market-chat-row');
+  });
+  await page.locator('#market-chat-row .odc-quick').waitFor();
+  await page.locator('#market-chat-frame').screenshot({ path: join(previewDir, 'market-context-quick.png') });
+  await page.evaluate(() => { window.__quickRoots.pop().unmount(); document.getElementById('market-chat-frame').remove(); });
   await page.screenshot({ path: join(previewDir, 'context-quick.png'), fullPage: true });
   await page.getByLabel('搜索套餐赠送模型', { exact: true }).fill('mimo');
   await page.getByLabel('搜索非附赠 / 权益未核实', { exact: true }).fill('gpt-6-luna');
