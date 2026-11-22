@@ -58,4 +58,10 @@ tarball: https://github.com/KouzakiUmi/dsh-opendesign-corouter/releases/latest/d
 - npm 包 `repository` 指回本仓库，市场自动采集关联；条目不写 `npm:` 字段。
 - 条目描述只说功能且与代码核对一致；描述变更向市场仓库提 PR，截图与仓库物料变更推本仓库。
 
+### 0.3.5 发布核验
+
+- 2026-11-22 推送 `v0.3.5` 标签（提交 `4c46eb0`）→ [发布工作流 run 45023147988](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/runs/45023147988)：首轮 npm 上传成功且 provenance 入透明度日志，但 registry 在 verify 的约 26 秒窗口内未可见而失败；轮询确认 registry 可读 `0.3.5`（含 attestations）后重跑失败 job 转绿，未重复发布。main CI [run 45023144024](https://github.com/KouzakiUmi/dsh-opendesign-corouter/actions/runs/45023144024) success。
+- [v0.3.5 Release](https://github.com/KouzakiUmi/dsh-opendesign-corouter/releases/tag/v0.3.5) 三个资产：固定名 `dsh-opendesign-corouter.tgz`、带版本名安装包与 `.sha256`。固定名资产、带版本名资产与 npm tarball 三者 sha256 一致：`c783ea19d40f2abb69ba884c890523493a1c865a300c7437ad2dcc6cfcc504b9`（468048 字节）；`latest/download/dsh-opendesign-corouter.tgz` 解析 HTTP 200。
+- 市场投稿 [awesome-dsh-plugin#17806](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/17806)：单文件条目，分支基于 upstream/main；是否合并由维护者决定。
+
 [返回主页](../README.md) · [开发与 CI](development.md) · [npm 官方文档](https://docs.npmjs.com/trusted-publishers/)
